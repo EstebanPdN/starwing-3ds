@@ -1,0 +1,6 @@
+Citro2D v1.7.0 by devkitPro
+Source: https://codeload.github.com/devkitPro/citro2d/tar.gz/refs/tags/v1.7.0
+Archive SHA256: f311d1decb64668980b7a7a917a9b936a40025265df921e251f5f0537b94b86b
+Local change: flush used vertex and index buffers before GPU submission; full flush on failure.
+Local change: flush each split command list, and expose flushed-byte/fallback counters.
+Shader: render2d_shbin.c generated from source/render2d.v.pica using picasso.

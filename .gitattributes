@@ -1,0 +1,11 @@
+*.sh text eol=lf
+tools/package_switch_nsp.ps1 text eol=crlf
+*.patch -whitespace
+# Preserve the vendored upstream formatting; its existing whitespace is not a port change.
+platform/3ds/vendor/** -whitespace
+src/render/shaders/generated/** -whitespace
+src/render/shaders/scalefx_portable.hlsl -whitespace
+src/render/scalefx.cpp -whitespace
+src/app/timing_demo.cpp -whitespace
+include/starfox/input/input_latch.hpp -whitespace
+tools/__init__.py -whitespace

@@ -1,0 +1,84 @@
+BasicInfo:
+  Title: "Starwing 3DS Diag"
+  ProductCode: "CTR-P-SW5D"
+  Logo: Homebrew
+
+RomFs:
+  RootPath: $(APP_ROMFS)
+
+TitleInfo:
+  Category: Application
+  UniqueId: 0x5F58A
+
+Option:
+  UseOnSD: true
+  FreeProductCode: true
+  MediaFootPadding: false
+  EnableCrypt: false
+  EnableCompress: true
+
+AccessControlInfo:
+  CoreVersion: 2
+  DescVersion: 2
+  ReleaseKernelMajor: "02"
+  ReleaseKernelMinor: "33"
+  UseExtSaveData: false
+  FileSystemAccess:
+    - DirectSdmc
+    - DirectSdmcWrite
+  MemoryType: Application
+  SystemMode: 64MB
+  IdealProcessor: 0
+  AffinityMask: 1
+  Priority: 16
+  MaxCpu: 0x9E
+  HandleTableSize: 0x100
+  DisableDebug: false
+  EnableForceDebug: false
+  CanWriteSharedPage: true
+  CanUsePrivilegedPriority: false
+  CanUseNonAlphabetAndNumber: true
+  PermitMainFunctionArgument: true
+  CanShareDeviceMemory: true
+  RunnableOnSleep: false
+  SpecialMemoryArrange: true
+  SystemModeExt: Legacy
+  CpuSpeed: 804MHz
+  EnableL2Cache: true
+  CanAccessCore2: false
+  SystemCallAccess:
+    ControlMemory: 1
+    QueryMemory: 2
+    ExitProcess: 3
+    CreateThread: 8
+    ExitThread: 9
+    SleepThread: 10
+    GetThreadPriority: 11
+    SetThreadPriority: 12
+    CreateMutex: 19
+    ReleaseMutex: 20
+    CreateEvent: 23
+    SignalEvent: 24
+    ClearEvent: 25
+    WaitSynchronization1: 36
+    WaitSynchronizationN: 37
+    DuplicateHandle: 39
+    CloseHandle: 35
+    SendSyncRequest: 50
+  ServiceAccessControl:
+    - APT:U
+    - cfg:u
+    - fs:USER
+    - gsp::Gpu
+    - hid:USER
+    - ptm:u
+
+SystemControlInfo:
+  SaveDataSize: 0KB
+  RemasterVersion: 0
+  StackSize: 0x40000
+  Dependency:
+    cfg: 0x0004013000001702
+    gsp: 0x0004013000001c02
+    hid: 0x0004013000001d02
+    ptm: 0x0004013000002202
