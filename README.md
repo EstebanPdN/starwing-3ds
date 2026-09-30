@@ -28,19 +28,6 @@ and other Nintendo 3DS homebrew projects:
 
 https://discord.gg/SMW49UMkw
 
-## Project status
-
-**Experimental development version: 0.67.** This repository contains the current native engine, the 3DS
-adaptation, build tools, and tests. The existing architecture is preserved.
-Cartridge-derived and private presentation inputs are supplied locally; see
-[source provenance](docs/UPSTREAM.md) and [building](docs/BUILDING.md).
-
-CIA and complete 3DSX candidates have been built locally. No release or binary
-download is published here. Physical New 3DS captures exist for 0.66; physical
-validation of 0.67, including sustained performance and stereo comfort, remains
-pending. Old 3DS compatibility is not established. The image above is existing
-project artwork, not evidence of a physical 0.67 test.
-
 ## Features
 
 - Original Star Fox and Star Fox EX selection with a clean-ROM picker.
@@ -55,40 +42,23 @@ project artwork, not evidence of a physical 0.67 test.
   optional per-game autosave checkpoints.
 - Quick diagnostics, full private memory captures, and hardware-dump analysis.
 
-## Performance
-
-Presentation FPS and source logic Hz are different measurements. A 60 Hz
-target, successful compilation, or faster host benchmark does not establish
-sustained 60 FPS on a console. The 0.67 stereo and CPU changes still need a
-matched physical New 3DS test, first with the 3D slider at zero and then enabled.
-See [verification status](docs/STATUS.md) for the evidence and remaining checks.
-
 ## Installation
 
-These instructions apply to a locally built candidate; this repository does
-not currently offer release downloads.
-
-1. Install `Starwing-3DS-Gameplay-0.67.cia` with FBI, or put the complete
-   `Starwing-3DS-Game.3dsx` in `/3ds/Starwing/` and launch it from the Homebrew
-   Launcher. Diagnostic builds use
-   `Starwing-3DS-Hardware-Diagnostic-0.67.cia` instead.
+1. Install the Starwing 3DS CIA with FBI (for example,
+   `Starwing-3DS-vX.cia`, where `X` is the version number).
 2. Create `/3ds/Starwing/` on your SD card.
 3. Put your compatible, clean `.sfc` or `.smc` ROM in that folder. Any filename
    with one of those extensions can be selected. First launch constructs and
    checks `Starfox-Assets.BIN` locally; matching existing bundles can be reused.
 4. Original starts by default. Use **Options > Game Version** to choose Original
    or Star Fox EX and confirm the restart; **ROM Files** selects the source ROM.
+   **Star Fox EX is not 100% supported**, as I have not worked on it yet.
 
 Supported inputs are Star Fox Japan 1.0/1.1, USA 1.0/1.1/1.2, Starwing Europe
 1.0/1.1, and Germany 1.0. The unheadered file is exactly 1,048,576 bytes; a
 512-byte copier header is accepted. Revisions are checked by CRC32 in
 [rom_probe.c](platform/3ds/source/rom_probe.c). Modified or unknown ROMs are
 rejected. No ROM download links are provided.
-
-The complete 3DSX carries its matching RomFS. A CIA includes the corresponding
-resources and retains Title ID `0004000005f58b00`; neither format embeds a full
-retail ROM or the generated `Starfox-Assets.BIN` companion. Private BPS inputs
-must be reviewed before any future binary distribution.
 
 ## Controls
 
