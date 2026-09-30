@@ -1,0 +1,22 @@
+name: Check Starwing 3DS source
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host-checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Check publication boundaries and version metadata
+        run: python3 tools/check-publication.py
+      - name: Run existing ROM-free host tests
+        run: bash tools/test-host.sh

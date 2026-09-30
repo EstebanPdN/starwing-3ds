@@ -1,0 +1,174 @@
+# Kept opt-in so ordinary/console builds do not acquire an XR dependency.
+# Shared ray expansion must never silently compile an old embedded binary.
+# The checker hashes transitive HLSL includes and needs no shader compiler.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+execute_process(COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_vr_ray_shader.py" --check
+    COMMAND_ERROR_IS_FATAL ANY)
+file(GLOB_RECURSE starfox_ray_shader_helpers CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/render/shaders/*.hlsli"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/vr/shaders/*.hlsli")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/vr/shaders/ray_expand.hlsl"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/vr/shaders/ray_expand_spirv.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_vr_ray_shader.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/portable_shader_source.py"
+    ${starfox_ray_shader_helpers})
+if(WINDOWS_STORE OR SWITCH OR VITA OR IOS)
+    message(FATAL_ERROR "The OpenXR build currently targets desktop Windows/Linux and Android, not this platform.")
+endif()
+# The normal runtime configures the pinned SDL dependency later in CMakeLists.
+# Standalone VR builds need an installed SDL package for PCM device output.
+if(NOT STARFOX_BUILD_RUNTIME)
+    find_package(SDL3 3.2 REQUIRED CONFIG)
+endif()
+set(BUILD_LOADER ON CACHE BOOL "Build the OpenXR loader" FORCE)
+set(BUILD_API_LAYERS OFF CACHE BOOL "Do not build OpenXR SDK API layers" FORCE)
+set(BUILD_TESTS OFF CACHE BOOL "Do not build OpenXR SDK tests" FORCE)
+set(BUILD_CONFORMANCE_TESTS OFF CACHE BOOL "Do not build OpenXR conformance tests" FORCE)
+set(BUILD_SDK_TESTS OFF CACHE BOOL "Do not build OpenXR SDK samples" FORCE)
+set(BUILD_WITH_SYSTEM_JSONCPP OFF CACHE BOOL "Use OpenXR's bundled JSON parser" FORCE)
+set(DYNAMIC_LOADER OFF CACHE BOOL "Statically link the OpenXR loader" FORCE)
+FetchContent_Declare(starfox_openxr
+    GIT_REPOSITORY https://github.com/KhronosGroup/OpenXR-SDK.git
+    # OpenXR SDK release-1.1.63 (peeled, immutable commit).
+    GIT_TAG f2448a8797c85814aa892efc1ab8707900fbcc78)
+FetchContent_MakeAvailable(starfox_openxr)
+if(MINGW)
+    # Static loader archives do not need DLL version resources. Older windres
+    # also mishandles their include paths when the checkout contains spaces.
+    get_target_property(starfox_xr_sources openxr_loader SOURCES)
+    list(FILTER starfox_xr_sources EXCLUDE REGEX "\\.rc$")
+    set_property(TARGET openxr_loader PROPERTY SOURCES "${starfox_xr_sources}")
+    include(CheckCXXSymbolExists)
+    check_cxx_symbol_exists(WINAPI_PARTITION_SYSTEM "winapifamily.h"
+        STARFOX_HAS_WINAPI_PARTITION_SYSTEM)
+    if(NOT STARFOX_HAS_WINAPI_PARTITION_SYSTEM)
+        # Older MinGW headers expose only desktop/app partitions. An absent
+        # system partition contributes no bits to the loader's desktop check.
+        target_compile_definitions(openxr_loader PRIVATE WINAPI_PARTITION_SYSTEM=0)
+    endif()
+endif()
+FetchContent_Declare(starfox_vulkan_headers
+    GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
+    GIT_TAG e5323cdea4ed92dfe825397f6047b8604a40423c)
+FetchContent_MakeAvailable(starfox_vulkan_headers)
+add_library(starfox_vr_core STATIC src/vr/openxr_runtime.cpp src/vr/openxr_session.cpp src/vr/openxr_swapchains.cpp src/vr/eye_camera.cpp src/vr/vulkan_device.cpp src/vr/vulkan_loader.cpp src/vr/stereo_renderer.cpp src/vr/vulkan_eye_targets.cpp)
+target_include_directories(starfox_vr_core PUBLIC include)
+target_sources(starfox_vr_core PRIVATE src/vr/vulkan_eye_commands.cpp)
+target_sources(starfox_vr_core PRIVATE src/vr/vulkan_external_shadow.cpp)
+target_sources(starfox_vr_core PRIVATE src/vr/vulkan_dxr_frame.cpp)
+target_sources(starfox_vr_core PRIVATE src/vr/frame_wait.cpp)
+target_sources(starfox_vr_core PRIVATE src/vr/vulkan_stereo_draw.cpp)
+target_sources(starfox_vr_core PRIVATE src/vr/vulkan_scene_pipeline.cpp)
+target_sources(starfox_vr_core PRIVATE src/vr/vulkan_scene_buffer.cpp)
+target_sources(starfox_vr_core PRIVATE src/vr/vulkan_span_pipeline.cpp)
+target_sources(starfox_vr_core PRIVATE src/vr/vulkan_source_storage.cpp)
+target_sources(starfox_vr_core PRIVATE src/vr/vulkan_scene_textures.cpp)
+target_sources(starfox_vr_core PRIVATE src/vr/vulkan_depth_targets.cpp)
+target_sources(starfox_vr_core PRIVATE src/vr/shape_mesh.cpp)
+target_sources(starfox_vr_core PRIVATE src/vr/shape_bsp.cpp)
+target_sources(starfox_vr_core PRIVATE src/vr/game_model_pose.cpp)
+target_sources(starfox_vr_core PRIVATE src/vr/openxr_input.cpp)
+target_sources(starfox_vr_core PRIVATE src/vr/scene_material.cpp)
+target_sources(starfox_vr_core PRIVATE src/vr/shape_batch.cpp src/render/face_material.cpp)
+target_compile_features(starfox_vr_core PUBLIC cxx_std_20)
+target_link_libraries(starfox_vr_core PUBLIC OpenXR::openxr_loader Vulkan::Headers PRIVATE ${CMAKE_DL_LIBS})
+add_library(starfox_vr_game STATIC src/vr/game_frame_driver.cpp src/vr/game_scene.cpp src/vr/draw_packet.cpp src/vr/vulkan_draw_packets.cpp src/vr/source_models.cpp)
+target_sources(starfox_vr_game PRIVATE src/vr/scene_interpolation.cpp)
+target_sources(starfox_vr_game PRIVATE src/vr/source_span_model.cpp)
+target_sources(starfox_vr_game PRIVATE src/vr/vulkan_source_bindings.cpp)
+target_sources(starfox_vr_game PRIVATE src/vr/vulkan_source_model.cpp)
+target_sources(starfox_vr_game PRIVATE src/vr/vulkan_source_scene.cpp)
+target_sources(starfox_vr_game PRIVATE src/vr/background_tiles.cpp)
+target_sources(starfox_vr_game PRIVATE src/vr/source_sprites.cpp)
+target_sources(starfox_vr_game PRIVATE src/vr/pcm_output.cpp)
+target_sources(starfox_vr_game PRIVATE src/vr/application.cpp)
+target_sources(starfox_vr_game PRIVATE src/vr/cartridge_save.cpp)
+target_link_libraries(starfox_vr_game PRIVATE SDL3::SDL3)
+target_link_libraries(starfox_vr_game PUBLIC starfox_vr_core starfox_core)
+include("${CMAKE_CURRENT_LIST_DIR}/VRAssets.cmake")
+if(WIN32)
+    add_executable(starfox_vulkan_external_check EXCLUDE_FROM_ALL tools/check_vulkan_external_buffer.cpp)
+    target_link_libraries(starfox_vulkan_external_check PRIVATE starfox_vr_game)
+endif()
+add_executable(starfox_vr_shader_bench EXCLUDE_FROM_ALL tools/benchmark_vr_shaders.cpp)
+target_link_libraries(starfox_vr_shader_bench PRIVATE starfox_vr_core)
+if(ANDROID)
+    # Explicit diagnostic only: dispatch/readback on the headset GPU without XR.
+    add_executable(starfox_vr_scene_check EXCLUDE_FROM_ALL tools/check_vulkan_scene.cpp)
+    target_link_libraries(starfox_vr_scene_check PRIVATE starfox_vr_game)
+    add_library(starfox_quest SHARED src/vr/android_entry.cpp)
+    target_link_libraries(starfox_quest PRIVATE starfox_vr_game)
+endif()
+if(NOT ANDROID)
+    add_executable(starfox_vr_cache_check tests/vulkan_pipeline_cache_tests.cpp)
+    target_link_libraries(starfox_vr_cache_check PRIVATE starfox_vr_core)
+    add_executable(starfox_vr_application_tests tests/vr_application_tests.cpp)
+    target_link_libraries(starfox_vr_application_tests PRIVATE starfox_vr_game)
+    # Link API mocks instead of the real loader: lifecycle tests need no headset.
+    add_executable(starfox_vr_runtime_tests tests/openxr_runtime_tests.cpp src/vr/openxr_runtime.cpp)
+    target_include_directories(starfox_vr_runtime_tests PRIVATE include "${starfox_openxr_SOURCE_DIR}/include")
+    target_compile_features(starfox_vr_runtime_tests PRIVATE cxx_std_20)
+    add_executable(starfox_vr_audio_check tests/vr_pcm_output_tests.cpp)
+    target_link_libraries(starfox_vr_audio_check PRIVATE starfox_vr_game SDL3::SDL3)
+    add_executable(starfox_vr_input_check tests/openxr_input_tests.cpp)
+    target_link_libraries(starfox_vr_input_check PRIVATE starfox_vr_core)
+    add_executable(starfox_vr_game_input_check tests/vr_game_input_tests.cpp)
+    target_link_libraries(starfox_vr_game_input_check PRIVATE starfox_vr_game)
+    add_executable(starfox_vr_packet_check tests/vr_draw_packet_tests.cpp)
+    target_link_libraries(starfox_vr_packet_check PRIVATE starfox_vr_game)
+    add_executable(starfox_vr_runtime_check tools/check_openxr_runtime.cpp)
+    target_link_libraries(starfox_vr_runtime_check PRIVATE starfox_vr_game)
+    add_executable(starfox_vr_session_check tests/openxr_session_tests.cpp)
+    target_link_libraries(starfox_vr_session_check PRIVATE starfox_vr_core)
+    add_executable(starfox_vr_swapchain_check tests/openxr_swapchain_tests.cpp)
+    target_link_libraries(starfox_vr_swapchain_check PRIVATE starfox_vr_core)
+    add_executable(starfox_vr_camera_check tests/eye_camera_tests.cpp)
+    add_executable(starfox_vr_ray_topology_check tests/source_ray_topology_tests.cpp)
+    target_link_libraries(starfox_vr_ray_topology_check PRIVATE starfox_vr_core)
+    target_link_libraries(starfox_vr_camera_check PRIVATE starfox_vr_core)
+    add_executable(starfox_vr_device_check tests/vulkan_device_tests.cpp)
+    target_link_libraries(starfox_vr_device_check PRIVATE starfox_vr_core)
+    add_executable(starfox_vr_targets_check tests/vulkan_eye_targets_tests.cpp)
+    target_link_libraries(starfox_vr_targets_check PRIVATE starfox_vr_core)
+    add_executable(starfox_vr_scene_check tools/check_vulkan_scene.cpp)
+    target_link_libraries(starfox_vr_scene_check PRIVATE starfox_vr_game)
+    add_executable(starfox_vr_mesh_check tests/shape_mesh_tests.cpp)
+    target_sources(starfox_vr_mesh_check PRIVATE src/assets/rom.cpp src/assets/shape_decoder.cpp)
+    target_link_libraries(starfox_vr_mesh_check PRIVATE starfox_vr_core)
+    add_executable(starfox_material_check tests/face_material_tests.cpp src/render/face_material.cpp)
+    target_include_directories(starfox_material_check PRIVATE include)
+    target_compile_features(starfox_material_check PRIVATE cxx_std_20)
+    if(BUILD_TESTING)
+        add_test(NAME starfox_vr_ray_topology_check COMMAND starfox_vr_ray_topology_check)
+        enable_testing()
+        # These checks use mocks/synthetic inputs and need no connected HMD.
+        # Keep hardware runtime/scene probes separate from unattended CTest.
+        foreach(vr_check IN ITEMS
+            starfox_vr_application_tests starfox_vr_runtime_tests
+            starfox_vr_audio_check starfox_vr_input_check
+            starfox_vr_packet_check starfox_vr_cache_check
+            starfox_vr_session_check starfox_vr_swapchain_check
+            starfox_vr_camera_check starfox_vr_device_check
+            starfox_vr_targets_check starfox_vr_mesh_check)
+            add_test(NAME ${vr_check} COMMAND ${vr_check})
+            set_tests_properties(${vr_check} PROPERTIES LABELS vr TIMEOUT 60)
+        endforeach()
+        # The audio fixture selects its own dummy driver before initialization.
+        foreach(vr_variant IN ITEMS ORIGINAL EX)
+            if(vr_variant STREQUAL "ORIGINAL")
+                set(vr_test_rom "${STARFOX_ROM_FILE}")
+                set(vr_test_symbols "${STARFOX_SYMBOLS_FILE}")
+            else()
+                set(vr_test_rom "${STARFOX_EX_ROM_FILE}")
+                set(vr_test_symbols "${STARFOX_EX_SYMBOLS_FILE}")
+            endif()
+            if(EXISTS "${vr_test_rom}" AND EXISTS "${vr_test_symbols}")
+                add_test(NAME starfox_vr_game_input_${vr_variant}
+                    COMMAND starfox_vr_game_input_check "${vr_test_rom}" "${vr_test_symbols}")
+                set_tests_properties(starfox_vr_game_input_${vr_variant} PROPERTIES LABELS "vr;cartridge" TIMEOUT 120)
+            endif()
+        endforeach()
+    endif()
+endif()

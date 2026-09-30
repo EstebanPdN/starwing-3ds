@@ -1,0 +1,49 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.starfox.enhanced.quest'
+    compileSdk 35
+    ndkVersion '28.2.13676358'
+    defaultConfig {
+        applicationId 'com.starfox.enhanced.quest'
+        minSdk 29
+        targetSdk 35
+        versionCode 2
+        versionName '0.0.6.7-vr-dev'
+        externalNativeBuild {
+            cmake {
+                targets 'starfox_quest'
+                arguments '-DANDROID_STL=c++_shared',
+                    '-DSTARFOX_BUILD_VR=ON', '-DSTARFOX_BUILD_RUNTIME=OFF',
+                    '-DSTARFOX_BUILD_TESTS=OFF', '-DSTARFOX_BUILD_TOOLS=OFF',
+                    '-DSTARFOX_EMBED_RUNTIME_ASSETS=ON', '-DSTARFOX_PACKAGE_MSU1_MUSIC=OFF'
+                abiFilters 'arm64-v8a'
+            }
+        }
+    }
+    buildFeatures { prefab true }
+    packaging {
+        jniLibs {
+            // NDK link stubs are not runtime implementations. Resolve these
+            // platform libraries from the headset OS, never from the APK.
+            excludes += ['**/libandroid.so', '**/liblog.so']
+        }
+    }
+    externalNativeBuild { cmake { path file('../../CMakeLists.txt') } }
+    buildTypes {
+        debug {
+            // The source simulation is too expensive at -O0 for headset timing.
+            // Keep a debuggable APK and native symbols while testing real FPS.
+            externalNativeBuild {
+                cmake {
+                    arguments '-DCMAKE_C_FLAGS_DEBUG=-g -O2',
+                        '-DCMAKE_CXX_FLAGS_DEBUG=-g -O2'
+                }
+            }
+        }
+        release { minifyEnabled false }
+    }
+}
+dependencies {
+    implementation files('../android/app/libs/SDL3-3.4.14.aar')
+}

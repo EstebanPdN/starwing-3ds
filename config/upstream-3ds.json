@@ -1,0 +1,12 @@
+{
+  "engine_url": "https://github.com/kandowontu/starfox-enhanced",
+  "engine_commit": "6612cb05e4bda0a5e25e8e805d64d0e3db50896a",
+  "engine_availability": "Original GitHub endpoint returned 404 on 2026-09-30",
+  "engine_general_license": "No blanket root license supplied; upstream notices retain their scopes",
+  "engine_redistribution_permission": "Confirmed by repository maintainer for this publication",
+  "ultrastarfox_url": "https://github.com/Sunlitspace542/ultrastarfox",
+  "ultrastarfox_commit": "270e959a47d82240d9290a6c6630032c9ec53ff5",
+  "port_version": "0.67",
+  "cia_title_version": 66,
+  "publication": "Current native engine and Nintendo 3DS adaptation; no private game payloads or inherited Git history"
+}
