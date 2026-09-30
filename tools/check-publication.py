@@ -75,9 +75,9 @@ def main() -> int:
         problems.append('Build metadata is not using the shared version file.')
     if 'build_version = STARWING_BUILD_VERSION' not in source:
         problems.append('Runtime version is not using the CMake build definition.')
-    readme = (ROOT / 'README.md').read_text()
-    if f'version: {version}' not in readme:
-        problems.append('README development version differs from source metadata.')
+    status = (ROOT / 'docs/STATUS.md').read_text()
+    if f'Current development version: **{version}**' not in status:
+        problems.append('Documented development version differs from source metadata.')
     for name in names:
         if not name.endswith('.md'):
             continue
