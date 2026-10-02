@@ -114,6 +114,11 @@ architecture are preserved; this is not a Star Fox 64 or Nintendo 64 project.
 
 ## License and legal notice
 
+[LICENSE-XBRZ.txt](LICENSE-XBRZ.txt) contains **GNU GPL v3.0** for the xBRZ
+component. GitHub's automatic license label refers to this detected license;
+it is not a blanket license for every file or for the game content.
+
+
 Third-party components retain their own licenses and notices. See
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the vendored
 [Citro2D license](platform/3ds/vendor/citro2d/LICENSE). No blanket MIT or GPL
