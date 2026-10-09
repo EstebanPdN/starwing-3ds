@@ -26,7 +26,7 @@ build inputs described in the [build guide](docs/BUILDING.md).
 Join my Discord for project updates, support, bug reports, testing, suggestions,
 and other Nintendo 3DS homebrew projects:
 
-https://discord.gg/SMW49UMkw
+https://discord.gg/zy8BqH5ss
 
 ## Features
 
