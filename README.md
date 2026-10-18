@@ -27,7 +27,7 @@
 
 <p align="center">
   <a href="https://estebanpdn.github.io/"><img src="docs/images/website.svg" alt="Visit Esteban’s Forge" width="142" height="46"></a>
-  <a href="https://discord.gg/BjbzfRYpV"><img src="docs/images/discord.svg?v=2" alt="Join our Discord community" width="166" height="46"></a>
+  <a href="https://discord.gg/BjbzfRYpV"><img src="docs/images/discord-official.svg" alt="Join our Discord community" width="166" height="46"></a>
 </p>
 
 A Nintendo 3DS adaptation of the SNES **Star Fox / Starwing**, based on
