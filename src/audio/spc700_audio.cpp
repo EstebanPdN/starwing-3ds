@@ -263,13 +263,13 @@ struct Spc700Audio::Impl {
         }
     }
 
-    std::vector<std::int16_t> render(
+    void render(
         std::span<const simulation::ApuPortWrite> writes,
+        std::vector<std::int16_t>& output,
         bool split_upload_restarts = false,
         std::size_t* rendered_frames = nullptr,
         CommandStream command_stream = CommandStream::music) {
-        std::vector<std::int16_t> output(
-            Spc700Audio::stereo_frames_per_logic_tick * 2U, 0);
+        output.assign(Spc700Audio::stereo_frames_per_logic_tick * 2U, 0);
         if (loaded) {
             spc_set_output(spc, output.data(), static_cast<int>(output.size()));
         }
@@ -330,7 +330,7 @@ struct Spc700Audio::Impl {
             }
         }
 
-        if (!loaded) return output;
+        if (!loaded) return;
         spc_end_frame(spc, kClocksPerLogicTick);
         if (rendered_frames != nullptr) ++*rendered_frames;
         const auto generated = std::clamp(spc_sample_count(spc), 0,
@@ -339,7 +339,6 @@ struct Spc700Audio::Impl {
             std::fill(output.begin() + generated, output.end(), 0);
         }
         spc_filter_run(filter, output.data(), static_cast<int>(output.size()));
-        return output;
     }
 };
 
@@ -388,7 +387,7 @@ struct Spc700Audio::ParallelRenderer {
             std::atomic_thread_fence(std::memory_order_acquire);
             if (self.stopping.load(std::memory_order_acquire)) break;
             try {
-                *self.output = self.core->render(self.writes,
+                self.core->render(self.writes, *self.output,
                     self.split_upload_restarts, self.frame_count,
                     Impl::CommandStream::effects);
             } catch (...) {
@@ -464,11 +463,19 @@ void Spc700Audio::set_parallel_stems_enabled(bool enabled) noexcept {
 
 std::vector<std::int16_t> Spc700Audio::render_logic_tick(
     std::span<const simulation::ApuPortWrite> writes) {
+    std::vector<std::int16_t> mixed;
+    render_logic_tick(writes, mixed);
+    return mixed;
+}
+
+void Spc700Audio::render_logic_tick(
+    std::span<const simulation::ApuPortWrite> writes,
+    std::vector<std::int16_t>& mixed) {
     render_stems(writes, false, nullptr, nullptr);
     if (last_music_samples_.size() != last_effect_samples_.size()) {
         throw std::runtime_error{"SPC music/effect stem size mismatch"};
     }
-    auto mixed = last_music_samples_;
+    mixed.resize(last_music_samples_.size());
     for (std::size_t index = 0; index < mixed.size(); ++index) {
         const auto sample = static_cast<std::int32_t>(last_music_samples_[index])
             + static_cast<std::int32_t>(last_effect_samples_[index]);
@@ -477,7 +484,6 @@ std::vector<std::int16_t> Spc700Audio::render_logic_tick(
             static_cast<std::int32_t>(std::numeric_limits<std::int16_t>::min()),
             static_cast<std::int32_t>(std::numeric_limits<std::int16_t>::max())));
     }
-    return mixed;
 }
 
 std::size_t Spc700Audio::prime_upload_sequence(
@@ -505,7 +511,7 @@ void Spc700Audio::render_stems(
             split_upload_restarts, effect_frames, &last_effect_samples_);
         std::exception_ptr music_failure;
         try {
-            last_music_samples_ = music_impl_->render(writes,
+            music_impl_->render(writes, last_music_samples_,
                 split_upload_restarts, music_frames, Impl::CommandStream::music);
         } catch (...) {
             music_failure = std::current_exception();
@@ -521,9 +527,9 @@ void Spc700Audio::render_stems(
         return;
     }
 #endif
-    last_music_samples_ = music_impl_->render(writes,
+    music_impl_->render(writes, last_music_samples_,
         split_upload_restarts, music_frames, Impl::CommandStream::music);
-    last_effect_samples_ = effects_impl_->render(writes,
+    effects_impl_->render(writes, last_effect_samples_,
         split_upload_restarts, effect_frames, Impl::CommandStream::effects);
 }
 

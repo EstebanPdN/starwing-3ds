@@ -1,4 +1,5 @@
 #include "options_menu_3ds.hpp"
+#include "update_notes.hpp"
 #include "bottom_hud_art_data.hpp"
 #include "entry_panel_art_data.hpp"
 #include "fps_panel_art_data.hpp"
@@ -160,7 +161,9 @@ void OptionsMenu3ds::button(int x,int y,int w,int h,const char* label,
     rect(bottom_,320,x+1,y+2,2,h-4,enabled?white:steel);
     rect(bottom_,320,x+3,y+3,w-6,h-6,face);
     rect(bottom_,320,x+2,y+h-3,w-4,2,dark);
-    centered(bottom_,320,label,x+w/2,y+(h-12)/2,1,enabled?ice:steel);
+    if(text_width(label)>w-12)
+        small_text(bottom_,320,label,x+w/2,y+(h-8)/2,enabled?ice:steel);
+    else centered(bottom_,320,label,x+w/2,y+(h-12)/2,1,enabled?ice:steel);
 }
 void OptionsMenu3ds::plate() {
     std::fill(bottom_.begin(),bottom_.end(),bg);
@@ -185,7 +188,7 @@ int OptionsMenu3ds::row_count() const {
     case MenuPage::display:return 3;
     case MenuPage::gameplay:return 3;
     case MenuPage::developer:return 4;
-    case MenuPage::update:return 2;
+    case MenuPage::update:return 4;
     case MenuPage::rom_selection:return static_cast<int>(roms_.size())+1;
     case MenuPage::rom_mode:return 4;
     default:return 0;
@@ -215,15 +218,25 @@ void OptionsMenu3ds::scan_roms() {
     rom_scroll_=0;
 }
 MenuAction OptionsMenu3ds::hit_row(int row) {
+    if (update_status_.state == UpdateState::installing) return MenuAction::none;
     if(page_==MenuPage::root) {
         if(row==5) {back();return MenuAction::none;}
         page_=row==4?MenuPage::rom_mode
             :static_cast<MenuPage>(int(MenuPage::display)+row);
         selection_=0;
-        return MenuAction::none;
+        return page_==MenuPage::update?MenuAction::check_update:MenuAction::none;
     }
-    if(row==row_count()-1) {back();return MenuAction::none;}
+    if(row==row_count()-1) return back();
     switch(page_) {
+    case MenuPage::update:
+        if(update_status_.state==UpdateState::checking
+            ||update_status_.state==UpdateState::downloading) break;
+        if(row==0) return MenuAction::switch_update_channel;
+        if(row==1) return MenuAction::check_update;
+        if(row==2&&update_status_.state==UpdateState::available) {
+            confirming_update_=true; confirmation_yes_=false;
+        }
+        break;
     case MenuPage::display:
         if(row==0) wide_=!wide_;
         if(row==1) top_hud_=!top_hud_;
@@ -256,7 +269,7 @@ MenuAction OptionsMenu3ds::hit_row(int row) {
         confirming_version_=true;
         confirmation_yes_=false;
         break;
-    default:break; // Update remains a placeholder until a hosted manifest exists.
+    default:break;
     }
     return MenuAction::none;
 }
@@ -275,13 +288,16 @@ MenuAction OptionsMenu3ds::activate() {
 }
 MenuAction OptionsMenu3ds::activate_confirmation() noexcept {
     if(!confirming()) return MenuAction::none;
-    const auto action=confirming_main_menu_?MenuAction::main_menu
-        :MenuAction::launch_rom;
+    const auto action=confirming_update_?MenuAction::install_update
+        :confirming_main_menu_?MenuAction::main_menu:MenuAction::launch_rom;
     cancel_confirmation();
     return confirmation_yes_?action:MenuAction::none;
 }
-void OptionsMenu3ds::back() {
-    if(confirming()) {cancel_confirmation();return;}
+MenuAction OptionsMenu3ds::back() {
+    if(update_status_.state==UpdateState::installing) return MenuAction::none;
+    if(page_==MenuPage::update && (update_status_.state==UpdateState::checking
+        ||update_status_.state==UpdateState::downloading)) return MenuAction::cancel_update;
+    if(confirming()) {cancel_confirmation();return MenuAction::none;}
     if(page_==MenuPage::root) page_=MenuPage::closed;
     else if(page_==MenuPage::rom_mode && startup_selection_) {
         page_=MenuPage::rom_selection;
@@ -292,6 +308,7 @@ void OptionsMenu3ds::back() {
     }
     else if(open()) page_=MenuPage::root;
     selection_=0;
+    return MenuAction::none;
 }
 void OptionsMenu3ds::open_rom_picker() {
     startup_selection_=true;
@@ -322,7 +339,7 @@ MenuAction OptionsMenu3ds::touch(int x,int y,bool controls_screen) {
         return MenuAction::none;
     }
     if(x<27||x>293) return MenuAction::none;
-    if(y>=203&&y<229) {back();return MenuAction::none;}
+    if(y>=203&&y<229) return back();
     if(page_==MenuPage::root) {
         for(int row=0;row<5;++row)
             if(y>=41+row*31&&y<67+row*31) {selection_=row;return hit_row(row);}
@@ -353,6 +370,13 @@ MenuAction OptionsMenu3ds::touch(int x,int y,bool controls_screen) {
     } else if(page_==MenuPage::developer) {
         for(int row=0;row<3;++row)
             if(y>=48+row*43&&y<79+row*43) {selection_=row;return hit_row(row);}
+    } else if(page_==MenuPage::update) {
+        if(y>=187&&y<201) {
+            if(x<88) page_update_notes(-1);
+            if(x>232) page_update_notes(1);
+        }
+        for(int row=0;row<3;++row)
+            if(y>=111+row*26&&y<135+row*26) {selection_=row;return hit_row(row);}
     } else if(page_==MenuPage::rom_selection) {
         if(y>=187&&y<203) {
             if(x>=37&&x<129) rom_scroll_=std::max(0,rom_scroll_-4);
@@ -704,6 +728,17 @@ void OptionsMenu3ds::draw_level_hud(
         centered(bottom_,320,label,265,13,1,ice);
     }
 }
+void OptionsMenu3ds::set_update_notes(const std::string& notes) {
+    update_lines_=update_note_lines(notes.empty()?"## Changelog\n- Initial release.":notes,
+        [this](const char* value){return text_width(value);},356);
+    update_notes_page_=0;
+}
+void OptionsMenu3ds::page_update_notes(int delta) {
+    if(page_!=MenuPage::update) return;
+    const int pages=std::max(1,(int(update_lines_.size())+10)/11);
+    update_notes_page_=unsigned(std::clamp(int(update_notes_page_)+delta,0,pages-1));
+}
+
 void OptionsMenu3ds::draw_options() {
     std::fill(top_.begin(),top_.end(),bg);
     if(page_==MenuPage::rom_selection||page_==MenuPage::rom_mode) {
@@ -745,6 +780,34 @@ void OptionsMenu3ds::draw_options() {
         centered(top_,400,"OPTIONS",200,105,2,white);
     }
     plate();
+    if(page_==MenuPage::update) {
+        std::fill(top_.begin(),top_.end(),navy);
+        rect(top_,400,14,14,372,2,steel);
+        centered(top_,400,"CHANGELOG",200,25,1,ice);
+        char label[64]{};
+        std::snprintf(label,sizeof(label),"%s",update_status_.version[0]
+            ?update_status_.version:STARWING_BUILD_VERSION);
+        std::transform(label,label+std::strlen(label),label,
+            [](unsigned char c){return static_cast<char>(std::toupper(c));});
+        centered(top_,400,label,200,46,1,white);
+        for(unsigned row=0;row<11U;++row) {
+            const auto i=update_notes_page_*11U+row;
+            if(i>=update_lines_.size()) break;
+            text(top_,400,update_lines_[i].c_str(),22,69+int(row)*12,1,white);
+        }
+        std::snprintf(label,sizeof(label),"L / R  PAGE %u / %u",update_notes_page_+1U,
+            std::max(1U,(unsigned(update_lines_.size())+10U)/11U));
+        centered(top_,400,label,200,218,1,ice);
+    }
+    if(confirming_update_) {
+        rect(bottom_,320,35,64,250,117,steel);
+        rect(bottom_,320,38,67,244,111,navy);
+        centered(bottom_,320,"INSTALL AND CLOSE?",160,83,1,white);
+        small_text(bottom_,320,"UNSAVED PROGRESS WILL BE LOST",160,105,steel);
+        button(57,125,92,34,"YES",confirmation_yes_);
+        button(171,125,92,34,"NO",!confirmation_yes_);
+        return;
+    }
     if(confirming_version_) {
         rect(bottom_,320,35,64,250,117,steel);
         rect(bottom_,320,38,67,244,111,navy);
@@ -778,8 +841,44 @@ void OptionsMenu3ds::draw_options() {
         button(37,91,246,27,show_fps_?"SHOW FPS ON":"SHOW FPS OFF",selection_==1);
         button(37,134,246,27,overlay_enabled_?"OVERLAY ON":"OVERLAY OFF",selection_==2);
     } else if(page_==MenuPage::update) {
-        button(37,72,246,27,"CHECK UPDATE",false,false);
-        centered(bottom_,320,"COMING SOON",160,118,1,steel);
+        char label[80]{};
+        std::snprintf(label,sizeof(label),"INSTALLED  %s",STARWING_BUILD_VERSION);
+        centered(bottom_,320,label,160,44,1,white);
+        std::snprintf(label,sizeof(label),"LATEST  %s",
+            update_status_.version[0]?update_status_.version:"--");
+        std::transform(label,label+std::strlen(label),label,
+            [](unsigned char c){return static_cast<char>(std::toupper(c));});
+        centered(bottom_,320,label,160,64,1,ice);
+        small_text(bottom_,320,update_status_.message,160,88,
+            update_status_.state==UpdateState::error?white:steel);
+        const bool busy=update_status_.state==UpdateState::checking
+            ||update_status_.state==UpdateState::downloading
+            ||update_status_.state==UpdateState::installing
+            ||update_status_.state==UpdateState::done;
+        if(busy) {
+            rect(bottom_,320,37,121,246,12,steel);
+            rect(bottom_,320,40,124,240,6,dark);
+            rect(bottom_,320,40,124,240*int(update_status_.percent)/100,6,ice);
+            if(update_status_.state!=UpdateState::checking) {
+                std::snprintf(label,sizeof(label),"%u%%",update_status_.percent);
+                centered(bottom_,320,label,160,145,1,white);
+            }
+            small_text(bottom_,320,update_status_.state==UpdateState::installing
+                ?"DO NOT POWER OFF":update_status_.state==UpdateState::done
+                ?"CLOSING GAME":"B  CANCEL",160,173,steel);
+        } else {
+            button(37,111,246,24,update_status_.experimental
+                ?"CHANNEL: EXPERIMENTAL":"CHANNEL: STABLE",selection_==0);
+            button(37,137,246,24,"CHECK FOR UPDATES",selection_==1);
+            button(37,163,246,24,"INSTALL UPDATE",selection_==2,
+                update_status_.state==UpdateState::available);
+            small_text(bottom_,320,"L  PREV                  NEXT  R",160,190,steel);
+        }
+        const bool installing=update_status_.state==UpdateState::installing
+            ||update_status_.state==UpdateState::done;
+        button(110,204,100,23,installing?"WAIT":busy?"CANCEL":"BACK",
+            selection_==3,!installing);
+        return;
     } else if(page_==MenuPage::rom_selection) {
         if(roms_.empty()) centered(bottom_,320,"NO SUPPORTED ROMS",160,95,1,steel);
         for(int visible=0;visible<4;++visible) {
@@ -834,9 +933,11 @@ void OptionsMenu3ds::draw_overlay(const OverlayMetrics& metrics) {
     char value[80]{};
     std::snprintf(value,sizeof(value),"%.1f",metrics.fps);
     text(bottom_,320,value,24,61,2,white);
-    text(bottom_,320,"PRESENT FPS",17,90,1,steel);
+    text(bottom_,320,"AVG FPS",17,89,1,steel);
+    std::snprintf(value,sizeof(value),"P95 %.0fMS",metrics.gap_p95_ms);
+    text(bottom_,320,value,15,99,1,steel);
     std::snprintf(value,sizeof(value),"LOGIC %.1fHZ",metrics.logic_hz);
-    text(bottom_,320,value,15,108,1,white);
+    text(bottom_,320,value,15,112,1,white);
     text(bottom_,320,"MEMORY",126,44,1,white);
     std::snprintf(value,sizeof(value),"HEAP FREE %uKB",metrics.heap_free_kib);
     text(bottom_,320,value,126,60,1,steel);

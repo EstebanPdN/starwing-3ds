@@ -157,23 +157,24 @@ std::int32_t mosaic_coordinate(
     return coordinate - remainder;
 }
 
-// The 3DS source raster uses untagged 256x224 buffers for the two priority
+// The 3DS presentation uses untagged buffers for the two priority
 // planes. Walk a decoded character row once per tile fragment instead of
 // recomputing the map address, character and clipped Framebuffer::set for
 // every pixel. The ordinary pixel path below remains for tagged/upscaled
 // targets and mosaic frames.
 bool draw_split_native(const simulation::SnesPpuState& ppu,
     Framebuffer& low, Framebuffer& high,
-    std::uint16_t character_base, std::uint16_t screen_base,
+    CharacterCache& characters, std::uint16_t screen_base,
     std::uint8_t screen_size, bool tile_size_16,
     std::int32_t scroll_x, std::int32_t scroll_y,
-    bool bg2) noexcept {
+    bool bg2, std::int32_t horizontal_origin = 0,
+    std::int32_t vertical_origin = 0) noexcept {
     const auto direct = [](const Framebuffer& frame) {
-        return frame.width() == 256U && frame.height() == 224U
-            && frame.draw_scale() == 1U && frame.command_buffer() == nullptr
+        return frame.draw_scale() == 1U && frame.command_buffer() == nullptr
             && !frame.layer_tags_enabled() && !frame.tracks_write_coverage();
     };
     if (!direct(low) || !direct(high)
+        || low.width() != high.width() || low.height() != high.height()
         || (ppu.mosaic & (bg2 ? 0x02U : 0x04U)) != 0U) return false;
 
     const auto width_tiles = (screen_size & 1U) != 0U ? 64U : 32U;
@@ -183,20 +184,48 @@ bool draw_split_native(const simulation::SnesPpuState& ppu,
     const auto x_mask = width_tiles * tile_edge - 1U;
     const auto y_mask = height_tiles * tile_edge - 1U;
     const auto palette_stride = bg2 ? 16U : 4U;
-    CharacterCache characters{ppu, character_base, bg2 ? 2U : 1U};
     auto* low_pixels = low.pixels().data();
     auto* high_pixels = high.pixels().data();
-    for (std::uint32_t y = 0U; y < 224U; ++y) {
+    const auto expanded = horizontal_origin != 0 || low.width() > 256U;
+    const auto wall = bg2 && expanded && ppu.tunnel_scene
+        ? tunnel_wall_index(ppu) : 0U;
+    for (std::uint32_t y = 0U; y < low.height(); ++y) {
+        const auto logical_y = vertical_origin != 0
+            ? std::clamp<std::int32_t>(static_cast<std::int32_t>(y) - vertical_origin, 0, 223)
+            : static_cast<std::int32_t>(y);
+        const auto row_index = static_cast<std::uint32_t>(
+            std::clamp<std::int32_t>(logical_y, 0, 223));
         const auto row_x = bg2 && ppu.bg2_horizontal_offsets_enabled
-            ? static_cast<std::int32_t>(ppu.bg2_horizontal_offsets[y])
+            ? static_cast<std::int32_t>(ppu.bg2_horizontal_offsets[row_index])
             : scroll_x;
         const auto row_y = bg2 && ppu.bg2_scanline_scroll_enabled
-            ? static_cast<std::int32_t>(ppu.bg2_scanline_scroll_y[y])
+            ? static_cast<std::int32_t>(ppu.bg2_scanline_scroll_y[row_index])
             : scroll_y;
-        const auto source_y = static_cast<std::uint32_t>(y + row_y) & y_mask;
+        const auto source_y = static_cast<std::uint32_t>(logical_y + row_y) & y_mask;
         const auto tile_y = source_y / tile_edge;
-        for (std::uint32_t x = 0U; x < 256U;) {
-            const auto source_x = static_cast<std::uint32_t>(x + row_x) & x_mask;
+        for (std::uint32_t x = 0U; x < low.width();) {
+            const auto logical_x = static_cast<std::int32_t>(x) - horizontal_origin;
+            auto remaining = low.width() - x;
+            if (logical_x < 0)
+                remaining = std::min(remaining, static_cast<std::uint32_t>(-logical_x));
+            else if (logical_x < 256)
+                remaining = std::min(remaining, static_cast<std::uint32_t>(256 - logical_x));
+            auto source_x = static_cast<std::uint32_t>(logical_x + row_x) & x_mask;
+            bool repeat_edge = false;
+            if (bg2 && expanded && (ppu.bg2_scanline_scroll_enabled || ppu.tunnel_scene)) {
+                // Mode 1's bridge/colony cross-section occurs once. Continue
+                // its edge material with one coordinate system throughout
+                // the native raster. Switching at x=72/328 leaves a seam
+                // when a scanline crosses the source tilemap's wrap point.
+                const auto unwrapped = static_cast<std::int32_t>(
+                    static_cast<std::uint32_t>(128 + row_x) & x_mask)
+                    + logical_x - 128;
+                source_x = static_cast<std::uint32_t>(std::clamp<std::int32_t>(
+                    unwrapped, 0, static_cast<std::int32_t>(x_mask)));
+                repeat_edge = unwrapped < 0 || unwrapped > static_cast<std::int32_t>(x_mask);
+                if (unwrapped < 0)
+                    remaining = std::min(remaining, static_cast<std::uint32_t>(-unwrapped));
+            }
             const auto tile_x = source_x / tile_edge;
             const auto page = (tile_x >> 5U) + (tile_y >> 5U) * pages_wide;
             const auto entry = page * 0x400U
@@ -211,16 +240,18 @@ bool draw_split_native(const simulation::SnesPpuState& ppu,
                 ? high_pixels : low_pixels;
             const auto palette = static_cast<std::uint8_t>(
                 ((tile >> 10U) & 7U) * palette_stride);
-            const auto count = std::min<std::uint32_t>(
-                8U - (source_x & 7U), 256U - x);
+            const auto count = repeat_edge ? remaining : std::min<std::uint32_t>(
+                8U - (source_x & 7U), remaining);
             const bool flip_x = (tile & 0x4000U) != 0U;
-            const auto offset = y * 256U + x;
+            const auto offset = y * low.width() + x;
             for (std::uint32_t i = 0U; i < count; ++i) {
-                const auto character_x = (source_x + i) & 7U;
+                const auto character_x = (source_x + (repeat_edge ? 0U : i)) & 7U;
                 const auto colour = row[flip_x ? 7U - character_x : character_x];
                 if (colour != 0U)
                     destination[offset + i] = static_cast<std::uint8_t>(
                         palette + colour);
+                else if (repeat_edge && wall != 0U)
+                    low_pixels[offset + i] = wall;
             }
             x += count;
         }
@@ -918,34 +949,45 @@ void BackgroundRenderer::draw_bg2_mode1_split(
     std::int32_t scroll_x,
     std::int32_t scroll_y,
     Framebuffer& low,
-    Framebuffer& high) const noexcept {
+    Framebuffer& high,
+    std::int32_t horizontal_origin,
+    std::int32_t vertical_origin) const noexcept {
     if ((ppu.main_screen & 0x02U) == 0U) return;
     if (ppu.background_mode != 1U
-        || low.width() != 256U || low.height() != 224U
-        || high.width() != 256U || high.height() != 224U) {
-        draw_bg2(ppu, scroll_x, scroll_y, low, TilePriorityPass::low);
-        draw_bg2(ppu, scroll_x, scroll_y, high, TilePriorityPass::high);
+        || low.width() != high.width() || low.height() != high.height()) {
+        draw_bg2(ppu, scroll_x, scroll_y, low, TilePriorityPass::low,
+            horizontal_origin, true, true, false, 0U, {}, vertical_origin);
+        draw_bg2(ppu, scroll_x, scroll_y, high, TilePriorityPass::high,
+            horizontal_origin, true, true, false, 0U, {}, vertical_origin);
         return;
     }
+    // Both paths use the same scratch storage. Reserving a second 65 KiB
+    // cache in the nested native helper can overflow the 3DS main stack.
+    CharacterCache characters{ppu, ppu.bg2_character_base, 2U};
     if (draw_split_native(ppu, low, high,
-            ppu.bg2_character_base, ppu.bg2_screen_base,
+            characters, ppu.bg2_screen_base,
             ppu.bg2_screen_size, ppu.bg2_tile_size_16,
-            scroll_x, scroll_y, true)) return;
+            scroll_x, scroll_y, true, horizontal_origin, vertical_origin)) return;
     const auto width_tiles = (ppu.bg2_screen_size & 1U) != 0U ? 64U : 32U;
     const auto height_tiles = (ppu.bg2_screen_size & 2U) != 0U ? 64U : 32U;
     const auto pages_wide = width_tiles / 32U;
     const auto tile_edge = ppu.bg2_tile_size_16 ? 16U : 8U;
     const auto x_mask = width_tiles * tile_edge - 1U;
     const auto y_mask = height_tiles * tile_edge - 1U;
-    CharacterCache characters{ppu, ppu.bg2_character_base, 2U};
-    for (std::uint32_t screen_y = 0U; screen_y < 224U; ++screen_y) {
+    const auto expanded = horizontal_origin != 0 || low.width() > 256U;
+    const auto wall = expanded && ppu.tunnel_scene ? tunnel_wall_index(ppu) : 0U;
+    for (std::uint32_t screen_y = 0U; screen_y < low.height(); ++screen_y) {
+        const auto logical_y = vertical_origin != 0
+            ? std::clamp<std::int32_t>(static_cast<std::int32_t>(screen_y) - vertical_origin, 0, 223)
+            : static_cast<std::int32_t>(screen_y);
         const auto sample_y = mosaic_coordinate(
-            static_cast<std::int32_t>(screen_y), ppu.mosaic, 0x02U);
+            logical_y, ppu.mosaic, 0x02U);
+        const auto row_index = static_cast<std::uint32_t>(std::clamp<std::int32_t>(sample_y, 0, 223));
         const auto row_scroll_x = ppu.bg2_horizontal_offsets_enabled
-            ? static_cast<std::int32_t>(ppu.bg2_horizontal_offsets[sample_y])
+            ? static_cast<std::int32_t>(ppu.bg2_horizontal_offsets[row_index])
             : scroll_x;
         const auto register_scroll_y = ppu.bg2_scanline_scroll_enabled
-            ? static_cast<std::int32_t>(ppu.bg2_scanline_scroll_y[sample_y])
+            ? static_cast<std::int32_t>(ppu.bg2_scanline_scroll_y[row_index])
             : scroll_y;
         const auto source_y = static_cast<std::uint32_t>(
             sample_y + register_scroll_y) & y_mask;
@@ -953,11 +995,21 @@ void BackgroundRenderer::draw_bg2_mode1_split(
         auto previous_entry = std::numeric_limits<std::uint32_t>::max();
         auto tile = std::uint16_t{};
         Framebuffer* destination = &low;
-        for (std::uint32_t screen_x = 0U; screen_x < 256U; ++screen_x) {
+        for (std::uint32_t screen_x = 0U; screen_x < low.width(); ++screen_x) {
+            const auto logical_x = static_cast<std::int32_t>(screen_x) - horizontal_origin;
             const auto sample_x = mosaic_coordinate(
-                static_cast<std::int32_t>(screen_x), ppu.mosaic, 0x02U);
-            const auto source_x = static_cast<std::uint32_t>(
+                logical_x, ppu.mosaic, 0x02U);
+            auto source_x = static_cast<std::uint32_t>(
                 sample_x + row_scroll_x) & x_mask;
+            bool outside = false;
+            if (expanded && (ppu.bg2_scanline_scroll_enabled || ppu.tunnel_scene)) {
+                const auto unwrapped = static_cast<std::int32_t>(
+                    static_cast<std::uint32_t>(128 + row_scroll_x) & x_mask)
+                    + sample_x - 128;
+                source_x = static_cast<std::uint32_t>(std::clamp<std::int32_t>(
+                    unwrapped, 0, static_cast<std::int32_t>(x_mask)));
+                outside = unwrapped < 0 || unwrapped > static_cast<std::int32_t>(x_mask);
+            }
             const auto tile_x = source_x / tile_edge;
             const auto page = (tile_x >> 5U) + (tile_y >> 5U) * pages_wide;
             const auto entry = page * 0x400U
@@ -973,7 +1025,10 @@ void BackgroundRenderer::draw_bg2_mode1_split(
                 static_cast<std::int32_t>(source_y),
                 ppu.bg2_tile_size_16);
             const auto colour = characters.pixel(sample);
-            if (colour == 0U) continue;
+            if (colour == 0U) {
+                if (outside && wall != 0U) low.set(screen_x, screen_y, wall);
+                continue;
+            }
             destination->set(static_cast<std::int32_t>(screen_x),
                 static_cast<std::int32_t>(screen_y),
                 static_cast<std::uint8_t>(
@@ -1086,23 +1141,28 @@ void BackgroundRenderer::draw_bg3_split(
     Framebuffer& low,
     Framebuffer& high) const noexcept {
     if ((ppu.main_screen & 0x04U) == 0U) return;
-    if (low.width() != 256U || low.height() != 224U
-        || high.width() != 256U || high.height() != 224U) {
+    if (low.width() != high.width() || low.height() != high.height()
+        || low.width() == 0U || low.height() == 0U) {
         draw_bg3(ppu, low, TilePriorityPass::low);
         draw_bg3(ppu, high, TilePriorityPass::high);
         return;
     }
+    CharacterCache characters{ppu, ppu.bg3_character_base, 1U};
     if (draw_split_native(ppu, low, high,
-            ppu.bg3_character_base, ppu.bg3_screen_base,
+            characters, ppu.bg3_screen_base,
             ppu.bg3_screen_size, ppu.bg3_tile_size_16,
             ppu.bg3_scroll_x, ppu.bg3_scroll_y, false)) return;
+    if (low.width() != 256U || low.height() != 224U) {
+        draw_bg3(ppu, low, TilePriorityPass::low);
+        draw_bg3(ppu, high, TilePriorityPass::high);
+        return;
+    }
     const auto width_tiles = (ppu.bg3_screen_size & 1U) != 0U ? 64U : 32U;
     const auto height_tiles = (ppu.bg3_screen_size & 2U) != 0U ? 64U : 32U;
     const auto pages_wide = width_tiles / 32U;
     const auto tile_edge = ppu.bg3_tile_size_16 ? 16U : 8U;
     const auto x_mask = width_tiles * tile_edge - 1U;
     const auto y_mask = height_tiles * tile_edge - 1U;
-    CharacterCache characters{ppu, ppu.bg3_character_base, 1U};
     for (std::uint32_t screen_y = 0U; screen_y < 224U; ++screen_y) {
         const auto sample_y = mosaic_coordinate(
             static_cast<std::int32_t>(screen_y), ppu.mosaic, 0x04U);

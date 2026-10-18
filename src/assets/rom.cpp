@@ -1,4 +1,5 @@
 #include "starfox/assets/rom.hpp"
+#include "starfox/assets/bps.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -26,6 +27,7 @@ RomImage::RomImage(std::vector<std::uint8_t> bytes) : bytes_(std::move(bytes)) {
     if ((bytes_.size() % 0x8000U) != 0) {
         throw std::invalid_argument{"ROM image must not include a copier header"};
     }
+    crc32_ = starfox::assets::crc32(bytes_);
 }
 
 RomImage RomImage::load(const std::filesystem::path& path) {

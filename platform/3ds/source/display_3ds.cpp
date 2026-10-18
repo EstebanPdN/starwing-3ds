@@ -1,4 +1,5 @@
 #include "display_3ds.hpp"
+#include "cache_3ds.h"
 #include "stereo_3ds.hpp"
 
 #include <algorithm>
@@ -117,7 +118,8 @@ void Display3ds::bg2_plan_worker_main(void* argument) {
         self.bg2_worker_plan_succeeded_ = self.bg2_worker_ppu_ != nullptr
             && plan_bg2_rects(*self.bg2_worker_ppu_,
                 self.bg2_worker_scroll_x_, self.bg2_worker_scroll_y_,
-                self.bg2_worker_plan_, 16383U, 400U, 240U, 72, 8);
+                self.bg2_worker_plan_, 16383U, 400U, 240U, 72, 8,
+                true, self.bg2_worker_use_map_, self.bg2_worker_map_opaque_);
         self.bg2_worker_plan_us_ = ticks_to_microseconds(
             svcGetSystemTick() - begin);
         self.bg2_plan_worker_completed_.store(true,
@@ -161,8 +163,10 @@ void Display3ds::prepare_mode2_plan(
     std::int32_t scroll_x, std::int32_t scroll_y,
     bool core2_available) {
     if (bg2_plan_pending_) wait_for_bg2_plan();
-    if (bg2_plan_worker_ == nullptr || !core2_available
-        || !eligible_mode2(ppu)) return;
+    if (!eligible_mode2(ppu)) return;
+    if (bg2_map_texture_.data != nullptr && !ppu.bg2_tile_size_16)
+        remember_bg2_map_source(ppu);
+    if (bg2_plan_worker_ == nullptr || !core2_available) return;
     const bool reuse_plan = tile_cache_valid_
         && cached_tile_scroll_x_ == scroll_x
         && cached_tile_scroll_y_ == scroll_y
@@ -174,6 +178,8 @@ void Display3ds::prepare_mode2_plan(
     bg2_worker_vram_revision_ = ppu_vram_revision;
     bg2_worker_scroll_x_ = scroll_x;
     bg2_worker_scroll_y_ = scroll_y;
+    bg2_worker_use_map_ = bg2_map_texture_.data != nullptr && !ppu.bg2_tile_size_16;
+    bg2_worker_map_opaque_ = bg2_worker_use_map_ && bg2_map_source_cache_.all_opaque();
     bg2_plan_worker_completed_.store(false, std::memory_order_relaxed);
     bg2_plan_request_ready_.store(true, std::memory_order_release);
     bg2_plan_pending_ = true;
@@ -232,6 +238,11 @@ bool Display3ds::open() {
     C3D_TexSetWrap(&right_overlay_texture_, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
     C3D_TexSetFilter(&tile_atlas_, GPU_NEAREST, GPU_NEAREST);
     C3D_TexSetWrap(&tile_atlas_, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+    if (C3D_TexInit(&bg2_map_texture_, 512U, 512U, GPU_RGBA5551)) {
+        std::memset(bg2_map_texture_.data, 0, 512U * 512U * 2U);
+        C3D_TexSetFilter(&bg2_map_texture_, GPU_NEAREST, GPU_NEAREST);
+        C3D_TexSetWrap(&bg2_map_texture_, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+    }
     tile_quads_.reserve(16384U);
     uniform_quads_.reserve(4096U);
     edge_corrections_.reserve(512U);
@@ -255,6 +266,20 @@ bool Display3ds::open() {
         | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO);
     C3D_RenderTargetSetOutput(top_, GFX_TOP, GFX_LEFT, output);
     C3D_RenderTargetSetOutput(top_right_, GFX_TOP, GFX_RIGHT, output);
+    // Optional fixed 512 KiB VRAM cache. If allocation is unavailable, retain
+    // direct BG2 drawing. RGBA8 matches the screen render target exactly;
+    // using 16-bit colour here would quantize the background a second time.
+    if (C3D_TexInitVRAM(&bg2_texture_, texture_width_, texture_height_, GPU_RGBA8)) {
+        bg2_target_ = C3D_RenderTargetCreateFromTex(
+            &bg2_texture_, GPU_TEXFACE_2D, 0, -1);
+        if (bg2_target_ != nullptr) {
+            C3D_TexSetFilter(&bg2_texture_, GPU_NEAREST, GPU_NEAREST);
+            C3D_TexSetWrap(&bg2_texture_, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+        } else {
+            C3D_TexDelete(&bg2_texture_);
+            bg2_texture_ = {};
+        }
+    }
     gpu_active_ = true;
     LightEvent_Init(&bg2_plan_requested_, RESET_ONESHOT);
     LightEvent_Init(&bg2_plan_completed_, RESET_ONESHOT);
@@ -280,6 +305,12 @@ void Display3ds::close() noexcept {
         bg2_plan_worker_ = nullptr;
     }
     gpu_active_ = false;
+    // Delete the target first: its queue fence protects the texture it uses.
+    if (bg2_target_ != nullptr) C3D_RenderTargetDelete(bg2_target_);
+    bg2_target_ = nullptr;
+    if (bg2_texture_.data != nullptr) C3D_TexDelete(&bg2_texture_);
+    bg2_texture_ = {};
+    bg2_raster_valid_ = false;
     if (top_ != nullptr) C3D_RenderTargetDelete(top_);
     top_ = nullptr;
     if (top_right_ != nullptr) C3D_RenderTargetDelete(top_right_);
@@ -294,6 +325,10 @@ void Display3ds::close() noexcept {
     right_overlay_texture_ = {};
     if (tile_atlas_.data != nullptr) C3D_TexDelete(&tile_atlas_);
     tile_atlas_ = {};
+    if (bg2_map_texture_.data != nullptr) C3D_TexDelete(&bg2_map_texture_);
+    bg2_map_texture_ = {};
+    bg2_map_valid_ = false;
+    bg2_map_source_cache_.reset();
     if (linear_pixels_ != nullptr) linearFree(linear_pixels_);
     linear_pixels_ = nullptr;
     if (linear_overlay_ != nullptr) linearFree(linear_overlay_);
@@ -390,7 +425,7 @@ bool Display3ds::show_full_dump_progress(const char* stage,
     centered(amount, 136, 2, ivory);
     centered("WRITING MEMORY", 195, 1, blue);
     centered("DO NOT POWER OFF", 215, 1, ivory);
-    GSPGPU_FlushDataCache(framebuffer, 320U * 240U * 4U);
+    starwing_clean_device_cache(framebuffer, 320U * 240U * 4U);
     last_bottom_framebuffer_ = reinterpret_cast<const u8*>(framebuffer);
     gfxScreenSwapBuffers(GFX_BOTTOM, false);
     return true;
@@ -419,7 +454,7 @@ void Display3ds::upload_right(const render::Framebuffer& frame,
     }
     frame_timing_.build_us += ticks_to_microseconds(svcGetSystemTick() - begin);
     begin = svcGetSystemTick();
-    GSPGPU_FlushDataCache(linear_right_, texture_width_ * texture_height_
+    starwing_clean_device_cache(linear_right_, texture_width_ * texture_height_
         * sizeof(std::uint16_t));
     frame_timing_.flush_us += ticks_to_microseconds(svcGetSystemTick() - begin);
     begin = svcGetSystemTick();
@@ -484,7 +519,7 @@ bool Display3ds::present(const render::Framebuffer& indexed,
         frame_timing_.build_us = ticks_to_microseconds(
             svcGetSystemTick() - stage_begin);
         stage_begin = svcGetSystemTick();
-        GSPGPU_FlushDataCache(linear_pixels_,
+        starwing_clean_device_cache(linear_pixels_,
             texture_width_ * texture_height_ * sizeof(std::uint16_t));
         frame_timing_.flush_us = ticks_to_microseconds(
             svcGetSystemTick() - stage_begin);
@@ -586,6 +621,7 @@ std::int16_t Display3ds::decode_tile(
     if (tile_slot_count_ >= 8192U) return -1;
     const auto slot = tile_slot_count_++;
     tile_slots_[key] = static_cast<std::int16_t>(slot);
+    tile_source_cache_.remember(ppu, character);
     auto* destination = static_cast<std::uint16_t*>(tile_atlas_.data)
         + static_cast<std::size_t>(slot) * 64U;
     const auto base = (static_cast<std::uint32_t>(ppu.bg2_character_base) * 2U
@@ -621,6 +657,53 @@ std::int16_t Display3ds::decode_tile(
     return static_cast<std::int16_t>(slot);
 }
 
+void Display3ds::remember_bg2_map_source(
+    const simulation::SnesPpuState& ppu) noexcept {
+    if (bg2_map_source_cache_.matches(ppu)) return;
+    // Updating the source certificate must invalidate its GPU image too.
+    // A fresh certificate alone does not mean old texture bytes are current.
+    bg2_map_valid_ = false;
+    bg2_map_source_cache_.remember(ppu);
+}
+
+bool Display3ds::build_bg2_map(const simulation::SnesPpuState& ppu,
+    const render::Palette256& palette) {
+    remember_bg2_map_source(ppu);
+    if (bg2_map_valid_
+        && std::memcmp(bg2_map_palette_.data(), palette.data(), sizeof(bg2_map_palette_)) == 0)
+        return true;
+    bg2_map_valid_ = false;
+    const auto width_tiles = (ppu.bg2_screen_size & 1U) ? 64U : 32U;
+    const auto height_tiles = (ppu.bg2_screen_size & 2U) ? 64U : 32U;
+    const auto pages_wide = width_tiles / 32U;
+    auto* destination = static_cast<std::uint16_t*>(bg2_map_texture_.data);
+    const auto* atlas = static_cast<const std::uint16_t*>(tile_atlas_.data);
+    for (std::uint32_t y = 0U; y < height_tiles; ++y) {
+        for (std::uint32_t x = 0U; x < width_tiles; ++x) {
+            const auto entry = ((x >> 5U) + (y >> 5U) * pages_wide) * 1024U
+                + (y & 31U) * 32U + (x & 31U);
+            const auto address = (std::uint32_t(ppu.bg2_screen_base) * 2U + entry * 2U) & 65535U;
+            const auto tile = std::uint16_t(ppu.vram[address]
+                | (std::uint16_t(ppu.vram[(address + 1U) & 65535U]) << 8U));
+            const auto slot = decode_tile(ppu, palette, tile & 1023U, (tile >> 10U) & 7U);
+            if (slot < 0) return false;
+            auto* output = destination + (y * 64U + x) * 64U;
+            const auto* source = atlas + std::size_t(slot) * 64U;
+            if ((tile & 0xc000U) == 0U) std::copy_n(source, 64U, output);
+            else for (unsigned py = 0U; py < 8U; ++py)
+                for (unsigned px = 0U; px < 8U; ++px)
+                    output[tile_morton[py * 8U + px]] = source[tile_morton[
+                        ((tile & 0x8000U) ? 7U - py : py) * 8U
+                        + ((tile & 0x4000U) ? 7U - px : px)]];
+        }
+    }
+    if (R_FAILED(starwing_clean_device_cache(destination, 512U * 512U * 2U)))
+        C3D_TexFlush(&bg2_map_texture_);
+    std::copy_n(palette.begin(), bg2_map_palette_.size(), bg2_map_palette_.begin());
+    bg2_map_valid_ = true;
+    return true;
+}
+
 bool Display3ds::build_mode2_quads(
     const simulation::SnesPpuState& ppu,
     std::uint64_t ppu_vram_revision,
@@ -636,14 +719,26 @@ bool Display3ds::build_mode2_quads(
     // tile bytes and palette stay identical, including across HDMA bands.
     const bool reuse_atlas = tile_cache_valid_
         && cached_tile_plan_key_.bg2_character_base == ppu.bg2_character_base
-        && cached_tile_vram_revision_ == ppu_vram_revision
         && std::memcmp(cached_tile_palette_.data(), palette.data(),
-            sizeof(cached_tile_palette_)) == 0;
+            sizeof(cached_tile_palette_)) == 0
+        && (cached_tile_vram_revision_ == ppu_vram_revision
+            || tile_source_cache_.matches(ppu));
     if (!reuse_atlas) {
         tile_slots_.fill(-1);
         tile_slot_count_ = 0U;
+        tile_source_cache_.reset();
     }
+    tile_dirty_begin_ = tile_slot_count_;
+    if (bg2_map_texture_.data != nullptr && !ppu.bg2_tile_size_16
+        && !build_bg2_map(ppu, palette)) return false;
     for (const auto& rectangle : bg2_plan_) {
+        if (rectangle.map_sample) {
+            tile_quads_.push_back({rectangle.x, rectangle.y,
+                rectangle.width, rectangle.height, 0U,
+                rectangle.source_x, rectangle.source_y, false, false,
+                false, 0U, true});
+            continue;
+        }
         if (rectangle.solid) {
             edge_corrections.push_back({rectangle.x, rectangle.y,
                 rectangle.width, rectangle.height, 0U, 0U, 0U,
@@ -730,6 +825,48 @@ bool Display3ds::same_bg2_plan_state(
                 == ppu.bg2_scanline_scroll_y);
 }
 
+bool Display3ds::draw_bg2_quads(const render::Palette256& palette) {
+    for (const auto& quad : tile_quads_) {
+        if (quad.solid) {
+            const auto colour = palette[quad.solid_colour];
+            if (!C2D_DrawRectSolid(static_cast<float>(quad.x),
+                static_cast<float>(quad.y), 0.0F,
+                static_cast<float>(quad.width),
+                static_cast<float>(quad.height),
+                C2D_Color32(colour.r, colour.g, colour.b, 255U))) {
+                return false;
+            }
+            continue;
+        }
+        const auto slot_x = quad.map_sample ? 0U : static_cast<std::uint32_t>(quad.slot % 128U) * 8U;
+        const auto slot_y = quad.map_sample ? 0U : static_cast<std::uint32_t>(quad.slot / 128U) * 8U;
+        const auto uv_x = slot_x + quad.first_x
+            + (quad.reverse_x ? 1U : 0U);
+        const auto uv_y = slot_y + quad.first_y
+            + (quad.reverse_y ? 1U : 0U);
+        const Tex3DS_SubTexture subtexture{
+            quad.width, quad.height,
+            static_cast<float>(uv_x) / (quad.map_sample ? 512.0F : 1024.0F),
+            1.0F - static_cast<float>(uv_y) / 512.0F,
+            static_cast<float>(static_cast<std::int32_t>(uv_x)
+                + (quad.reverse_x ? -static_cast<std::int32_t>(quad.width)
+                    : quad.width)) / (quad.map_sample ? 512.0F : 1024.0F),
+            1.0F - static_cast<float>(static_cast<std::int32_t>(uv_y)
+                + (quad.reverse_y ? -static_cast<std::int32_t>(quad.height)
+                    : quad.height)) / 512.0F};
+        const C2D_Image image{quad.map_sample ? &bg2_map_texture_ : &tile_atlas_, &subtexture};
+        const C2D_DrawParams params{
+            {static_cast<float>(quad.x), static_cast<float>(quad.y),
+                static_cast<float>(quad.width), static_cast<float>(quad.height)},
+            {0.0F, 0.0F}, 0.0F, 0.0F};
+        if (!C2D_DrawImage(image, &params, nullptr)) {
+            return false;
+        }
+    }
+    frame_timing_.bg2_emitted_quads += static_cast<std::uint32_t>(tile_quads_.size());
+    return true;
+}
+
 bool Display3ds::present_mode2(
     const simulation::SnesPpuState& ppu,
     std::uint64_t ppu_vram_revision,
@@ -772,8 +909,11 @@ bool Display3ds::present_mode2(
             scroll_x, scroll_y);
         if (!frame_timing_.bg2_plan_worker_used) {
             const auto plan_begin = svcGetSystemTick();
+            const bool use_map = bg2_map_texture_.data != nullptr && !ppu.bg2_tile_size_16;
+            if (use_map) remember_bg2_map_source(ppu);
             planned = plan_bg2_rects(ppu, scroll_x, scroll_y, bg2_plan_,
-                    16383U, 400U, 240U, 72, 8);
+                    16383U, 400U, 240U, 72, 8, true, use_map,
+                    use_map && bg2_map_source_cache_.all_opaque());
             frame_timing_.plan_us += ticks_to_microseconds(
                 svcGetSystemTick() - plan_begin);
         }
@@ -797,6 +937,7 @@ bool Display3ds::present_mode2(
         return false;
     }
     if (!reuse_tiles) {
+        bg2_raster_valid_ = false;
         // FrameBegin's GPU-idle acquire protects atlas writes from the
         // preceding submitted frame, which may still have sampled it.
         stage_begin = svcGetSystemTick();
@@ -811,13 +952,16 @@ bool Display3ds::present_mode2(
             frame_timing_.gpu_submitted = true;
             return false;
         }
-        // Slots are packed from zero each rebuild. Flush the used prefix;
-        // flushing the entire 1 MiB atlas is unnecessary on Old 3DS.
-        if (tile_slot_count_ != 0U) {
-            const auto bytes = static_cast<std::size_t>(tile_slot_count_)
+        // Unchanged texels remain GPU-visible. Only appended or rebuilt
+        // slots need cleaning; each slot begins on a 128-byte boundary.
+        if (tile_slot_count_ != tile_dirty_begin_) {
+            const auto bytes = static_cast<std::size_t>(
+                tile_slot_count_ - tile_dirty_begin_)
                 * 64U * sizeof(std::uint16_t);
+            auto* dirty = static_cast<std::uint16_t*>(tile_atlas_.data)
+                + static_cast<std::size_t>(tile_dirty_begin_) * 64U;
             stage_begin = svcGetSystemTick();
-            if (R_FAILED(GSPGPU_FlushDataCache(tile_atlas_.data, bytes)))
+            if (R_FAILED(starwing_clean_device_cache(dirty, bytes)))
                 C3D_TexFlush(&tile_atlas_);
             frame_timing_.flush_us += ticks_to_microseconds(
                 svcGetSystemTick() - stage_begin);
@@ -857,7 +1001,7 @@ bool Display3ds::present_mode2(
         frame_timing_.build_us += ticks_to_microseconds(
             svcGetSystemTick() - stage_begin);
         stage_begin = svcGetSystemTick();
-        GSPGPU_FlushDataCache(linear_overlay_,
+        starwing_clean_device_cache(linear_overlay_,
             texture_width_ * texture_height_ * sizeof(std::uint16_t));
         frame_timing_.flush_us += ticks_to_microseconds(
             svcGetSystemTick() - stage_begin);
@@ -880,48 +1024,43 @@ bool Display3ds::present_mode2(
     }
 
     if (right != nullptr) upload_right(*right, palette, true, reuse_source);
+    const auto submit_begin = svcGetSystemTick();
+    // Reserve vertices for cached background + foreground in both eyes.
+    // At the existing pathological fragment limit use the direct path.
+    const bool use_bg2_raster = bg2_target_ != nullptr && tile_quads_.size() <= 16380U;
+    frame_timing_.bg2_raster_cache_used = use_bg2_raster;
+    frame_timing_.bg2_raster_cache_hit = use_bg2_raster && bg2_raster_valid_;
+    if (use_bg2_raster && !bg2_raster_valid_) {
+        C2D_TargetClear(bg2_target_, C2D_Color32(
+            palette[0].r, palette[0].g, palette[0].b, 255));
+        C2D_SceneBegin(bg2_target_);
+        if (!draw_bg2_quads(palette)) {
+            C3D_FrameEnd(GX_CMDLIST_FLUSH);
+            frame_timing_.gpu_submitted = true;
+            return false;
+        }
+        // SceneBegin below flushes Citro2D; switching the render target flushes
+        // PICA's framebuffer and binding this texture invalidates its cache.
+        // Both commands execute in order in the same GPU queue.
+        bg2_raster_valid_ = true;
+    }
     const auto draw_eye = [&](C3D_RenderTarget* target, C3D_Tex* overlay) {
     C2D_TargetClear(target, C2D_Color32(
         palette[0].r, palette[0].g, palette[0].b, 255));
     C2D_SceneBegin(target);
     stage_begin = svcGetSystemTick();
-    for (const auto& quad : tile_quads_) {
-        if (quad.solid) {
-            const auto colour = palette[quad.solid_colour];
-            if (!C2D_DrawRectSolid(static_cast<float>(quad.x),
-                static_cast<float>(quad.y), 0.0F,
-                static_cast<float>(quad.width),
-                static_cast<float>(quad.height),
-                C2D_Color32(colour.r, colour.g, colour.b, 255U))) {
-                return false;
-            }
-            continue;
-        }
-        const auto slot_x = static_cast<std::uint32_t>(quad.slot % 128U) * 8U;
-        const auto slot_y = static_cast<std::uint32_t>(quad.slot / 128U) * 8U;
-        const auto uv_x = slot_x + quad.first_x
-            + (quad.reverse_x ? 1U : 0U);
-        const auto uv_y = slot_y + quad.first_y
-            + (quad.reverse_y ? 1U : 0U);
-        const Tex3DS_SubTexture subtexture{
-            quad.width, quad.height,
-            static_cast<float>(uv_x) / 1024.0F,
-            1.0F - static_cast<float>(uv_y) / 512.0F,
-            static_cast<float>(static_cast<std::int32_t>(uv_x)
-                + (quad.reverse_x ? -static_cast<std::int32_t>(quad.width)
-                    : quad.width)) / 1024.0F,
-            1.0F - static_cast<float>(static_cast<std::int32_t>(uv_y)
-                + (quad.reverse_y ? -static_cast<std::int32_t>(quad.height)
-                    : quad.height)) / 512.0F};
-        const C2D_Image image{&tile_atlas_, &subtexture};
-        const C2D_DrawParams params{
-            {static_cast<float>(quad.x), static_cast<float>(quad.y),
-                static_cast<float>(quad.width), static_cast<float>(quad.height)},
-            {0.0F, 0.0F}, 0.0F, 0.0F};
-        if (!C2D_DrawImage(image, &params, nullptr)) {
+    if (use_bg2_raster) {
+        const Tex3DS_SubTexture background_subtexture{
+            400U, 240U, 0.0F, 1.0F,
+            400.0F / static_cast<float>(texture_width_),
+            1.0F - 240.0F / static_cast<float>(texture_height_)};
+        const C2D_Image background_image{&bg2_texture_, &background_subtexture};
+        const C2D_DrawParams background_params{
+            {0.0F, 0.0F, 400.0F, 240.0F}, {0.0F, 0.0F}, 0.0F, 0.0F};
+        if (!C2D_DrawImage(background_image, &background_params, nullptr))
             return false;
-        }
-    }
+        ++frame_timing_.bg2_emitted_quads;
+    } else if (!draw_bg2_quads(palette)) return false;
     const Tex3DS_SubTexture foreground_subtexture{
         400U, 240U, 0.0F, 1.0F,
         400.0F / static_cast<float>(texture_width_),
@@ -935,7 +1074,6 @@ bool Display3ds::present_mode2(
         foreground_image, &foreground_params, nullptr);
     return drawn;
     };
-    const auto submit_begin = svcGetSystemTick();
     const bool drawn = draw_eye(top_, &overlay_texture_)
         && (right == nullptr || draw_eye(top_right_, &right_overlay_texture_));
     last_top_framebuffer_ = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, nullptr, nullptr);

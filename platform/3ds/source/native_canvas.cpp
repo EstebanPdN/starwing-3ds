@@ -6,9 +6,65 @@
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
+#include <utility>
 #include <vector>
 
 namespace starfox::platform_3ds {
+
+void compose_native_mode1(const render::Framebuffer& source,
+    const render::Framebuffer& world, const render::Framebuffer& bg2_low,
+    const render::Framebuffer& bg2_high, const render::Framebuffer& bg3_low,
+    const render::Framebuffer& bg3_high, render::Framebuffer& target,
+    bool bg3_high_priority) noexcept {
+    if (source.width() != 256U || source.height() != 224U
+        || source.draw_scale() != 1U) return;
+    const auto native = [](const render::Framebuffer& frame) {
+        return frame.width() == 400U && frame.height() == 240U
+            && frame.draw_scale() == 1U;
+    };
+    if (!native(world) || !native(bg2_low) || !native(bg2_high)
+        || !native(bg3_low) || !native(bg3_high) || !native(target)) return;
+    auto& pixels = target.pixels();
+    if (target.layer_tags_enabled() || target.tracks_write_coverage()
+        || target.command_buffer() != nullptr) {
+        target.clear();
+        render::composite_transparent_layer(bg3_low, target, {});
+        if (!bg3_high_priority)
+            render::composite_transparent_layer(bg3_high, target, {});
+        render::composite_transparent_layer(bg2_low, target, {});
+        render::composite_transparent_layer(world, target, {});
+        render::composite_transparent_layer(bg2_high, target, {});
+        if (bg3_high_priority)
+            render::composite_transparent_layer(bg3_high, target, {});
+    } else {
+        const auto* front = bg2_high.pixels().data();
+        const auto* models = world.pixels().data();
+        const auto* back = bg2_low.pixels().data();
+        const auto* panorama = bg3_low.pixels().data();
+        const auto* panorama_high = bg3_high.pixels().data();
+        const auto margin = [&](std::size_t first, std::size_t last) {
+            for (auto i = first; i < last; ++i) {
+                auto colour = bg3_high_priority ? panorama_high[i] : 0U;
+                if (colour == 0U) colour = front[i];
+                if (colour == 0U) colour = models[i];
+                if (colour == 0U) colour = back[i];
+                if (colour == 0U && !bg3_high_priority) colour = panorama_high[i];
+                if (colour == 0U) colour = panorama[i];
+                pixels[i] = static_cast<std::uint8_t>(colour);
+            }
+        };
+        margin(0U, 8U * 400U);
+        for (std::size_t y = 8U; y < 232U; ++y) {
+            margin(y * 400U, y * 400U + 72U);
+            margin(y * 400U + 328U, (y + 1U) * 400U);
+        }
+        margin(232U * 400U, pixels.size());
+    }
+    for (std::size_t y = 0U; y < 224U; ++y)
+        std::copy_n(source.pixels().data() + y * 256U, 256U,
+            pixels.data() + (y + 8U) * 400U + 72U);
+}
+
 namespace {
 
 std::uint8_t dominant_edge(const render::Framebuffer& source,
@@ -153,6 +209,185 @@ bool is_isolated_map_artifact(const render::Framebuffer& source,
 
 } // namespace
 
+void build_native_panorama_atlas(const render::Framebuffer& source_low,
+    const render::Framebuffer& source_high, render::Framebuffer& target_low,
+    render::Framebuffer& target_high,
+    const simulation::SnesPpuState& ppu) {
+    const auto width = source_low.width();
+    const auto height = source_low.height();
+    if (width < 256U || width > 1024U || height < 256U || height > 1024U
+        || (width & (width - 1U)) != 0U || (height & (height - 1U)) != 0U
+        || source_high.width() != width || source_high.height() != height) return;
+    const auto atlas_width = width + native_panorama_padding * 2U;
+    target_low.resize(atlas_width, height);
+    target_high.resize(atlas_width, height);
+    target_low.clear(); target_high.clear();
+    const auto& low = source_low.pixels();
+    const auto& high = source_high.pixels();
+    auto& wide_low = target_low.pixels();
+    auto& wide_high = target_high.pixels();
+    struct Colour { int r, g, b; };
+    std::array<Colour, 256U> colours{};
+    for (unsigned i = 0U; i < colours.size(); ++i) {
+        const auto c = ppu.cgram[i];
+        colours[i] = {int(c & 31U), int((c >> 5U) & 31U), int((c >> 10U) & 31U)};
+    }
+    const auto colour_distance = [&colours](std::uint8_t a, std::uint8_t b) {
+        const auto& x = colours[a]; const auto& y = colours[b];
+        return unsigned(std::abs(x.r - y.r) + std::abs(x.g - y.g) + std::abs(x.b - y.b));
+    };
+    // Mode 1 BG3 uses eight four-colour palettes. Seam matching repeatedly
+    // compares the same colours, so retain their exact RGB distances.
+    std::array<std::array<std::uint8_t, 32U>, 32U> distances{};
+    for (unsigned a = 0U; a < distances.size(); ++a)
+        for (unsigned b = 0U; b < distances[a].size(); ++b)
+            distances[a][b] = static_cast<std::uint8_t>(colour_distance(a, b));
+    const auto distance = [&distances, &colour_distance](std::uint8_t a, std::uint8_t b) {
+        return a < 32U && b < 32U ? unsigned(distances[a][b])
+            : colour_distance(a, b);
+    };
+    const auto source_colour = [&low, &high, width](unsigned x, unsigned y) {
+        const auto i = y * width + x;
+        return high[i] != 0U ? high[i] : low[i];
+    };
+    const auto native_colour = [&wide_low, &wide_high, atlas_width](unsigned x, unsigned y) {
+        const auto i = y * atlas_width + x;
+        return wide_high[i] != 0U ? wide_high[i] : wide_low[i];
+    };
+    for (unsigned y = 0U; y < height; ++y) {
+        std::copy_n(low.data() + y * width, width,
+            wide_low.data() + y * atlas_width + native_panorama_padding);
+        std::copy_n(high.data() + y * width, width,
+            wide_high.data() + y * atlas_width + native_panorama_padding);
+    }
+    const auto patches = width / 8U;
+    std::vector<unsigned> density(patches), uses(patches);
+    std::vector<bool> allowed(patches);
+    for (unsigned band = 0U; band < height / 8U; ++band) {
+        const auto first_y = band * 8U;
+        std::array<unsigned, 256U> histogram{};
+        for (unsigned y = first_y; y < first_y + 8U; ++y)
+            for (unsigned x = 0U; x < width; ++x) ++histogram[source_colour(x, y)];
+        const auto dominant = static_cast<std::uint8_t>(std::distance(
+            histogram.begin(), std::max_element(histogram.begin(), histogram.end())));
+        std::fill(density.begin(), density.end(), 0U);
+        std::fill(uses.begin(), uses.end(), 0U);
+        unsigned density_sum{}, allowed_count{};
+        for (unsigned patch = 0U; patch < patches; ++patch) {
+            bool feature = false;
+            for (unsigned dy = 0U; dy < 8U; ++dy) {
+                for (unsigned dx = 0U; dx < 8U; ++dx) {
+                    const auto c = source_colour(patch * 8U + dx, first_y + dy);
+                    density[patch] += distance(c, dominant) != 0U;
+                    const auto rgb = colours[c];
+                    // The distant bright moon/eye is unique art. Texture
+                    // donors retain its surrounding dark terrain, while the
+                    // lower horizon and star field retain their bright ink.
+                    if (first_y < 112U && (rgb.r + rgb.g + rgb.b >= 58
+                            || (rgb.r > 17 && rgb.g > 12 && rgb.b <= 12))) feature = true;
+                }
+            }
+            allowed[patch] = !feature;
+            if (!feature) { density_sum += density[patch]; ++allowed_count; }
+        }
+        const auto target_density = allowed_count != 0U ? density_sum / allowed_count : 0U;
+        for (unsigned side = 0U; side < 2U; ++side) {
+            for (unsigned step = 0U; step < native_panorama_padding / 8U; ++step) {
+                const auto start_x = side == 0U
+                    ? native_panorama_padding - 8U - step * 8U
+                    : native_panorama_padding + width + step * 8U;
+                const auto neighbour_x = side == 0U ? start_x + 8U : start_x - 1U;
+                auto best_score = ~0U;
+                unsigned best = patches;
+                // Rotate equal-score selection deterministically; adjacent
+                // bands and opposite margins do not stamp the same pattern.
+                const auto phase = (band * 13U + side * 11U + step * 7U) % patches;
+                for (unsigned candidate = 0U; candidate < patches; ++candidate) {
+                    const auto patch = (candidate + phase) % patches;
+                    if (!allowed[patch]) continue;
+                    unsigned score = unsigned(std::abs(int(density[patch]) - int(target_density)))
+                        + uses[patch] * 4U;
+                    if (score >= best_score) continue;
+                    const auto source_x = patch * 8U;
+                    // Every term is nonnegative. A donor that has already
+                    // lost cannot become the winner; equal scores retain
+                    // the original first-candidate tie break.
+                    for (unsigned dy = 0U; dy < 8U && score < best_score; ++dy)
+                        score += 4U * distance(source_colour(source_x + (side == 0U ? 7U : 0U), first_y + dy),
+                            native_colour(neighbour_x, first_y + dy));
+                    if (score >= best_score) continue;
+                    if (band != 0U) {
+                        for (unsigned dx = 0U; dx < 8U && score < best_score; ++dx)
+                            score += distance(source_colour(source_x + dx, first_y),
+                                native_colour(start_x + dx, first_y - 1U));
+                    }
+                    if (score < best_score) {
+                        best_score = score; best = patch;
+                        if (best_score == 0U) break;
+                    }
+                }
+                if (best != patches) ++uses[best];
+                for (unsigned dy = 0U; dy < 8U; ++dy) {
+                    for (unsigned dx = 0U; dx < 8U; ++dx) {
+                        const auto dst = (first_y + dy) * atlas_width + start_x + dx;
+                        if (best != patches) {
+                            const auto src = (first_y + dy) * width + best * 8U + dx;
+                            wide_low[dst] = low[src]; wide_high[dst] = high[src];
+                        } else {
+                            // No eligible donor: continue the local material,
+                            // retaining the priority of its neighbouring texel.
+                            const auto src = (first_y + dy) * atlas_width + neighbour_x;
+                            wide_low[dst] = wide_low[src]; wide_high[dst] = wide_high[src];
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+void scroll_native_panorama_atlas(const render::Framebuffer& atlas_low,
+    const render::Framebuffer& atlas_high, render::Framebuffer& target_low,
+    render::Framebuffer& target_high,
+    const simulation::SnesPpuState& ppu) noexcept {
+    if (atlas_low.width() < native_panorama_padding * 2U + 256U
+        || atlas_low.width() != atlas_high.width()
+        || atlas_low.height() < 256U || atlas_low.height() != atlas_high.height()
+        || (atlas_low.height() & (atlas_low.height() - 1U)) != 0U
+        || target_low.width() != 400U || target_low.height() != 240U
+        || target_high.width() != 400U || target_high.height() != 240U) return;
+    // The simulation retains signed HOFS; handle equivalent ten-bit register
+    // representations without wrapping a second copy of the entire picture.
+    const auto scroll_x = static_cast<int>((static_cast<unsigned>(
+        ppu.bg3_scroll_x) + 512U) & 1023U) - 512;
+    const auto width = atlas_low.width();
+    const auto height_mask = atlas_low.height() - 1U;
+    const auto mosaic = (ppu.mosaic & 0x04U) != 0U
+        ? static_cast<int>((ppu.mosaic >> 4U) + 1U) : 1;
+    const auto snap = [mosaic](int coordinate) {
+        const int remainder = coordinate % mosaic;
+        return coordinate - (remainder < 0 ? remainder + mosaic : remainder);
+    };
+    for (unsigned y = 0U; y < 240U; ++y) {
+        const auto logical_y = std::clamp(static_cast<int>(y) - 8, 0, 223);
+        const auto source_y = static_cast<unsigned>(snap(logical_y)
+            + ppu.bg3_scroll_y) & height_mask;
+        for (auto pair : {std::pair{&atlas_low, &target_low},
+                          std::pair{&atlas_high, &target_high}}) {
+            const auto* source = pair.first->pixels().data() + source_y * width;
+            auto* destination = pair.second->pixels().data() + y * 400U;
+            if (mosaic == 1) {
+                const auto first = static_cast<int>(native_panorama_padding) - 72 + scroll_x;
+                std::copy_n(source + first, 400U, destination);
+            } else {
+                for (unsigned x = 0U; x < 400U; ++x)
+                    destination[x] = source[native_panorama_padding
+                        + snap(static_cast<int>(x) - 72) + scroll_x];
+            }
+        }
+    }
+}
+
 void compose_native_canvas(const render::Framebuffer& source,
     const render::Framebuffer& world, render::Framebuffer& target,
     const simulation::SnesPpuState& ppu, NativeCanvasStyle style,
@@ -180,26 +415,36 @@ void compose_native_canvas(const render::Framebuffer& source,
             }
             return true;
         }();
+    const bool continue_background_edges = style == NativeCanvasStyle::gameplay
+        || style == NativeCanvasStyle::intro;
+    std::array<std::uint8_t, 28U> left_bands{}, right_bands{};
+    if (continue_background_edges) {
+        // Every raster in an eight-line band uses the same source samples.
+        // Compute its histogram once, retaining the original lowest-index
+        // tie break and the separate background-only edges when available.
+        for (std::uint32_t band = 0U; band < left_bands.size(); ++band) {
+            const auto first = band * 8U;
+            left_bands[band] = background_left.size() == 224U
+                ? dominant_band(background_left, first)
+                : dominant_edge(source, 0U, first, first + 8U);
+            right_bands[band] = background_right.size() == 224U
+                ? dominant_band(background_right, first)
+                : dominant_edge(source, 255U, first, first + 8U);
+        }
+    }
     for (std::uint32_t y = 0U; y < 240U; ++y) {
         auto* row = pixels.data() + static_cast<std::size_t>(y) * 400U;
         auto left_colour = fill_left;
         auto right_colour = fill_right;
-        if (style == NativeCanvasStyle::gameplay
-            || style == NativeCanvasStyle::intro) {
+        if (continue_background_edges) {
             // Mode 1 can have a moving sky or floor. Continue its edge colour
             // in eight-line bands; an isolated star or model pixel must not
             // become a 72-pixel horizontal streak.
             const auto source_y = std::clamp<std::int32_t>(
                 static_cast<std::int32_t>(y) - 8, 0, 223);
-            const auto first = static_cast<std::uint32_t>(source_y) & ~7U;
-            left_colour = background_left.size() == 224U
-                ? dominant_band(background_left, first)
-                : dominant_edge(source, 0U, first,
-                    std::min<std::uint32_t>(first + 8U, 224U));
-            right_colour = background_right.size() == 224U
-                ? dominant_band(background_right, first)
-                : dominant_edge(source, 255U, first,
-                    std::min<std::uint32_t>(first + 8U, 224U));
+            const auto band = static_cast<std::uint32_t>(source_y) >> 3U;
+            left_colour = left_bands[band];
+            right_colour = right_bands[band];
         }
         std::fill_n(row, left, left_colour);
         std::fill_n(row + right, 400U - right, right_colour);
@@ -309,6 +554,51 @@ void compose_native_canvas(const render::Framebuffer& source,
             pixels[offset + 400U] = arm;
             pixels[offset - 1U] = arm;
             pixels[offset + 1U] = arm;
+        }
+    }
+}
+
+void capture_native_coverage_spans(const render::Framebuffer& source,
+    std::vector<NativeCoverageSpan>& spans) {
+    spans.clear();
+    if (source.width() != 256U || source.height() != 224U) return;
+    const auto coverage = source.write_coverage();
+    if (coverage.size() != 256U * 224U) return;
+    for (std::uint32_t y = 0U; y < 224U; ++y) {
+        const auto row = y * 256U;
+        for (std::uint32_t x = 0U; x < 256U;) {
+            while (x < 256U && coverage[row + x] == 0U) ++x;
+            const auto first = x;
+            while (x < 256U && coverage[row + x] != 0U) ++x;
+            if (x != first) spans.push_back({row + first,
+                (y + 8U) * 400U + 72U + first, x - first});
+        }
+    }
+}
+
+void overlay_source_coverage_on_native(const render::Framebuffer& source,
+    render::Framebuffer& target,
+    std::span<const NativeCoverageSpan> spans) noexcept {
+    if (source.width() != 256U || source.height() != 224U
+        || target.width() != 400U || target.height() != 240U) return;
+    const auto& pixels = source.pixels();
+    auto& destination = target.pixels();
+    const auto& source_tags = source.layer_tags();
+    auto& destination_tags = target.layer_tags();
+    const bool tagged = target.layer_tags_enabled()
+        && destination_tags.size() == destination.size();
+    const bool source_tagged = source.layer_tags_enabled()
+        && source_tags.size() == pixels.size();
+    for (const auto& span : spans) {
+        std::copy_n(pixels.data() + span.source_offset, span.count,
+            destination.data() + span.target_offset);
+        target.mark_written(span.target_offset, span.count);
+        if (tagged) {
+            if (source_tagged)
+                std::copy_n(source_tags.data() + span.source_offset, span.count,
+                    destination_tags.data() + span.target_offset);
+            else std::fill_n(destination_tags.data() + span.target_offset,
+                span.count, static_cast<std::uint8_t>(render::PixelLayer::three_d));
         }
     }
 }

@@ -18,6 +18,9 @@ public:
 
     [[nodiscard]] std::size_t size() const noexcept;
     [[nodiscard]] const std::vector<std::uint8_t>& bytes() const noexcept { return bytes_; }
+    // Cartridge bytes are immutable. Nested save-state components share
+    // this identity instead of rescanning the entire ROM at every save.
+    [[nodiscard]] std::uint32_t crc32() const noexcept { return crc32_; }
     [[nodiscard]] std::size_t lorom_offset(std::uint32_t snes_address) const;
     [[nodiscard]] std::uint8_t read8(std::uint32_t snes_address) const;
     [[nodiscard]] std::uint16_t read16(std::uint32_t snes_address) const;
@@ -25,6 +28,7 @@ public:
 
 private:
     std::vector<std::uint8_t> bytes_;
+    std::uint32_t crc32_{};
 };
 
 class SymbolMap {

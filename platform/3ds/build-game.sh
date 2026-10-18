@@ -7,10 +7,10 @@ export DEVKITPRO
 BUILD="${STARWING_GAME_BUILD_DIR:-${ROOT}/build-3ds/game}"
 CORE_BUILD="${STARWING_CORE_BUILD_DIR:-${ROOT}/build-3ds/core}"
 HOST_DEPS="${STARWING_HOST_DEPS:-${ROOT}/build-host/_deps}"
-RELEASE_FLAGS="-O3 -flto -DNDEBUG"
+RELEASE_FLAGS="${STARWING_RELEASE_FLAGS:--O3 -flto -DNDEBUG}"
 GAME_VERSION="$(tr -d '\r\n' < "${ROOT}/platform/3ds/version.txt")"
 CIA_VERSION="$(tr -d '\r\n' < "${ROOT}/platform/3ds/cia-version.txt")"
-CIA_NAME="Starwing-3DS-Gameplay-${GAME_VERSION}.cia"
+CIA_NAME="Starwing-3DS.cia"
 if [[ "${STARWING_DIAGNOSTIC:-0}" == 1 ]]; then
   # Lightweight diagnostics are always enabled; deep SD profiling stays off.
   CIA_NAME="Starwing-3DS-Hardware-Diagnostic-${GAME_VERSION}.cia"
@@ -39,6 +39,7 @@ cmake --build "${CORE_BUILD}" --target starfox_core --parallel 4
 cmake -U CMAKE_CXX_FLAGS -S "${ROOT}/platform/3ds" -B "${BUILD}" \
   -DCMAKE_TOOLCHAIN_FILE="${DEVKITPRO}/cmake/3DS.cmake" \
   -DSTARFOX_ARM_BUILD="${CORE_BUILD}" \
+  "-DSTARWING_UPDATE_DEPS_ROOT=${STARWING_UPDATE_DEPS_ROOT:-${DEVKITPRO}/portlibs/3ds}" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_CXX_FLAGS_RELEASE="${RELEASE_FLAGS}" \
   -DCMAKE_C_FLAGS_RELEASE="-O3 -flto -DNDEBUG" \

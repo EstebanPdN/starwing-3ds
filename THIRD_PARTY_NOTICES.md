@@ -180,12 +180,16 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-## Nintendo 3DS adaptation
+## Built-in updater transport
 
-The public repository contains the native engine and 3DS adaptation. Engine republication permission was confirmed by the repository maintainer. Cartridge-derived payloads remain local. No general license is assigned to the whole adaptation. Existing third-party notices retain their original scope.
+The Starwing-specific updater adapter and policy are newly written for this
+port. They use curl 8.4.0 (curl license), Jansson 2.14 (MIT), and mbedTLS 2.28.8
+(Apache-2.0), with the official devkitPro 3DS patches. Exact source URLs and
+SHA-256 records and the full component licenses are retained under
+`platform/3ds/update-dependencies/`. The public Mozilla CA set is distributed
+through curl's CA extraction service; its source and conversion header remain
+in `platform/3ds/romfs/update-ca.crt`.
 
-### Modified Citro2D v1.7.0
-
-Source: https://github.com/devkitPro/citro2d/tree/v1.7.0
-
-The included copy retains its original license in `platform/3ds/vendor/citro2d/LICENSE`. `PROVENANCE.txt` records the source archive hash, generated shader, and used-buffer/command-list flushing changes. The GPL xBRZ and desktop SDL/MSU components listed above describe the inherited engine and are not enabled in the 3DS build.
+These component notices do not assign a new blanket license to the engine or
+to Nintendo game data. No game-specific updater implementation from another
+port is incorporated into this adapter.

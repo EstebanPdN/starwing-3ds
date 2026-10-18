@@ -49,15 +49,18 @@ public:
         std::uint32_t single_occurrence_top_rows = 0U,
         std::span<const BackgroundUniqueRegion> unique_regions = {},
         std::int32_t vertical_origin = 0) const noexcept;
-    // Mode 1's two priority passes share a single native-size tile traversal.
+    // Mode 1's two priority passes share a single tile traversal.
     // The caller supplies separate, already-cleared destinations and composites
-    // them in SNES priority order. Other sizes use the ordinary two passes.
+    // them in SNES priority order. An origin centres the cartridge window in a
+    // wider raster; added vertical rows retain the nearest authored scanline.
     void draw_bg2_mode1_split(
         const simulation::SnesPpuState& ppu,
         std::int32_t scroll_x,
         std::int32_t scroll_y,
         Framebuffer& low,
-        Framebuffer& high) const noexcept;
+        Framebuffer& high,
+        std::int32_t horizontal_origin = 0,
+        std::int32_t vertical_origin = 0) const noexcept;
     void draw_bg3(
         const simulation::SnesPpuState& ppu,
         Framebuffer& target,

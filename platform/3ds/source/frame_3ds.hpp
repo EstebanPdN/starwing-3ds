@@ -9,6 +9,9 @@
 #include "starfox/render/software_renderer.hpp"
 #include "starfox/render/sprite_renderer.hpp"
 #include "starfox/simulation/game_simulation.hpp"
+#include "native_canvas.hpp"
+#include "sprite_source_cache.hpp"
+#include "bg2_motion.hpp"
 
 #include <cstdint>
 #include <array>
@@ -20,8 +23,8 @@
 
 namespace starfox::platform_3ds {
 
-// The cartridge layers retain their 256x224 raster. Gameplay geometry uses
-// the complete 400x240 top screen with the source raster centred at (72, 8).
+// Cartridge foreground retains its 256x224 raster, centred at (72, 8).
+// Gameplay geometry and scenery share the complete 400x240 top screen.
 class Frame3ds {
 public:
     struct DrawBreakdown {
@@ -50,7 +53,8 @@ public:
     }
     [[nodiscard]] const render::Framebuffer& draw(
         const simulation::GameSimulation& game, bool gpu_bg2 = false,
-        double interpolation_alpha = 1.0);
+        double interpolation_alpha = 1.0,
+        const simulation::SnesPpuState* prepared_background = nullptr);
     [[nodiscard]] bool can_reuse_presentation(
         const simulation::GameSimulation& game, bool gpu_bg2,
         double interpolation_alpha = 1.0) const;
@@ -73,7 +77,12 @@ public:
         return background_scroll_y_;
     }
     [[nodiscard]] std::pair<std::int16_t, std::int16_t>
-    current_background_scroll(const simulation::GameSimulation& game) const;
+    current_background_scroll(const simulation::GameSimulation& game,
+        double interpolation_alpha = 1.0) const;
+    // Prepare once before the BG2 worker reads this immutable snapshot. Pass
+    // it to draw() so that CPU rendering cannot rewrite the worker's input.
+    [[nodiscard]] const simulation::SnesPpuState& presentation_ppu(
+        const simulation::GameSimulation& game, double interpolation_alpha);
     [[nodiscard]] std::uint64_t world_cache_hits() const noexcept {
         return world_cache_hits_;
     }
@@ -101,11 +110,47 @@ public:
     [[nodiscard]] std::uint64_t world_cache_snapshot_us() const noexcept {
         return world_cache_snapshot_us_;
     }
+    struct ShapeCacheStats {
+        std::size_t bytes{}, budget{}, entries{}, rejected_entries{};
+        std::uint64_t evictions{};
+    };
+    [[nodiscard]] ShapeCacheStats shape_cache_stats() const noexcept {
+        return {shape_cache_bytes_, shape_cache_limit_, shapes_.size()+lod_shapes_.size(),
+            invalid_shapes_.size()+invalid_lods_.size(), shape_cache_evictions_};
+    }
+
+    struct SpriteCacheStats {
+        std::uint64_t foreground_hits{}, foreground_misses{};
+        std::uint64_t foreground_selective_hits{}, hud_selective_hits{};
+        std::size_t bytes{}, foreground_characters{}, hud_characters{};
+    };
+    [[nodiscard]] SpriteCacheStats sprite_cache_stats() const noexcept {
+        return {source_foreground_cache_hits_, source_foreground_cache_misses_,
+            source_foreground_selective_hits_, top_hud_selective_hits_,
+            sizeof(source_sprite_cache_) + sizeof(hud_sprite_cache_),
+            source_sprite_cache_.character_count(), hud_sprite_cache_.character_count()};
+    }
+
+    struct StorageStats {
+        std::size_t framebuffer_capacity_bytes{}, item_capacity_bytes{};
+        std::size_t draw_order_capacity_bytes{}, object_capacity_bytes{};
+        std::size_t foreground_spans_size{}, foreground_spans_capacity{};
+        std::size_t hud_spans_size{}, hud_spans_capacity{};
+        std::size_t spans_capacity_bytes{}, scratch_capacity_bytes{};
+        std::size_t interpolation_entries{}, interpolation_buckets{};
+        std::size_t fixed_particle_dust_bytes{}, tracked_vector_capacity_bytes{};
+        std::size_t bg2_presentation_fixed_bytes{};
+    };
+    // On-demand dump inventory: exact vector payload capacities, not an
+    // allocator/heap total. Map node allocations and shape data are separate.
+    [[nodiscard]] StorageStats storage_stats() const noexcept;
 
 private:
     struct Mode1BackgroundCache {
         render::Framebuffer bg3_low{256U, 224U};
         render::Framebuffer bg3_high{256U, 224U};
+        render::Framebuffer panorama_low{400U, 240U};
+        render::Framebuffer panorama_high{400U, 240U};
         render::Framebuffer bg2_low{256U, 224U};
         render::Framebuffer bg2_high{256U, 224U};
         render::Framebuffer bg1{256U, 224U};
@@ -115,6 +160,8 @@ private:
         std::int16_t scroll_x{};
         std::int16_t scroll_y{};
         bool valid{};
+        bool bg1_valid{};
+        bool panorama_valid{};
     };
 
     struct RenderItem {
@@ -133,6 +180,8 @@ private:
         std::uint16_t shape, std::uint16_t colour);
     [[nodiscard]] const assets::Shape* load_lod_shape(const assets::Shape& base,
         std::uint16_t pointer, std::uint16_t colour);
+    [[nodiscard]] bool make_shape_cache_room(std::size_t bytes,
+        const assets::Shape* protected_base = nullptr);
 
     const assets::RomImage& rom_;
     const assets::SymbolMap& symbols_;
@@ -150,7 +199,7 @@ private:
     // Indexed world pixels are independent of PPU composition and CGRAM.
     // Key reuse from the quantized poses and view matrix actually consumed by
     // the rasterizer; interpolation alpha alone is not a pixel dependency.
-    std::array<std::int32_t, 17U> world_cache_key_{};
+    std::array<std::int32_t, 18U> world_cache_key_{};
     simulation::MatrixQ15 world_cache_view_{};
     std::vector<RenderItem> world_cache_render_items_{};
     std::uint64_t world_cache_scene_revision_{};
@@ -191,6 +240,8 @@ private:
     double last_interpolation_alpha_{1.0};
     timing::TransformSnapshot previous_camera_{};
     timing::TransformSnapshot current_camera_{};
+    Bg2Motion bg2_motion_{};
+    simulation::SnesPpuState presentation_ppu_{};
     render::ObjectSnapshotMap previous_objects_{};
     render::ObjectSnapshotMap current_objects_{};
     std::uint64_t snapshot_scene_revision_{};
@@ -201,10 +252,20 @@ private:
     render::Framebuffer corner_hud_{256U,224U};
     render::Framebuffer meter_hud_{256U,224U};
     render::Framebuffer top_hud_cache_{400U,240U};
-    std::vector<std::uint32_t> top_hud_occupied_indices_{};
+    std::vector<NativeCoverageSpan> top_hud_spans_{};
+    std::vector<NativeCoverageSpan> source_foreground_spans_{};
+    SpriteSourceCache source_sprite_cache_{SpriteSourceCache::Selection::foreground};
+    SpriteSourceCache hud_sprite_cache_{SpriteSourceCache::Selection::status_hud};
+    std::uint64_t source_foreground_cache_hits_{}, source_foreground_cache_misses_{};
+    std::uint64_t source_foreground_selective_hits_{}, top_hud_selective_hits_{};
+    bool source_foreground_valid_{};
+    bool source_foreground_paused_{};
+    simulation::Experience source_foreground_experience_{};
     std::uint64_t top_hud_ppu_memory_revision_{};
     simulation::MeterState top_hud_meters_{};
+    simulation::Experience top_hud_experience_{};
     std::uint8_t top_hud_object_select_{};
+    bool top_hud_objects_enabled_{};
     bool top_hud_cache_valid_{};
     std::uint64_t top_hud_cache_hits_{};
     std::uint64_t top_hud_cache_misses_{};
@@ -214,10 +275,21 @@ private:
     render::ScaledTextRenderer text_;
     bool show_top_hud_{true};
     render::DustRenderer dust_;
-    std::unordered_map<std::uint32_t, assets::Shape> shapes_;
+    struct CachedShape {
+        assets::Shape shape;
+        std::size_t bytes{};
+        std::uint64_t last_use{};
+    };
+    std::unordered_map<std::uint32_t, CachedShape> shapes_;
     // Compact LODs inherit scale/material/bounds from their parent. They
     // cannot share the base cache or a key containing only the child address.
-    std::unordered_map<std::uint64_t, assets::Shape> lod_shapes_;
+    std::unordered_map<std::uint64_t, CachedShape> lod_shapes_;
+    std::size_t shape_cache_limit_{12U * 1024U * 1024U};
+    std::size_t shape_cache_bytes_{};
+    std::uint64_t shape_cache_clock_{}, shape_cache_insertions_{}, shape_cache_evictions_{};
+    // Unusually large single assets still render without defeating the
+    // retained-cache budget. At most one transient base and one LOD exist.
+    std::optional<assets::Shape> transient_base_shape_, transient_lod_shape_;
     std::unordered_set<std::uint64_t> invalid_lods_;
     std::unordered_set<std::uint32_t> invalid_shapes_;
     std::vector<RenderItem> items_;

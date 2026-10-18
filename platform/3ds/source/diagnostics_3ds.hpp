@@ -12,11 +12,23 @@ namespace starfox::platform_3ds {
 struct DiagnosticReport3ds {
     using ProgressCallback = void (*)(void*, const char*, u64, u64);
     const char* build{"unknown"};
+    const char* build_fingerprint{"unavailable"};
     const char* runtime_json{"{}\n"};
     const char* performance_csv{"metric,value\n"};
+    const char* presentation_csv{"unavailable\n"};
     const char* renderer_text{"unavailable\n"};
     const char* audio_text{"unavailable\n"};
     const char* config_text{"unavailable\n"};
+    const char* memory_text{"unavailable\n"};
+    const char* flow_profile_text{"unavailable\n"};
+    // Private, focused RAM snapshots for exact host replay and BG2 analysis.
+    // These contain live game RAM; they are separate from public text stats.
+    const void* game_state{};
+    std::size_t game_state_bytes{};
+    const void* ppu_state{};
+    std::size_t ppu_state_bytes{};
+    const void* spc_state{};
+    std::size_t spc_state_bytes{};
     const char* log_path{nullptr}; // Optional bounded tail of a known text log.
     // Last framebuffer actually submitted for scanout. gfxGetFramebuffer()
     // can point at the next drawing buffer after a double-buffer swap.

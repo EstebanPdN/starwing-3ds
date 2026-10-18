@@ -6,7 +6,7 @@
   "engine_redistribution_permission": "Confirmed by repository maintainer for this publication",
   "ultrastarfox_url": "https://github.com/Sunlitspace542/ultrastarfox",
   "ultrastarfox_commit": "270e959a47d82240d9290a6c6630032c9ec53ff5",
-  "port_version": "0.67",
-  "cia_title_version": 66,
+  "port_version": "1.0",
+  "cia_title_version": 81,
   "publication": "Current native engine and Nintendo 3DS adaptation; no private game payloads or inherited Git history"
 }

@@ -31,6 +31,24 @@ void interpolate_crosshair_oam(
 // other cartridge sprites.
 void suppress_crosshair_oam(simulation::SnesPpuState& ppu) noexcept;
 
+// Shared by drawing and exact source-dependency caches. Reticles and warning
+// arrows remain foreground even when their coordinates enter a HUD band.
+[[nodiscard]] inline std::optional<HudElement> object_hud_element(
+    std::uint16_t tile, std::uint8_t y, std::int32_t x) noexcept {
+    if ((tile & 0x7fU) == 0x61U
+        || ((tile & 0x7fU) == 0x3eU && (x == 119 || x == 127)
+            && (y == 24U || y == 33U || y == 184U || y == 193U)))
+        return std::nullopt;
+    const auto glyph = tile & 0x7fU;
+    if (y < 32U && glyph >= 0x71U && glyph <= 0x74U)
+        return HudElement::boss_health;
+    if (tile == 189U || tile == 226U || tile == 229U || tile == 230U
+        || (y < 32U && x < 128)) return HudElement::lives;
+    if (y >= 168U) return x < 128 ? HudElement::shield : HudElement::bombs_boost;
+    if (y >= 128U && x < 128) return HudElement::comms;
+    return std::nullopt;
+}
+
 class SpriteRenderer {
 public:
     // Draw one isolated 8x8 OBJ tile for the lower-screen bomb counter.

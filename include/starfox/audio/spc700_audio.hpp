@@ -46,6 +46,12 @@ public:
     [[nodiscard]] std::vector<std::int16_t> render_logic_tick(
         std::span<const simulation::ApuPortWrite> writes);
 
+    // Reuse the caller's PCM allocation on real-time backends. After the
+    // first packet, rendering and mixing need no packet-buffer allocation.
+    // Samples, port timing and serialized state match the value-return API.
+    void render_logic_tick(std::span<const simulation::ApuPortWrite> writes,
+        std::vector<std::int16_t>& output);
+
     // BGM commands (CPU port 0) and effect commands (continuous engine and
     // positional audio on ports 1/2 plus queued effects on port 3) run on
     // independent SPC700 instances. Exposing the most recent stems makes it

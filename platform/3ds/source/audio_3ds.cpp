@@ -163,7 +163,7 @@ void Audio3ds::worker_main(void* argument) {
         if (self.stop_worker_.load(std::memory_order_acquire)) break;
         try {
             const auto begin_ms = osGetTime();
-            self.rendered_ = self.spc_.render_logic_tick(self.pending_writes_);
+            self.spc_.render_logic_tick(self.pending_writes_, self.rendered_);
             const auto elapsed_ms = static_cast<std::uint32_t>(
                 osGetTime() - begin_ms);
             self.worker_compute_ms_ = elapsed_ms;
@@ -181,7 +181,7 @@ void Audio3ds::begin_update(
     if (pending_) throw std::logic_error{"SPC update already pending"};
     if (worker_ == nullptr) {
         const auto begin_ms = osGetTime();
-        rendered_ = spc_.render_logic_tick(writes);
+        spc_.render_logic_tick(writes, rendered_);
         const auto elapsed_ms = static_cast<std::uint32_t>(
             osGetTime() - begin_ms);
         diagnostics_.spc_compute_last_ms = elapsed_ms;
@@ -268,8 +268,11 @@ bool Audio3ds::push_samples(std::span<const std::int16_t> interleaved) {
     }
     const std::uint64_t packet_start = write_frame_;
     const bool fade_in = !playing_ || packet_start > previous_end;
+    // ARM11 has no hardware integer divider. Reduce the absolute 64-bit
+    // timeline once, then walk a native-width cursor instead of invoking
+    // __aeabi_uldivmod for every PCM frame.
+    auto ring_index = static_cast<std::size_t>(packet_start % ring_frames_);
     for (std::size_t frame = 0; frame < output_frames; ++frame) {
-        const auto ring_index = (packet_start + frame) % ring_frames_;
         // For this timer, output_frames is 1600 or 1601. The rare extra
         // sample lies halfway between two original samples, preserving every
         // native source sample and continuity at packet boundaries.
@@ -295,28 +298,37 @@ bool Audio3ds::push_samples(std::span<const std::int16_t> interleaved) {
             left * gain * static_cast<std::int32_t>(master_volume_) / 3200);
         pcm_right_[ring_index] = static_cast<std::int16_t>(
             right * gain * static_cast<std::int32_t>(master_volume_) / 3200);
+        if (++ring_index == ring_frames_) ring_index = 0;
     }
     write_frame_ += output_frames;
     // Clear newly exposed future space so a short producer stall fades into
     // silence. Long synchronous SD operations must call stop_playback() first.
     const auto clear_begin = std::max(silence_until_frame_, write_frame_);
     const auto clear_end = write_frame_ + silence_ahead_frames_;
-    for (auto frame = clear_begin; frame < clear_end; ++frame) {
-        const auto ring_index = frame % ring_frames_;
-        pcm_left_[ring_index] = 0;
-        pcm_right_[ring_index] = 0;
+    if (clear_begin < clear_end) {
+        auto offset = static_cast<std::size_t>(clear_begin % ring_frames_);
+        auto remaining = clear_end - clear_begin;
+        while (remaining != 0) {
+            const auto frames = static_cast<std::size_t>(
+                std::min<std::uint64_t>(remaining, ring_frames_ - offset));
+            std::memset(pcm_left_ + offset, 0, frames * sizeof(std::int16_t));
+            std::memset(pcm_right_ + offset, 0, frames * sizeof(std::int16_t));
+            remaining -= frames;
+            offset = 0;
+        }
     }
     silence_until_frame_ = std::max(silence_until_frame_, clear_end);
     // If playback reaches the end of newly generated PCM, the 32-frame tail
     // decays to silence rather than making a step. The next packet overwrites
     // this tail when it arrives in time.
+    // The packet cursor already points immediately after the new samples.
     for (std::size_t frame = 0; frame < 32U; ++frame) {
-        const auto ring_index = (write_frame_ + frame) % ring_frames_;
         const auto gain = static_cast<std::int32_t>(31U - frame);
         pcm_left_[ring_index] = static_cast<std::int16_t>(
             interleaved[(packet_frames_ - 1U) * 2U] * gain / 32);
         pcm_right_[ring_index] = static_cast<std::int16_t>(
             interleaved[(packet_frames_ - 1U) * 2U + 1U] * gain / 32);
+        if (++ring_index == ring_frames_) ring_index = 0;
     }
     const auto flush_span = [&](std::int16_t* pcm, std::uint64_t begin,
                                 std::uint64_t end) {

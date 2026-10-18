@@ -258,11 +258,11 @@ std::vector<std::uint8_t> MapVm::save_state() const {
     state::Writer archive;
     transfer_state(archive,*this);
     archive(cpu_.save_state());
-    return state::pack(0x4d415001U,assets::crc32(rom_->bytes()),archive.bytes());
+    return state::pack(0x4d415001U,rom_->crc32(),archive.bytes());
 }
 
 void MapVm::load_state(std::span<const std::uint8_t> bytes) {
-    const auto payload=state::unpack(bytes,0x4d415001U,assets::crc32(rom_->bytes()));
+    const auto payload=state::unpack(bytes,0x4d415001U,rom_->crc32());
     MapVm restored{*rom_,database_,*objects_,state_symbols_};
     // Diagnostic condition callbacks are process-local configuration. Keep
     // them bound rather than trying to persist executable closures.
@@ -570,13 +570,85 @@ void MapVm::set_player(ObjectHandle player) {
     player_ = player;
 }
 
+void MapVm::begin_strategy_batch() {
+    if (strategy_batch_active_) throw std::logic_error{"nested strategy payload batch"};
+    strategy_batch_active_ = true;
+    strategy_batch_dirty_ = false;
+    ++strategy_batch_counters_.batches;
+}
+
+void MapVm::finish_strategy_batch() noexcept {
+    strategy_batch_active_ = false;
+    if (!strategy_batch_dirty_) return;
+    // Object synchronization is a host mirror operation, not another source
+    // instruction. Preserve the final bus byte of the real scheduler work.
+    const auto bus = cpu_.open_bus();
+    sync_object_payloads_from_cpu();
+    cpu_.restore_open_bus(bus);
+    strategy_batch_dirty_ = false;
+}
+
+void MapVm::abort_strategy_batch() noexcept {
+    strategy_batch_active_ = false;
+    if (!strategy_batch_dirty_) return;
+    const auto bus = cpu_.open_bus();
+    // A failed native call has not yet imported its lists. Materialize the
+    // preceding settled payload so the established recovery path observes
+    // exactly the same host objects as ordinary per-call synchronization.
+    objects_->copy_active_handles(object_bridge_active_);
+    for (auto& snapshot : object_bridge_) snapshot.valid = false;
+    sync_object_payloads_from_cpu(true);
+    cpu_.restore_open_bus(bus);
+    strategy_batch_dirty_ = false;
+}
+
+void MapVm::capture_strategy_checkpoint() {
+    const auto bus = cpu_.open_bus();
+    // Recovery can observe only slots active before this call. Keep the
+    // contiguous copy cheap for early/sparse scenes without changing storage.
+    const auto highest = object_bridge_active_.empty() ? ObjectHandle{} :
+        *std::max_element(object_bridge_active_.begin(), object_bridge_active_.end());
+    const auto size = static_cast<std::size_t>(highest) * object_size_;
+    const bool base = cpu_.read_mapped_wram_block(object_base_,
+        {strategy_checkpoint_base_.data(), size});
+    const bool extended = cpu_.read_mapped_wram_block(extended_object_base_,
+        {strategy_checkpoint_extended_.data(), size});
+    cpu_.restore_open_bus(bus);
+    if (!base || !extended) finish_strategy_batch();
+    else strategy_batch_counters_.checkpoint_bytes += static_cast<std::uint32_t>(2U * size);
+}
+
+std::uint32_t MapVm::strategy_address(ObjectHandle object) {
+    // Before the first push (or after a host edit), the host payload is still
+    // authoritative. Only completed private calls leave deferred WRAM data.
+    if (strategy_batch_active_ && strategy_batch_dirty_
+        && !object_pool_needs_native_sync_) {
+        const auto pointer = original_object_pointer(object) + 22U;
+        const auto low = cpu_.peek_ram16(pointer);
+        const auto high = cpu_.peek_ram8(pointer + 2U);
+        if (low && high) return *low | (static_cast<std::uint32_t>(*high) << 16U);
+        finish_strategy_batch();
+    }
+    return objects_->at(object).strategy_address;
+}
+
 std::size_t MapVm::call_native_object_routine(
+    std::uint32_t address, ObjectHandle object, std::uint8_t data_bank,
+    std::uint8_t status, std::size_t instruction_limit,
+    bool sync_objects_before_call) {
+    return call_native_object_routine_impl(address, object, data_bank, status,
+        instruction_limit, sync_objects_before_call, false);
+}
+
+std::size_t MapVm::call_native_object_routine_impl(
     std::uint32_t address,
     ObjectHandle object,
     std::uint8_t data_bank,
     std::uint8_t status,
     std::size_t instruction_limit,
-    bool sync_objects_before_call) {
+    bool sync_objects_before_call,
+    bool scheduler_call) {
+    if (!scheduler_call) finish_strategy_batch();
     if (!objects_->is_active(object)) {
         throw std::invalid_argument{"native routine object handle must be active"};
     }
@@ -590,6 +662,7 @@ std::size_t MapVm::call_native_object_routine(
     // opts into this path only inside tick_all(); standalone native calls keep
     // the defensive full push by default.
     if (sync_objects_before_call || object_pool_needs_native_sync_) {
+        if (strategy_batch_dirty_) finish_strategy_batch();
         sync_objects_to_cpu();
     }
     object_pool_needs_native_sync_ = false;
@@ -606,6 +679,10 @@ std::size_t MapVm::call_native_object_routine(
     registers.y = registers.x;
     registers.data_bank = data_bank;
     registers.status = status;
+    if (strategy_batch_active_) {
+        capture_strategy_checkpoint();
+        if (strategy_batch_active_) ++strategy_batch_counters_.batched_calls;
+    }
     const auto instructions = cpu_.call_long(address, registers, instruction_limit);
 #if defined(__3DS__) && defined(STARWING_DEEP_PROFILE)
     const auto profile_cpu = svcGetSystemTick();
@@ -629,6 +706,7 @@ std::size_t MapVm::call_native_routine(
     bool service_transfer_flag,
     bool sync_objects,
     bool sync_objects_before_call) {
+    finish_strategy_batch();
 #if defined(__3DS__) && defined(STARWING_DEEP_PROFILE)
     const auto profile_begin = svcGetSystemTick();
 #endif
@@ -925,8 +1003,16 @@ void MapVm::sync_objects_to_cpu() {
 }
 
 void MapVm::sync_objects_from_cpu() {
-    std::array<std::uint8_t, 57> base_bytes{};
-    std::array<std::uint8_t, kExtendedObjectBytes> extended_bytes{};
+    sync_object_lists_from_cpu();
+    if (strategy_batch_active_) {
+        strategy_batch_dirty_ = true;
+        return;
+    }
+    sync_object_payloads_from_cpu();
+}
+
+void MapVm::sync_object_lists_from_cpu() {
+    ++strategy_batch_counters_.list_imports;
     const auto read_list = [this](std::uint16_t pointer,
                                   std::vector<ObjectHandle>& result) {
         result.clear();
@@ -959,21 +1045,36 @@ void MapVm::sync_objects_from_cpu() {
         objects_->restore_lists(active, free);
     }
     for (const auto handle : free) object_bridge_[handle].valid = false;
-    for (const auto handle : active) {
+}
+
+void MapVm::sync_object_payloads_from_cpu(bool checkpoint) {
+    ++strategy_batch_counters_.payload_passes;
+    strategy_batch_counters_.payload_slots += static_cast<std::uint32_t>(object_bridge_active_.size());
+    std::array<std::uint8_t, 57> base_bytes{};
+    std::array<std::uint8_t, kExtendedObjectBytes> extended_bytes{};
+    const auto word = [](const auto& bytes, std::size_t offset) {
+        return static_cast<std::uint16_t>(bytes[offset])
+            | (static_cast<std::uint16_t>(bytes[offset + 1U]) << 8U);
+    };
+    for (const auto handle : object_bridge_active_) {
         const auto base = static_cast<std::uint32_t>(original_object_pointer(handle));
         const auto extended_base = extended_object_base_
             + static_cast<std::uint32_t>(handle - 1U) * object_size_;
         const auto base_payload = std::span<std::uint8_t>{
             base_bytes.data() + 4U, static_cast<std::size_t>(object_size_ - 4U)};
-        const bool mapped_base = cpu_.read_mapped_wram_block(base + 4U, base_payload);
+        const bool mapped_base = checkpoint || cpu_.read_mapped_wram_block(base + 4U, base_payload);
+        if (checkpoint) std::copy_n(strategy_checkpoint_base_.data()
+            + (handle - 1U) * object_size_ + 4U, base_payload.size(), base_payload.data());
         if (!mapped_base) {
             for (std::uint16_t offset = 4; offset < object_size_; ++offset)
                 base_bytes[offset] = cpu_.read8(base + offset);
         }
         const auto extended_payload = std::span<std::uint8_t>{
             extended_bytes.data(), extended_object_bytes_};
-        const bool mapped_extended = cpu_.read_mapped_wram_block(
+        const bool mapped_extended = checkpoint || cpu_.read_mapped_wram_block(
             extended_base, extended_payload);
+        if (checkpoint) std::copy_n(strategy_checkpoint_extended_.data()
+            + (handle - 1U) * object_size_, extended_payload.size(), extended_payload.data());
         if (!mapped_extended) {
             for (std::size_t offset = 0; offset < extended_object_bytes_; ++offset)
                 extended_bytes[offset] = cpu_.read8(extended_base + offset);
@@ -989,9 +1090,9 @@ void MapVm::sync_objects_from_cpu() {
         }
         objects_->unpack_base_payload(handle, base_payload);
         auto& object = objects_->at(handle);
-        object.attached = object_handle(cpu_.read16(base + 6U));
-        object.immune_object = object_handle(cpu_.read16(base + 25U));
-        object.collision_object = object_handle(cpu_.read16(base + 27U));
+        object.attached = object_handle(word(base_bytes, 6U));
+        object.immune_object = object_handle(word(base_bytes, 25U));
+        object.collision_object = object_handle(word(base_bytes, 27U));
         // Ordinary extended bytes have no semantic mirror. Their common
         // unchanged case needs no accessor dispatch or write at all. Mirror
         // fields still go through write_path_byte to preserve the original
@@ -1005,7 +1106,7 @@ void MapVm::sync_objects_from_cpu() {
             objects_->write_path_byte(handle, static_cast<std::uint8_t>(0x80U + offset),
                 extended_bytes[offset]);
         }
-        object.fire_object = object_handle(cpu_.read16(extended_base + 19U));
+        object.fire_object = object_handle(word(extended_bytes, 19U));
         snapshot.valid = mapped_base && mapped_extended;
         if (snapshot.valid) {
             snapshot.host = object;
@@ -1015,9 +1116,9 @@ void MapVm::sync_objects_from_cpu() {
                 snapshot.extended.begin());
         }
     }
-    if (!active.empty()) {
+    if (!checkpoint && !object_bridge_active_.empty()) {
         (void)cpu_.read8(extended_object_base_
-            + (active.back() - 1U) * object_size_ + 20U);
+            + (object_bridge_active_.back() - 1U) * object_size_ + 20U);
     }
 }
 

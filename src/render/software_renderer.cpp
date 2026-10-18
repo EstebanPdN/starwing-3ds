@@ -1993,11 +1993,22 @@ void SoftwareRenderer::draw_impl(
 
         polygon.clear();
         polygon.reserve(camera_polygon.size());
-        for (const auto& point : camera_polygon) {
-            polygon.push_back(project_point(
-                point, settings_.focal_length,
-                raster_word_exact, raster_pose.vanish_x,
-                raster_pose.vanish_y, raster_pose.subpixel_projection, raster_pose.stereo_eye_offset));
+        if (!any_behind && pose.explosion_progress == 0U) {
+            // These are the unchanged vertices already projected for source
+            // visibility. Shared mesh vertices used to repeat the same
+            // divides/word rounding for every visible face. Reuse only while
+            // near clipping and per-face explosion offsets cannot have
+            // changed the camera polygon (including its vertex count/order).
+            for (const auto index : face.vertex_indices)
+                polygon.push_back(projected[index]);
+        } else {
+            for (const auto& point : camera_polygon) {
+                polygon.push_back(project_point(
+                    point, settings_.focal_length,
+                    raster_word_exact, raster_pose.vanish_x,
+                    raster_pose.vanish_y, raster_pose.subpixel_projection,
+                    raster_pose.stereo_eye_offset));
+            }
         }
 
         if (polygon.size() == 2) {

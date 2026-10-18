@@ -1,4 +1,5 @@
 #include "../platform/3ds/source/bg2_plan.hpp"
+#include "../platform/3ds/source/bg2_map_cache.hpp"
 #include "starfox/render/background_renderer.hpp"
 #include "starfox/render/framebuffer.hpp"
 
@@ -42,7 +43,7 @@ std::uint8_t character_pixel(const starfox::simulation::SnesPpuState& ppu,
 
 void compare_case(unsigned case_number, unsigned map_size,
     bool tile16, bool vertical, unsigned row_mode,
-    unsigned base_phase, bool wide = false) {
+    unsigned base_phase, bool wide = false, bool force_opaque = false) {
     starfox::simulation::SnesPpuState ppu;
     ppu.background_mode = 2U;
     ppu.main_screen = 0x02U;
@@ -83,6 +84,12 @@ void compare_case(unsigned case_number, unsigned map_size,
         static_cast<int>(base_phase);
     const auto scroll_y = static_cast<std::int32_t>(
         static_cast<int>(random_word() & 1023U) - 512);
+    if (force_opaque) {
+        for (unsigned character = 0U; character < 1024U; ++character)
+            for (unsigned row = 0U; row < 8U; ++row)
+                ppu.vram[(ppu.bg2_character_base * 2U
+                    + character * 32U + row * 2U) & 65535U] = 255U;
+    }
 
     std::vector<starfox::platform_3ds::Bg2Rect> rects;
     const auto target_width = wide ? 400U : 256U;
@@ -151,6 +158,51 @@ void compare_case(unsigned case_number, unsigned map_size,
         scroll_x, scroll_y, reference,
         starfox::render::TilePriorityPass::all,
         origin_x, true, true, false, 0U, {}, origin_y);
+    if (!tile16) {
+        std::vector<starfox::platform_3ds::Bg2Rect> map_rects;
+        if (!starfox::platform_3ds::plan_bg2_rects(ppu, scroll_x, scroll_y,
+                map_rects, 100000U, target_width, target_height,
+                origin_x, origin_y, true, true))
+            fail("map texture planner rejected supported state", case_number);
+        starfox::platform_3ds::Bg2MapSourceCache source;
+        source.remember(ppu);
+        if (force_opaque && !source.all_opaque())
+            fail("opaque fixture was not certified", case_number);
+        if (source.all_opaque()) {
+            std::vector<starfox::platform_3ds::Bg2Rect> certified_rects;
+            if (!starfox::platform_3ds::plan_bg2_rects(ppu, scroll_x, scroll_y,
+                    certified_rects, 100000U, target_width, target_height,
+                    origin_x, origin_y, true, true, true)
+                || certified_rects != map_rects)
+                fail("opaque-map shortcut changed the rectangle plan", case_number);
+        }
+        std::vector<std::uint8_t> map_pixels(actual.size(), 233U);
+        for (const auto& r : map_rects) {
+            if (r.x + r.width > target_width || r.y + r.height > target_height)
+                fail("map rectangle outside target", case_number);
+            for (unsigned dy = 0U; dy < r.height; ++dy)
+                for (unsigned dx = 0U; dx < r.width; ++dx) {
+                    auto& pixel = map_pixels[(r.y + dy) * target_width + r.x + dx];
+                    if (r.solid) { pixel = r.solid_colour; continue; }
+                    if (!r.map_sample) fail("map rectangle missing source kind", case_number);
+                    const unsigned sx = r.source_x + dx, sy = r.source_y + dy;
+                    const unsigned tx = sx / 8U, ty = sy / 8U;
+                    const unsigned width_tiles = (map_size & 1U) ? 64U : 32U;
+                    const unsigned height_tiles = (map_size & 2U) ? 64U : 32U;
+                    if (tx >= width_tiles || ty >= height_tiles)
+                        fail("map rectangle crosses source wrap", case_number);
+                    const auto entry = ((tx >> 5U) + (ty >> 5U) * (width_tiles / 32U)) * 1024U
+                        + (ty & 31U) * 32U + (tx & 31U);
+                    const auto address = (ppu.bg2_screen_base * 2U + entry * 2U) & 65535U;
+                    const unsigned tile = ppu.vram[address] | (ppu.vram[(address + 1U) & 65535U] << 8U);
+                    const auto colour = character_pixel(ppu, tile & 1023U,
+                        (tile & 0x4000U) ? 7U - (sx & 7U) : sx & 7U,
+                        (tile & 0x8000U) ? 7U - (sy & 7U) : sy & 7U);
+                    if (colour) pixel = ((tile >> 10U) & 7U) * 16U + colour;
+                }
+        }
+        if (map_pixels != actual) fail("map texture pixels differ from character plan", case_number);
+    }
     for (unsigned y = 0U; y < target_height; ++y) {
         for (unsigned x = 0U; x < target_width; ++x) {
             const auto index = y * target_width + x;
@@ -197,10 +249,19 @@ void rolled_ground_regression() {
     if (!starfox::platform_3ds::plan_bg2_rects(
             ppu, 0, 0, rects, 16383U, 400U, 240U, 72, 8))
         fail("rolled ground exceeded GPU plan capacity", 529U);
-    // Cross-column merging collapses the two repeated correction runs from
-    // 800 one-column rectangles to two wide rectangles in this fixture.
-    if (rects.size() != 1502U)
+    // Opaque sky/floor runs merge across tile rows and columns; the
+    // transparent tile row and two ground-carry corrections stay exact.
+    if (rects.size() > 100U)
         fail("rolled correction runs were not merged", 529U);
+    // Fitted roll overrides scanline Y across the entire wide viewport.
+    // A changing, unused HDMA Y table must not fragment that same image.
+    ppu.bg2_scanline_scroll_enabled = true;
+    for (unsigned y = 0U; y < 224U; ++y)
+        ppu.bg2_scanline_scroll_y[y] = static_cast<std::int16_t>(y * 3U);
+    std::vector<starfox::platform_3ds::Bg2Rect> hdma_rects;
+    if (!starfox::platform_3ds::plan_bg2_rects(ppu, 0, 0, hdma_rects,
+            16383U, 400U, 240U, 72, 8) || hdma_rects != rects)
+        fail("unused scanline Y fragmented fitted roll", 529U);
     std::vector<starfox::platform_3ds::Bg2Rect> uncached_rects;
     if (!starfox::platform_3ds::plan_bg2_rects(
             ppu, 0, 0, uncached_rects, 16383U, 400U, 240U, 72, 8,
@@ -216,8 +277,7 @@ void rolled_ground_regression() {
         return result;
     };
     if (solid_at(200U, 168U) != 2U
-        || solid_at(200U, 220U) != 2U
-        || solid_at(200U, 100U) != 0U)
+        || solid_at(200U, 220U) != 2U)
         fail("transparent and wrapped ground did not continue", 529U);
 
     std::vector<std::uint8_t> actual(400U * 240U, 233U);
@@ -330,6 +390,29 @@ void uniform_ground_regression() {
                 reference, 100000U, 400U, 240U, 72, 8, false)
             || cached != reference)
             fail("uniform/transparent/mixed ground shortcut changed the plan", 800U + phase);
+        starfox::render::Framebuffer pixels{400U, 240U};
+        pixels.clear(0U);
+        for (const auto& rect : cached) {
+            for (unsigned dy = 0; dy < rect.height; ++dy)
+                for (unsigned dx = 0; dx < rect.width; ++dx) {
+                    const auto colour = rect.solid ? rect.solid_colour
+                        : character_pixel(ppu, rect.character,
+                            rect.reverse_x ? rect.source_x - dx : rect.source_x + dx,
+                            rect.reverse_y ? rect.source_y - dy : rect.source_y + dy);
+                    if (rect.solid || colour != 0U)
+                        pixels.set(rect.x + dx, rect.y + dy, rect.solid
+                            ? colour : rect.palette_bank * 16U + colour);
+                }
+        }
+        starfox::render::Framebuffer expected{400U, 240U};
+        expected.clear(0U);
+        starfox::render::BackgroundRenderer{}.draw_bg2(ppu,
+            int(phase) - 4, 0, expected,
+            starfox::render::TilePriorityPass::all,
+            72, true, true, false, 0U, {}, 8);
+        if (pixels.pixels() != expected.pixels())
+            fail("merged flat runs changed palette/flip/transparency pixels",
+                800U + phase);
     }
     std::printf("BG2 uniform ground: 16 palette/flip/transparency states passed\n");
 }
@@ -386,6 +469,10 @@ int main() {
         compare_case(++cases, random_word() & 3U,
             (random_word() & 1U) != 0U, true, random_word() & 3U,
             random_word() & 7U, true);
+    }
+    for (unsigned sample = 0U; sample < 96U; ++sample) {
+        compare_case(++cases, sample & 3U, false, true, (sample >> 2U) & 3U,
+            sample & 7U, true, true);
     }
     starfox::simulation::SnesPpuState ppu;
     std::vector<starfox::platform_3ds::Bg2Rect> rects{{}};

@@ -3,6 +3,7 @@ project(starwing_3ds_diagnostic VERSION 0.1 LANGUAGES C CXX)
 
 set(STARFOX_SOURCE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/version.txt" STARWING_VERSION LIMIT_COUNT 1)
+file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/cia-version.txt" STARWING_CIA_VERSION LIMIT_COUNT 1)
 set(STARWING_PATCH_DIR "${STARFOX_SOURCE_ROOT}/assets/patches" CACHE PATH
     "Private, locally prepared BPS resources; never published with the port")
 set(STARWING_SYMBOL_DIR "${STARFOX_SOURCE_ROOT}/assets/symbols" CACHE PATH
@@ -36,6 +37,7 @@ target_link_libraries(starwing-3ds-diagnostic PRIVATE
 
 set(STARWING_ROMFS "${CMAKE_CURRENT_BINARY_DIR}/romfs")
 file(MAKE_DIRECTORY "${STARWING_ROMFS}")
+configure_file("${CMAKE_CURRENT_LIST_DIR}/romfs/update-ca.crt" "${STARWING_ROMFS}/update-ca.crt" COPYONLY)
 configure_file("${STARWING_PRESENTATION_DIR}/top-background.rgb"
     "${STARWING_ROMFS}/top-background.rgb" COPYONLY)
 foreach(STARWING_PATCH IN ITEMS
@@ -81,6 +83,10 @@ target_link_libraries(starwing_citro2d PUBLIC citro3d ctru m)
 
 add_executable(starwing-3ds-game
     source/game_3ds.cpp
+    source/memory_3ds.cpp
+    source/save_storage_3ds.cpp
+    source/updater_3ds.cpp
+    source/update_manifest.cpp
     source/rom_probe.c
     source/asset_stage.cpp
     source/audio_3ds.cpp
@@ -93,8 +99,18 @@ add_executable(starwing-3ds-game
     source/bg2_plan.cpp)
 target_include_directories(starwing-3ds-game PRIVATE
     "${STARFOX_SOURCE_ROOT}/include" "${STARWING_UI_INCLUDE_DIR}")
+set(STARWING_UPDATE_DEPS_ROOT "${DEVKITPRO}/portlibs/3ds" CACHE PATH "3DS curl, Jansson and mbedTLS prefix")
+target_include_directories(starwing-3ds-game PRIVATE "${STARWING_UPDATE_DEPS_ROOT}/include")
+foreach(UPDATE_LIBRARY IN ITEMS curl jansson mbedtls mbedx509 mbedcrypto)
+    find_library(STARWING_${UPDATE_LIBRARY}_LIBRARY NAMES ${UPDATE_LIBRARY}
+        PATHS "${STARWING_UPDATE_DEPS_ROOT}/lib" NO_DEFAULT_PATH REQUIRED)
+    target_link_libraries(starwing-3ds-game PRIVATE "${STARWING_${UPDATE_LIBRARY}_LIBRARY}")
+endforeach()
+include("${CMAKE_CURRENT_LIST_DIR}/build_fingerprint.cmake")
 target_compile_definitions(starwing-3ds-game PRIVATE
-    STARWING_BUILD_VERSION="${STARWING_VERSION}")
+    STARWING_BUILD_VERSION="${STARWING_VERSION}"
+    STARWING_CIA_VERSION=${STARWING_CIA_VERSION}
+    STARWING_BUILD_FINGERPRINT="${STARWING_BUILD_FINGERPRINT}")
 target_compile_features(starwing-3ds-game PRIVATE c_std_11 cxx_std_20)
 target_compile_options(starwing-3ds-game PRIVATE
     -O3 -Wall -Wextra -ffunction-sections -fdata-sections)
