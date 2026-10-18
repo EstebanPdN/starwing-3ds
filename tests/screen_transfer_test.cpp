@@ -5,7 +5,14 @@ int main() {
     for (const int width : {320,400}) {
         std::vector<std::uint32_t> source(width*240), actual(source.size());
         for (unsigned i=0;i<source.size();++i) source[i]=i*2654435761U;
+        std::vector<std::uint16_t> rgb565(source.size());
         for(unsigned b=0;b<=15;++b) {
+            starfox::platform_3ds::transfer_rgb565_screen(source.data(),rgb565.data(),width,b);
+            for(int y=0;y<240;++y) for(int x=0;x<width;++x) {
+                const auto c=source[y*width+x];
+                const auto r=(c>>24)*b/15, g=((c>>16)&255)*b/15, blue=((c>>8)&255)*b/15;
+                assert(rgb565[x*240+239-y]==((r>>3)<<11|(g>>2)<<5|(blue>>3)));
+            }
             starfox::platform_3ds::transfer_rgba_screen(source.data(),actual.data(),width,b);
             for(int y=0;y<240;++y) for(int x=0;x<width;++x) {
                 auto c=source[y*width+x];

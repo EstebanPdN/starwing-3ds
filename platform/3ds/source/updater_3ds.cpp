@@ -249,7 +249,7 @@ void Updater3ds::run() {
             catch (...) { installed = false; }
             aptSetSleepAllowed(sleep); aptSetHomeAllowed(home);
             if (!installed) throw std::runtime_error("INSTALL FAILED - KEEP OLD COPY");
-            publish(UpdateState::done, "UPDATED - REOPEN STARWING 3DS");
+            publish(UpdateState::done, "UPDATED - REOPEN STARWING 3DS",100U);
         }
     } catch (const std::exception& e) { publish(UpdateState::error, cancelled() ? "UPDATE CANCELLED" : e.what()); }
     catch (...) { publish(UpdateState::error, "UPDATE FAILED"); }

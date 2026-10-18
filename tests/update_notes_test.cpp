@@ -14,5 +14,11 @@ int main() {
     assert(update_note_lines("",measure,100).front()=="NO CHANGELOG AVAILABLE");
     lines=update_note_lines(std::string(16000,'W'),measure,100);
     assert(lines.size()<=768);
+    assert(menu_text_ascii("corrección — versión… ñ ü + / :")=="CORRECCION - VERSION... N U + / :");
+    assert(menu_text_ascii("cafe\xcc\x81")=="CAFE");
+    lines=update_note_lines("## Changelog\n- Corrección de audio y actualización.",measure,100);
+    std::string accented;
+    for(const auto& line:lines) {assert(measure(line.c_str())<=100);accented+=line+' ';}
+    assert(accented=="- CORRECCION DE AUDIO Y ACTUALIZACION. ");
     std::cout<<"PASS: native-font wrapping, Markdown links, HTML suppression and bounded notes\n";
 }

@@ -9,6 +9,11 @@ for TEST in frame_pacing launch_selection screen_transfer presentation_metrics p
   "${TEST_BUILD}/${TEST}_test"
   printf 'PASS: %s\n' "${TEST}"
 done
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra \
+  -I"${ROOT}/tests/audio_3ds_host" -I"${ROOT}/platform/3ds/source" \
+  "${ROOT}/tests/hardware_profile_test.cpp" \
+  "${ROOT}/platform/3ds/source/audio_3ds.cpp" -o "${TEST_BUILD}/hardware_profile_test"
+"${TEST_BUILD}/hardware_profile_test"
 python3 "${ROOT}/platform/3ds/tools/test_analyze_hardware_dump.py"
 
 if [[ -n "${STARWING_JANSSON_PREFIX:-}" ]]; then

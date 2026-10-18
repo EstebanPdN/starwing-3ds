@@ -84,3 +84,16 @@ or bundles from a bug-report thread.
 The updater remembers its selected channel in `update/channel.cfg` (`0` for
 Stable, `1` for Experimental). `update/download.part` is temporary executable
 data and is removed after an install attempt.
+
+## Old 3DS profile data (1.1-E1)
+
+Old 3DS writes `options-old3ds.cfg`. On first use it imports common display,
+volume and save preferences from `options.cfg`, retaining its own timing defaults.
+New 3DS continues using `options.cfg`; changes on one profile do not overwrite
+the other's choices.
+
+Old 3DS checkpoints add `-old3ds` before `.bin` in the existing autosave name.
+The single-SPC checkpoint has its own validated audio schema. Earlier split-stem
+checkpoints remain intact and are not automatically converted, so the first
+Old-profile session starts normally instead of resuming an incompatible sound
+state. Cartridge SRAM paths and contents remain shared and unchanged.
