@@ -15,10 +15,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.0"><img src="docs/badges/version.svg" alt="Release: v1.0" height="22"></a>
-  <a href="docs/COMPATIBILITY.md"><img src="docs/badges/platform.svg" alt="Nintendo 3DS" height="22"></a>
+  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.0"><img src="docs/badges/version.svg?v=2" alt="Release: v1.0" height="22"></a>
+  <a href="docs/COMPATIBILITY.md"><img src="docs/badges/platform.svg?v=2" alt="Nintendo 3DS" height="22"></a>
   <a href="docs/UPDATING.md"><img src="docs/badges/updater.svg" alt="Updates: built in" height="22"></a>
-  <a href="THIRD_PARTY_NOTICES.md"><img src="docs/badges/license.svg" alt="Component-specific licenses" height="22"></a>
+  <a href="THIRD_PARTY_NOTICES.md"><img src="docs/badges/license.svg?v=2" alt="Component-specific licenses" height="22"></a>
 </p>
 
 <p align="center">
