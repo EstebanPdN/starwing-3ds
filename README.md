@@ -22,7 +22,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/showcase-rounded.png" alt="Starwing 3DS project artwork showing the dual-screen presentation" width="1200">
+  <img src="docs/images/showcase-rounded.webp" alt="Starwing 3DS project artwork showing the dual-screen presentation" width="1200">
 </p>
 
 <p align="center">
