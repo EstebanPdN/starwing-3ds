@@ -1246,6 +1246,10 @@ const render::Framebuffer& Frame3ds::draw(
     world_to_source.offset_x = -72;
     world_to_source.offset_y = -8;
     if (native_scene_active_ && native_mode1_background) {
+        if (native_background_.width()!=400U) {
+            native_background_=render::Framebuffer(400,240);
+            empty_native_=render::Framebuffer(400,240);
+        }
         compose_native_mode1(frame_,empty_native_,mode1_cache->bg2_low,empty_native_,
             mode1_cache->panorama_low,ppu.bg3_high_priority?empty_native_:mode1_cache->panorama_high,
             native_background_,false);

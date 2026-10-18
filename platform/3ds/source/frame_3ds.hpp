@@ -154,7 +154,7 @@ public:
 private:
     bool native_engine_enabled_{}, native_mode1_enabled_{}, native_scene_active_{}, last_native_world_{};
     render::RasterCommands native_commands_;
-    render::Framebuffer native_background_{400,240}, empty_native_{400,240};
+    render::Framebuffer native_background_{0,0}, empty_native_{0,0};
     native_engine::Scene native_scene_;
     struct Mode1BackgroundCache {
         render::Framebuffer bg3_low{256U, 224U};

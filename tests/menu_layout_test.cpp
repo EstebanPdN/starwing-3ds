@@ -18,6 +18,7 @@ int main(int argc,char** argv){
         const auto retail=argc==5?std::filesystem::absolute(argv[4]):std::filesystem::path{};
         std::filesystem::create_directories(argv[3]);std::filesystem::current_path(argv[3]);
         std::filesystem::create_directories("sdmc:/3ds/Starwing");
+        std::filesystem::remove("sdmc:/3ds/Starwing/options-old3ds.cfg");
         if(!retail.empty())for(int n=0;n<6;++n)std::filesystem::copy_file(retail,
             "sdmc:/3ds/Starwing/STAR FOX TEST "+std::to_string(n)+".sfc",std::filesystem::copy_options::overwrite_existing);
         OptionsMenu3ds m(rom,symbols,false,"",hardware_profile(false));
@@ -35,7 +36,7 @@ int main(int argc,char** argv){
         (void)m.touch(200,81,true);require(m.volume()>65&&m.volume()<80,"Volume touch missed moved slider");
         (void)m.touch(200,146,true);require(m.auto_save(),"Auto-save touch missed");
         (void)m.touch(160,180,true);require(m.page()==MenuPage::timing,"Timing touch missed");
-        (void)m.touch(100,90,true);(void)m.touch(200,165,true);require(m.original_speed()&&m.interpolate(),"Original with interpolation unavailable");snap("timing");
+        (void)m.touch(100,76,true);(void)m.touch(200,130,true);require(m.original_speed()&&m.interpolate(),"Original with interpolation unavailable");snap("timing");
         root();(void)m.touch(160,115,true);require(m.page()==MenuPage::developer,"Developer entry failed");snap("developer");
         (void)m.touch(160,110,true);require(m.show_fps(),"FPS touch missed");(void)m.touch(160,165,true);require(m.overlay_enabled(),"Overlay touch missed");
         root();(void)m.touch(160,178,true);require(m.page()==MenuPage::rom_mode,"Version entry failed");snap("version");

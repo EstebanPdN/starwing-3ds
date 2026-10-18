@@ -50,6 +50,7 @@ OptionsMenu3ds::OptionsMenu3ds(const assets::RomImage& rom,
     if (profile.old_3ds) config_path_="sdmc:/3ds/Starwing/options-old3ds.cfg";
     original_speed_=profile.original_speed;
     interpolate_=profile.interpolate;
+    fps_limit_=profile.default_fps_limit;
     load();
 }
 
@@ -69,6 +70,7 @@ void OptionsMenu3ds::load() {
         else if (std::sscanf(line,"overlay=%u",&n)==1) overlay_enabled_=n!=0;
         else if (own_profile && std::sscanf(line,"original_speed=%u",&n)==1) original_speed_=n!=0;
         else if (own_profile && std::sscanf(line,"interpolation=%u",&n)==1) interpolate_=n!=0;
+        else if (own_profile && std::sscanf(line,"fps_limit=%u",&n)==1) fps_limit_=valid_fps_limit(n);
     }
     std::fclose(file);
 }
@@ -80,6 +82,7 @@ void OptionsMenu3ds::save() const {
         unsigned(show_fps_),unsigned(overlay_enabled_));
     std::fprintf(file,"original_speed=%u\ninterpolation=%u\n",
         unsigned(original_speed_),unsigned(interpolate_));
+    std::fprintf(file,"fps_limit=%u\n",fps_limit_);
     std::fclose(file);
 }
 void OptionsMenu3ds::rect(std::vector<std::uint32_t>& target,int width,
@@ -186,7 +189,7 @@ int OptionsMenu3ds::row_count() const {
     case MenuPage::root:return 6;
     case MenuPage::display:return 3;
     case MenuPage::gameplay:return 4;
-    case MenuPage::timing:return 3;
+    case MenuPage::timing:return 4;
     case MenuPage::developer:return 4;
     case MenuPage::update:return 4;
     case MenuPage::rom_selection:return static_cast<int>(roms_.size())+1;
@@ -244,6 +247,7 @@ MenuAction OptionsMenu3ds::hit_row(int row) {
     case MenuPage::timing:
         if(row==0) original_speed_=!original_speed_;
         if(row==1) interpolate_=!interpolate_;
+        if(row==2) fps_limit_=fps_limit_==0U?30U:fps_limit_==30U?60U:0U;
         save();break;
     case MenuPage::gameplay:
         if(row==2) {page_=MenuPage::timing;selection_=0;break;}
@@ -379,14 +383,26 @@ MenuAction OptionsMenu3ds::touch(int x,int y,bool controls_screen) {
         if(y>=48&&y<75) {selection_=0;return hit_row(0);}
         if(y>=122&&y<149) {selection_=1;return hit_row(1);}
     } else if(page_==MenuPage::timing) {
-        if(y>=79&&y<105&&x>=64&&x<256) {
-            original_speed_=x<156;save();selection_=0;return MenuAction::none;
+        if(y>=65&&y<86&&x>=64&&x<256) {
+            if(x<156) original_speed_=true;
+            else if(x>=164) original_speed_=false;
+            save();selection_=0;return MenuAction::none;
         }
-        if(y>=153&&y<179&&x>=64&&x<256) {
-            interpolate_=x>=164;save();selection_=1;return MenuAction::none;
+        if(y>=119&&y<140&&x>=64&&x<256) {
+            if(x<156) interpolate_=false;
+            else if(x>=164) interpolate_=true;
+            save();selection_=1;return MenuAction::none;
         }
-        if(y>=48&&y<75) {selection_=0;return hit_row(0);}
-        if(y>=122&&y<149) {selection_=1;return hit_row(1);}
+        if(y>=173&&y<194) {
+            if(x>=38&&x<112) fps_limit_=0;
+            else if(x>=123&&x<197) fps_limit_=30;
+            else if(x>=208&&x<282) fps_limit_=60;
+            else return MenuAction::none;
+            save();selection_=2;return MenuAction::none;
+        }
+        if(y>=40&&y<60) {selection_=0;return hit_row(0);}
+        if(y>=94&&y<114) {selection_=1;return hit_row(1);}
+        if(y>=148&&y<168) {selection_=2;return hit_row(2);}
     } else if(page_==MenuPage::gameplay) {
         if(y>=170&&y<194) {selection_=2;return hit_row(2);}
         if(y>=76&&y<86&&x>=64&&x<256) {
@@ -862,12 +878,16 @@ void OptionsMenu3ds::draw_options() {
         button(64,153,92,26,"SHOW",false,top_hud_);
         button(164,153,92,26,"HIDE",false,!top_hud_);
     } else if(page_==MenuPage::timing) {
-        button(37,48,246,26,"GAME SPEED",selection_==0);
-        button(64,79,92,26,"ORIGINAL",false,original_speed_);
-        button(164,79,92,26,"20 HZ",false,!original_speed_);
-        button(37,122,246,26,"INTERPOLATION",selection_==1);
-        button(64,153,92,26,"OFF",false,!interpolate_);
-        button(164,153,92,26,"ON",false,interpolate_);
+        button(37,40,246,20,"GAME SPEED",selection_==0);
+        button(64,65,92,21,"ORIGINAL",false,original_speed_);
+        button(164,65,92,21,"20 HZ",false,!original_speed_);
+        button(37,94,246,20,"INTERPOLATION",selection_==1);
+        button(64,119,92,21,"OFF",false,!interpolate_);
+        button(164,119,92,21,"ON",false,interpolate_);
+        button(37,148,246,20,"FPS LIMIT",selection_==2);
+        button(38,173,74,21,"OFF",false,fps_limit_==0U);
+        button(123,173,74,21,"30",false,fps_limit_==30U);
+        button(208,173,74,21,"60",false,fps_limit_==60U);
     } else if(page_==MenuPage::gameplay) {
         button(37,170,246,24,"SPEED / INTERPOLATION",selection_==2);
         button(37,41,246,24,"MASTER VOLUME",selection_==0);

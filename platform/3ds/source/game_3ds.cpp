@@ -519,7 +519,7 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
     std::vector<u8> frozen_options_top;
     std::uint64_t options_audio_ms=0;
     unsigned update_notes_revision=~0U;
-    std::uint64_t last_render_tick{};
+    starfox::platform_3ds::PresentationLimit presentation_limit(SYSCLOCK_ARM11);
     bool render_changed=true;
     bool options_presented=false;
     starfox::platform_3ds::UpdateStatus last_options_update;
@@ -846,10 +846,9 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
         }
         render_changed=render_changed||presentation_changed;
         const auto render_now = svcGetSystemTick();
-        const bool render_due = !profile.old_3ds || last_render_tick == 0U
-            || render_now-last_render_tick >= SYSCLOCK_ARM11/profile.presentation_hz;
-        if (video_phases != 0U && render_due) {
-            last_render_tick=render_now;
+        const bool render_due = video_phases!=0U
+            && presentation_limit.accept(render_now,menu->fps_limit());
+        if (render_due) {
             dashboard_coalesced_phases += video_phases - 1U;
             const auto dashboard_render_tick = svcGetSystemTick();
             const auto dashboard_draw_start = osGetTime();
@@ -1544,7 +1543,7 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                 flow_label(game.flow_state()), snapshot.new_3ds ? "true" : "false",
                 static_cast<long>(speedup_init_result), static_cast<long>(speedup_config_result),
                 snapshot.fps, snapshot.logic_hz,
-                profile.name, profile.presentation_hz, menu->interpolate()?"true":"false",
+                profile.name, menu->fps_limit(), menu->interpolate()?"true":"false",
                 game.timing_mode() == starfox::simulation::TimingMode::unlocked_20_fps
                     ? "unlocked_20_hz" : "original_speed",
                 audio.ready() ? "true" : "false",
@@ -1788,7 +1787,7 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
             report.renderer_text = renderer_info;
             report.audio_text = audio_info;
             const std::string profile_config = std::string("hardware_profile=")+profile.name
-                +"\ntarget_fps="+std::to_string(profile.presentation_hz)
+                +"\ntarget_fps="+std::to_string(menu->fps_limit())
                 +"\ntiming_mode="+(menu->original_speed()?"original_speed":"unlocked_20_hz")
                 +"\ninterpolation="+(menu->interpolate()?"on":"off")+"\n";
             const std::string capture_config = profile_config +

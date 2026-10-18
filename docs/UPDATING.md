@@ -92,3 +92,12 @@ adapter and install-service calls. Actual TLS behavior, AM installation, and
 3DSX replacement on physical hardware remain separate acceptance checks; see
 [Status](STATUS.md). The updater is an intentional new feature requested for
 v1.0, separate from the behavior-preserving module extractions.
+
+## 1.1 Experimental 1
+
+Tag `v1.1-E1` is a prerelease with CIA title version 84. Select Experimental
+in the built-in updater to find it. Public application assets keep the exact
+names `Starwing-3DS.cia` and `Starwing-3DS.3dsx`. FPS LIMIT defaults to OFF and
+can be set independently to 30 or 60 under Gameplay > Speed / Interpolation.
+Save normally before installing. Settings, cartridge saves and model-specific
+checkpoints retain their paths; do not delete the SD data folder.

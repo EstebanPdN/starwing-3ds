@@ -5,7 +5,7 @@
 using namespace starfox::platform_3ds;
 void require(bool ok,const char* m){if(!ok)throw std::runtime_error(m);}
 int main(){
-    require(hardware_profile(false).pica_world && !hardware_profile(true).pica_world,"World renderer policy changed");
+    require(hardware_profile(false).pica_world && hardware_profile(true).pica_world,"World renderer policy changed");
     for(unsigned model=0;model<3;++model){
         audio_test::new_3ds=model==1;audio_test::model_result=model==2?-1:0;
         audio_test::quota_calls=0;audio_test::requested_cores.clear();

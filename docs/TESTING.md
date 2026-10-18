@@ -82,3 +82,19 @@ font wrapping, and refusal of a non-increasing CIA title version. A local
 rendering probe exercises the actual Options renderer with private ROM/font
 inputs for native-style screens and touch/confirmation/cancellation behavior;
 those inputs are not part of the public test suite.
+
+## Broad native scene regression
+
+`tests/native_scene_replay_test.cpp` accepts a private assembled ROM, matching
+symbols, an authored entry symbol, an update count and `old` or `new`. Compare
+its image/coverage results and audio/state SHA-256 with the retained audio
+implementation. A sixth optional path exports a private world fixture after
+the halfway point; it is not a portable save or public release asset.
+
+The GPU fixture runner builds separately from `platform/3ds/tests` with the
+3DS toolchain, `STARWING_REPLAY_FIXTURES` pointing at a private directory with
+`cases.txt`, and `STARWING_CITRO2D_LIBRARY` pointing at the matching game archive.
+Its production PICA renderer is read back as RGBA8 and compared with the
+expected indexed composition. Results go to `sdmc:/native-gpu-results.json`.
+Never publish the scene fixtures. See [Status](STATUS.md) for measured coverage
+and the remaining physical-console acceptance boundaries.

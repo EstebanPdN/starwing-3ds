@@ -424,10 +424,12 @@ Spc700Audio::Spc700Audio() : Spc700Audio(Routing::split_stems) {}
 Spc700Audio::Spc700Audio(Routing routing)
     : routing_(routing), music_impl_(std::make_unique<Impl>()),
       effects_impl_(routing == Routing::split_stems ? std::make_unique<Impl>() : nullptr) {
-    music_impl_->spc->enable_native_blocks(routing == Routing::cartridge);
+    music_impl_->spc->enable_native_blocks(true);
+    if(effects_impl_) effects_impl_->spc->enable_native_blocks(true);
 }
 std::uint64_t Spc700Audio::native_blocks_executed() const noexcept {
-    return music_impl_->spc->native_block_count();
+    return music_impl_->spc->native_block_count()
+        + (effects_impl_ ? effects_impl_->spc->native_block_count() : 0U);
 }
 Spc700Audio::~Spc700Audio() = default;
 Spc700Audio::Spc700Audio(Spc700Audio&&) noexcept = default;

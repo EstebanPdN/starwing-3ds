@@ -8,6 +8,7 @@
 #include "starfox/simulation/game_simulation.hpp"
 #include "updater_3ds.hpp"
 #include "hardware_profile.hpp"
+#include "presentation_limit.hpp"
 
 #include <cstdint>
 #include <string>
@@ -40,6 +41,7 @@ public:
     [[nodiscard]] bool wide() const noexcept { return wide_; }
     [[nodiscard]] bool original_speed() const noexcept { return original_speed_; }
     [[nodiscard]] bool interpolate() const noexcept { return interpolate_; }
+    [[nodiscard]] unsigned fps_limit() const noexcept { return fps_limit_; }
     [[nodiscard]] bool top_hud() const noexcept { return top_hud_; }
     [[nodiscard]] unsigned volume() const noexcept { return volume_; }
     [[nodiscard]] bool auto_save() const noexcept { return auto_save_; }
@@ -129,7 +131,7 @@ private:
     std::vector<std::string> update_lines_;
     unsigned update_notes_page_{};
     bool confirmation_yes_{false}, current_ex_{false};
-    unsigned volume_{100};
+    unsigned volume_{100}, fps_limit_{};
     std::vector<RomEntry> roms_;
     std::string selected_rom_path_;
     std::string current_rom_path_;
