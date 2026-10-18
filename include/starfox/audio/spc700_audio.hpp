@@ -34,7 +34,12 @@ public:
     static constexpr std::uint32_t sample_rate = 32'000;
     static constexpr std::size_t stereo_frames_per_logic_tick = 1'600;
 
+    // Cartridge shares the original eight DSP voices; split_stems is the PC mix.
+    enum class Routing { split_stems, cartridge };
     Spc700Audio();
+    explicit Spc700Audio(Routing routing);
+    [[nodiscard]] Routing routing() const noexcept { return routing_; }
+    [[nodiscard]] std::uint64_t native_blocks_executed() const noexcept;
     ~Spc700Audio();
     Spc700Audio(Spc700Audio&&) noexcept;
     Spc700Audio& operator=(Spc700Audio&&) noexcept;
@@ -59,6 +64,7 @@ public:
     // consumed or muted a music voice.
     [[nodiscard]] std::span<const std::int16_t> last_music_samples() const
         noexcept { return last_music_samples_; }
+    // Empty in cartridge mode; last_music_samples contains the complete mix.
     [[nodiscard]] std::span<const std::int16_t> last_effect_samples() const
         noexcept { return last_effect_samples_; }
 
@@ -91,6 +97,7 @@ private:
 #ifdef __3DS__
     struct ParallelRenderer;
 #endif
+    Routing routing_{Routing::split_stems};
     std::unique_ptr<Impl> music_impl_;
     std::unique_ptr<Impl> effects_impl_;
     std::vector<std::int16_t> last_music_samples_;

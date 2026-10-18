@@ -64,7 +64,7 @@ def main() -> int:
             problems.append(f'Unexpected binary payload: {name}')
     version = (ROOT / 'platform/3ds/version.txt').read_text().strip()
     cia = (ROOT / 'platform/3ds/cia-version.txt').read_text().strip()
-    if not re.fullmatch(r'\d+\.\d+(?:\.\d+)*', version):
+    if not re.fullmatch(r'\d+\.\d+(?:\.\d+)*(?:-E[1-9]\d*)?', version):
         problems.append('Invalid source version.')
     if not cia.isdigit() or not 0 <= int(cia) <= 65535:
         problems.append('Invalid CIA title version.')

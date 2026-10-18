@@ -75,6 +75,7 @@ struct Spc700Audio::Impl {
     enum class CommandStream {
         music,
         effects,
+        cartridge,
     };
 
     enum class UploadState {
@@ -310,10 +311,10 @@ struct Spc700Audio::Impl {
                 // otherwise gameplay pauses silence neither music driver.
                 const auto global_pause_command = write.port == 3U
                     && (write.value == 0x01U || write.value == 0x02U);
-                const auto accepts_command = command_stream
-                        == CommandStream::effects
+                const auto accepts_command = command_stream == CommandStream::cartridge
+                    || (command_stream == CommandStream::effects
                     ? write.port != 0U
-                    : write.port == 0U || global_pause_command;
+                    : write.port == 0U || global_pause_command);
                 if (!accepts_command) continue;
                 const auto clock = std::clamp(
                     static_cast<int>(write.clock_offset), last_clock,
@@ -419,9 +420,15 @@ struct Spc700Audio::ParallelRenderer {
 };
 #endif
 
-Spc700Audio::Spc700Audio()
-    : music_impl_(std::make_unique<Impl>()),
-      effects_impl_(std::make_unique<Impl>()) {}
+Spc700Audio::Spc700Audio() : Spc700Audio(Routing::split_stems) {}
+Spc700Audio::Spc700Audio(Routing routing)
+    : routing_(routing), music_impl_(std::make_unique<Impl>()),
+      effects_impl_(routing == Routing::split_stems ? std::make_unique<Impl>() : nullptr) {
+    music_impl_->spc->enable_native_blocks(routing == Routing::cartridge);
+}
+std::uint64_t Spc700Audio::native_blocks_executed() const noexcept {
+    return music_impl_->spc->native_block_count();
+}
 Spc700Audio::~Spc700Audio() = default;
 Spc700Audio::Spc700Audio(Spc700Audio&&) noexcept = default;
 Spc700Audio& Spc700Audio::operator=(Spc700Audio&&) noexcept = default;
@@ -429,6 +436,10 @@ Spc700Audio& Spc700Audio::operator=(Spc700Audio&&) noexcept = default;
 std::vector<std::uint8_t> Spc700Audio::save_state() const {
     state::Writer writer;
     music_impl_->save(writer);
+    if (routing_ == Routing::cartridge) {
+        writer(last_music_samples_);
+        return state::pack(0x53504302U, 0U, writer.bytes());
+    }
     effects_impl_->save(writer);
     writer(last_music_samples_, last_effect_samples_);
     return state::pack(0x53504301U, 0U, writer.bytes());
@@ -438,14 +449,18 @@ void Spc700Audio::load_state(std::span<const std::uint8_t> bytes) {
 #ifdef __3DS__
     const auto parallel_stems_enabled = parallel_stems_enabled_;
 #endif
-    state::Reader reader{state::unpack(bytes, 0x53504301U, 0U)};
-    Spc700Audio restored;
+    const bool cartridge = bytes.size() >= 12U && bytes[8] == 2U;
+    state::Reader reader{state::unpack(bytes, cartridge ? 0x53504302U : 0x53504301U, 0U)};
+    Spc700Audio restored{cartridge ? Routing::cartridge : Routing::split_stems};
     restored.music_impl_->load(reader);
-    restored.effects_impl_->load(reader);
-    reader(restored.last_music_samples_, restored.last_effect_samples_);
+    if (cartridge) reader(restored.last_music_samples_);
+    else {
+        restored.effects_impl_->load(reader);
+        reader(restored.last_music_samples_, restored.last_effect_samples_);
+    }
     reader.finish();
     const auto samples = restored.last_music_samples_.size();
-    if (samples != restored.last_effect_samples_.size()
+    if ((!cartridge && samples != restored.last_effect_samples_.size())
         || (samples != 0U && samples != stereo_frames_per_logic_tick * 2U))
         throw std::runtime_error{"Invalid SPC stem buffer size"};
     *this = std::move(restored);
@@ -472,6 +487,10 @@ void Spc700Audio::render_logic_tick(
     std::span<const simulation::ApuPortWrite> writes,
     std::vector<std::int16_t>& mixed) {
     render_stems(writes, false, nullptr, nullptr);
+    if (routing_ == Routing::cartridge) {
+        mixed.assign(last_music_samples_.begin(), last_music_samples_.end());
+        return;
+    }
     if (last_music_samples_.size() != last_effect_samples_.size()) {
         throw std::runtime_error{"SPC music/effect stem size mismatch"};
     }
@@ -491,7 +510,7 @@ std::size_t Spc700Audio::prime_upload_sequence(
     std::size_t music_frames{};
     std::size_t effect_frames{};
     render_stems(writes, true, &music_frames, &effect_frames);
-    if (music_frames != effect_frames) {
+    if (routing_ == Routing::split_stems && music_frames != effect_frames) {
         throw std::runtime_error{"SPC music/effect upload cadence mismatch"};
     }
     last_music_samples_.clear();
@@ -503,6 +522,11 @@ void Spc700Audio::render_stems(
     std::span<const simulation::ApuPortWrite> writes,
     bool split_upload_restarts, std::size_t* music_frames,
     std::size_t* effect_frames) {
+    if (routing_ == Routing::cartridge) {
+        music_impl_->render(writes, last_music_samples_, split_upload_restarts,
+            music_frames, Impl::CommandStream::cartridge);
+        return;
+    }
 #ifdef __3DS__
     if (parallel_stems_enabled_ && !parallel_)
         parallel_ = std::make_unique<ParallelRenderer>();
@@ -534,19 +558,21 @@ void Spc700Audio::render_stems(
 }
 
 bool Spc700Audio::driver_loaded() const noexcept {
-    return music_impl_->loaded && effects_impl_->loaded;
+    return music_impl_->loaded && (!effects_impl_ || effects_impl_->loaded);
 }
 std::size_t Spc700Audio::uploaded_bytes() const noexcept {
-    return std::min(music_impl_->upload_count, effects_impl_->upload_count);
+    return effects_impl_ ? std::min(music_impl_->upload_count, effects_impl_->upload_count)
+                         : music_impl_->upload_count;
 }
 
 std::array<std::uint8_t, 4> Spc700Audio::output_ports() const noexcept {
     if (!driver_loaded()) return {};
+    const auto* effects = effects_impl_ ? effects_impl_.get() : music_impl_.get();
     return {
         static_cast<std::uint8_t>(spc_read_port(music_impl_->spc, 0, 0)),
-        static_cast<std::uint8_t>(spc_read_port(effects_impl_->spc, 0, 1)),
-        static_cast<std::uint8_t>(spc_read_port(effects_impl_->spc, 0, 2)),
-        static_cast<std::uint8_t>(spc_read_port(effects_impl_->spc, 0, 3)),
+        static_cast<std::uint8_t>(spc_read_port(effects->spc, 0, 1)),
+        static_cast<std::uint8_t>(spc_read_port(effects->spc, 0, 2)),
+        static_cast<std::uint8_t>(spc_read_port(effects->spc, 0, 3)),
     };
 }
 

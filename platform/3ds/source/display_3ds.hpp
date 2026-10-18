@@ -1,6 +1,7 @@
 #pragma once
 
 #include "starfox/render/framebuffer.hpp"
+#include "native_engine/pica.hpp"
 #include "bg2_plan.hpp"
 #include "bg2_atlas_cache.hpp"
 #include "bg2_map_cache.hpp"
@@ -67,7 +68,8 @@ public:
         std::int32_t scroll_x, std::int32_t scroll_y,
         const render::Framebuffer& foreground,
         const render::Palette256& palette, bool reuse_source = false,
-        const render::Framebuffer* right = nullptr);
+        const render::Framebuffer* right = nullptr,
+        const native_engine::Scene* scene = nullptr);
     // Start the New 3DS geometry job before software rendering. The caller
     // must not advance the PPU until present_mode2() has consumed the job.
     // Pass false while higher-priority audio is still computing on core 2:
@@ -84,6 +86,12 @@ public:
     [[nodiscard]] const DisplayFrameTiming& last_frame_timing() const noexcept {
         return frame_timing_;
     }
+    bool present_native(const render::Framebuffer& background,
+        const render::Framebuffer& foreground,const render::Palette256&,
+        const native_engine::Scene&);
+    bool native_engine_ready() const noexcept { return native_engine_.ready(); }
+    bool open_native_engine() { return native_engine_.open(); }
+    const native_engine::GpuStats& native_engine_stats() const noexcept { return native_engine_.stats(); }
     [[nodiscard]] bool gpu_active() const noexcept { return gpu_active_; }
     void set_wide(bool value) noexcept { wide_ = value; }
     [[nodiscard]] std::size_t bg2_fragment_count() const noexcept {
@@ -131,6 +139,7 @@ public:
     }
 
 private:
+    native_engine::Pica native_engine_;
     struct TileQuad {
         std::uint16_t x, y, width, height, slot;
         std::uint16_t first_x, first_y;

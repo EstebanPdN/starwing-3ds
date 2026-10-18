@@ -1,14 +1,16 @@
 # Verification status
 
-Current development version: **1.0**; CIA internal title version: **81**.
+Current development version: **1.1-E2**; CIA internal title version: **83**.
+This is an experimental candidate awaiting physical validation.
+The latest stable public release remains **1.0**.
 The product and HOME Menu title remain **Starwing 3DS**.
 
 ## Scope
 
 This publication synchronizes the latest local engine/adapter work, separates
 save storage, bounded CSV history, and allocation diagnostics into named
-modules, and adds the requested built-in stable/experimental updater. It preserves
-existing rendering/simulation/audio algorithms, controls, approved resources,
+modules, and adds the requested built-in stable/experimental updater. The initial organization pass preserved
+rendering/simulation/audio algorithms, controls, approved resources,
 SD layout, and explicit checkpoint schema. The memory-pool correction preceding
 the organization pass is an intentional functional change.
 
@@ -48,3 +50,69 @@ The source repository excludes user ROMs, companions, saves, settings, private
 process pages, and build caches. Release assets distribute the application
 separately. See [Compatibility](COMPATIBILITY.md), [Testing](TESTING.md), and
 [Updating](UPDATING.md) for current boundaries and procedures.
+
+## 1.1-E1 candidate checks
+
+- Automatic Old/unknown-model single-SPC selection, with no core-1 quota or
+  worker request; New-model split/core-2 selection retained (host service fakes).
+- Original and EX stage-bank fixtures: 512 controlled plus 256 gameplay packets each agree byte-for-byte
+  with the retained unfiltered-cartridge SPC reference for PCM and all APU ports.
+- Single-SPC restore/continuation and corrupt-state rejection.
+- Existing split-route PCM/stems/ports/complete-state and 4,096-step CSND ring
+  differentials pass; direct-audio regressions pass.
+- Geometry pacing agrees at 30/60/120 presentation FPS across three stages;
+  intro cadence and timing regression tests pass.
+- Actual font/art Options probe exercises Original+interpolation, touch/D-pad,
+  back navigation, profile defaults, preference import and isolated persistence.
+- RGB565 transfer compares every output pixel at 320/400 widths and all 16
+  brightness levels. Build uses ARMv6K hard-float, Release O3 and LTO.
+
+These checks establish their individual contracts. They do not establish Old
+3DS physical FPS or elimination of the intermittent New 3DS system error.
+
+## Menu and title-screen follow-up
+
+All Options pages, ROM pagination, three confirmations and all eight updater
+states were rendered with the actual cartridge font/art. Touch targets and
+D-pad actions were exercised. Narrow status text no longer point-samples away
+font strokes; punctuation and accented release metadata have defined readable
+forms. Changelog lines have a 16 px pitch and eight rows per page. Previous,
+Back and Next have independent footer buttons. Errors expose their full text
+on the upper screen. Completed updates show 100 percent.
+
+The Old title's lower screen is retained between changes in the 500 ms prompt
+phase or brightness. Title phase pixel comparisons pass. In an isolated macOS
+ARM64 CPU probe (three 1,024-packet runs per route), single-SPC median cost was
+111.33 microseconds/packet versus 210.153 for split audio, about 47% less.
+This is a host algorithm-cost comparison, not Old 3DS timing or FPS evidence.
+
+## 1.1-E2 candidate checks
+
+The Old 3DS profile now selects an ordered PICA span renderer in compatible
+Mode 2 gameplay and training. It retains CPU geometry, exact special-span
+sampling, cartridge foreground layers and explicit whole-frame fallback.
+New 3DS retains its existing renderer, stereo and split audio route.
+This is a new rendering backend, not a complete replacement of the game engine.
+
+- 294,912 synthetic pixels match the production raster oracle, including
+  dither, textures, masks, transparent index zero, order and capacity fallback.
+- A 900-frame Corneria host replay exercises 722 eligible native frames:
+  zero pixel or coverage differences; 823,733 source commands become
+  484,349 ordered rectangles. This excludes actual GPU execution.
+- Native SPC blocks: 12,288 exact PCM/core-state comparisons, short deadlines,
+  wrapping, flags and rejected I/O/ROM/self-modification cases.
+- Original and EX: 512 controlled + 256 gameplay packets each preserve PCM,
+  APU ports, sampled complete states and checkpoint continuation.
+- ARMv6K saturation compiles to SSAT; 231,075 input values agree with the
+  reference under ARM1176 instruction emulation, including both int32 limits.
+- Final integrated CIA content/identity/version, 256 KiB stack, original
+  icon/banner and all 384 source/imported build inputs verified.
+- Final Azahar Old capture: all 96,000 RGB565 screen pixels match the restored
+  CPU oracle; 590 audio packets, zero late/dropped packets; fingerprint recorded
+  in the native-engine document. Five captures total; no physical FPS claim.
+- ROM-free frontend, updater and model-routing checks remain enabled in CI.
+
+Mode 1 PICA composition remains a development probe: its host preparation
+regressed in one measured replay, so the production profile keeps the
+reference route for those scenes. See [Native engine](NATIVE-ENGINE.md) for
+ownership, memory, research, measurements and remaining work.

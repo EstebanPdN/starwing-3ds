@@ -22,3 +22,5 @@ jobs:
         run: python3 tools/check-publication.py
       - name: Run existing ROM-free host tests
         run: bash tools/test-host.sh
+      - name: Compare native SPC blocks with the pinned interpreter
+        run: bash tools/test-native-audio.sh

@@ -7,6 +7,42 @@
 #include <vector>
 
 namespace starfox::platform_3ds {
+// Normalize metadata to the cartridge font without dropping accented letters.
+inline std::string menu_text_ascii(std::string_view input) {
+    std::string out;
+    for(std::size_t i=0;i<input.size();) {
+        const auto first=static_cast<unsigned char>(input[i++]);
+        if(first<128U) {out+=static_cast<char>(std::toupper(first));continue;}
+        unsigned code=first;unsigned count=0;
+        if((first&0xe0U)==0xc0U) {code=first&0x1fU;count=1;}
+        else if((first&0xf0U)==0xe0U) {code=first&0x0fU;count=2;}
+        else if((first&0xf8U)==0xf0U) {code=first&7U;count=3;}
+        else {out+='?';continue;}
+        bool valid=i+count<=input.size();
+        for(unsigned n=0;n<count&&valid;++n) {
+            const auto next=static_cast<unsigned char>(input[i]);
+            if((next&0xc0U)!=0x80U) {valid=false;break;}
+            code=(code<<6U)|(next&0x3fU);++i;
+        }
+        if(!valid) {out+='?';continue;}
+        if(code>=0x300U&&code<=0x36fU) continue;
+        if((code>=0xc0U&&code<=0xc5U)||(code>=0xe0U&&code<=0xe5U)) out+='A';
+        else if(code==0xc7U||code==0xe7U) out+='C';
+        else if((code>=0xc8U&&code<=0xcbU)||(code>=0xe8U&&code<=0xebU)) out+='E';
+        else if((code>=0xccU&&code<=0xcfU)||(code>=0xecU&&code<=0xefU)) out+='I';
+        else if(code==0xd1U||code==0xf1U) out+='N';
+        else if((code>=0xd2U&&code<=0xd6U)||(code>=0xf2U&&code<=0xf6U)) out+='O';
+        else if((code>=0xd9U&&code<=0xdcU)||(code>=0xf9U&&code<=0xfcU)) out+='U';
+        else if(code==0xddU||code==0xfdU||code==0xffU) out+='Y';
+        else if(code==0x2013U||code==0x2014U||code==0x2022U) out+='-';
+        else if(code==0x2018U||code==0x2019U) out+='\'';
+        else if(code==0x201cU||code==0x201dU) out+='"';
+        else if(code==0x2026U) out+="...";
+        else if(code==0xa0U) out+=' ';
+        else out+='?';
+    }
+    return out;
+}
 // Release Markdown becomes bounded text in the game's own font.
 template<class Measure>
 std::vector<std::string> update_note_lines(std::string_view body, Measure measure,
@@ -24,6 +60,8 @@ std::vector<std::string> update_note_lines(std::string_view body, Measure measur
         while (!row.empty() && (row.front() == '#' || row.front() == ' ' || row.front() == '\r'))
             row.remove_prefix(1);
         if (row.empty() || row.starts_with('<') || row.starts_with("![")) continue;
+        const auto normalized=menu_text_ascii(row);
+        row=normalized;
         std::string plain;
         for (std::size_t i = 0; i < row.size(); ++i) {
             const auto c = static_cast<unsigned char>(row[i]);

@@ -12,6 +12,7 @@
 #include "native_canvas.hpp"
 #include "sprite_source_cache.hpp"
 #include "bg2_motion.hpp"
+#include "native_engine/scene.hpp"
 
 #include <cstdint>
 #include <array>
@@ -39,6 +40,11 @@ public:
     };
 
     Frame3ds(const assets::RomImage& rom, const assets::SymbolMap& symbols);
+    void set_native_engine(bool enabled, bool mode1=false) noexcept {
+        native_engine_enabled_=enabled; native_mode1_enabled_=mode1;
+    }
+    const render::Framebuffer& native_background() const noexcept { return native_background_; }
+    const native_engine::Scene* native_scene() const noexcept { return native_scene_active_ ? &native_scene_ : nullptr; }
     void set_stereo_strength(std::uint8_t strength) noexcept;
     [[nodiscard]] bool stereo_active() const noexcept { return last_draw_stereo_; }
     [[nodiscard]] std::uint8_t stereo_strength() const noexcept { return stereo_strength_; }
@@ -146,6 +152,10 @@ public:
     [[nodiscard]] StorageStats storage_stats() const noexcept;
 
 private:
+    bool native_engine_enabled_{}, native_mode1_enabled_{}, native_scene_active_{}, last_native_world_{};
+    render::RasterCommands native_commands_;
+    render::Framebuffer native_background_{400,240}, empty_native_{400,240};
+    native_engine::Scene native_scene_;
     struct Mode1BackgroundCache {
         render::Framebuffer bg3_low{256U, 224U};
         render::Framebuffer bg3_high{256U, 224U};

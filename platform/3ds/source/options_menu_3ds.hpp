@@ -7,6 +7,7 @@
 #include "starfox/render/sprite_renderer.hpp"
 #include "starfox/simulation/game_simulation.hpp"
 #include "updater_3ds.hpp"
+#include "hardware_profile.hpp"
 
 #include <cstdint>
 #include <string>
@@ -15,7 +16,7 @@
 namespace starfox::platform_3ds {
 
 enum class MenuAction { none, main_menu, memory_dump, launch_rom, check_update, install_update, cancel_update, switch_update_channel };
-enum class MenuPage { closed, root, display, gameplay, developer, update, rom_selection, rom_mode };
+enum class MenuPage { closed, root, display, gameplay, developer, update, rom_selection, rom_mode, timing };
 
 struct OverlayMetrics {
     float fps{},logic_hz{},gap_p95_ms{};
@@ -32,10 +33,13 @@ struct OverlayMetrics {
 class OptionsMenu3ds {
 public:
     OptionsMenu3ds(const assets::RomImage& rom, const assets::SymbolMap& symbols,
-        bool current_ex,const std::string& current_rom_path);
+        bool current_ex,const std::string& current_rom_path,
+        HardwareProfile profile = hardware_profile(true));
     [[nodiscard]] MenuPage page() const noexcept { return page_; }
     [[nodiscard]] bool open() const noexcept { return page_ != MenuPage::closed; }
     [[nodiscard]] bool wide() const noexcept { return wide_; }
+    [[nodiscard]] bool original_speed() const noexcept { return original_speed_; }
+    [[nodiscard]] bool interpolate() const noexcept { return interpolate_; }
     [[nodiscard]] bool top_hud() const noexcept { return top_hud_; }
     [[nodiscard]] unsigned volume() const noexcept { return volume_; }
     [[nodiscard]] bool auto_save() const noexcept { return auto_save_; }
@@ -98,9 +102,6 @@ private:
         const char* value, int x, int y, int scale, std::uint32_t color);
     void centered(std::vector<std::uint32_t>& target, int screen_width,
         const char* value, int center_x, int y, int scale, std::uint32_t color);
-    int small_text_width(const char* value) const;
-    void small_text(std::vector<std::uint32_t>& target, int screen_width,
-        const char* value, int center_x, int y, std::uint32_t color);
     void button(int x,int y,int w,int h,const char* label,bool selected=false,
         bool enabled=true);
     void plate();
@@ -119,6 +120,8 @@ private:
     std::uint32_t font_glyphs_{}, font_widths_{}, font_translation_{};
     MenuPage page_{MenuPage::closed};
     int selection_{};
+    const char* config_path_{"sdmc:/3ds/Starwing/options.cfg"};
+    bool original_speed_{}, interpolate_{true};
     bool wide_{true}, top_hud_{true}, auto_save_{false};
     bool show_fps_{false}, overlay_enabled_{false};
     bool confirming_main_menu_{false}, confirming_version_{false}, confirming_update_{false};

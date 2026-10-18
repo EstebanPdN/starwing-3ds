@@ -1,4 +1,5 @@
 #include "frame_3ds.hpp"
+#include "starfox/render/gpu_raster.hpp"
 #include "hud_layout.hpp"
 #include "shape_memory.hpp"
 #include "native_canvas.hpp"
@@ -643,6 +644,10 @@ const render::Framebuffer& Frame3ds::draw(
         || game.flow_state() == simulation::GameFlowState::training;
     const bool native_mode1_background = ppu.background_mode == 1U && level_flow;
     const bool stereo = mode2_gameplay && stereo_strength_ != 0U;
+    const bool native_world = native_engine_enabled_ && ((gpu_bg2 && mode2_gameplay) || (native_mode1_enabled_ && native_mode1_background)) && !stereo;
+    native_scene_active_=false;
+    if (native_world != last_native_world_) world_cache_valid_=false;
+    last_native_world_=native_world;
     const bool cache_source_foreground = mode2_gameplay
         && !map.native_model_draw().active && !game.briefing_state().active;
     // Original Mode 2 has only OBJ and pause text in the source foreground.
@@ -1075,6 +1080,7 @@ const render::Framebuffer& Frame3ds::draw(
         for (unsigned side = 0U; side < (stereo ? 2U : 1U); ++side) {
         auto& eye_world = side == 0U ? world_ : right_world_;
         eye_world.clear(0U);
+        if (native_world) { native_commands_.reset(400,240); eye_world.record_to(&native_commands_); }
         const int eye = stereo ? (side == 0U ? -int(stereo_strength_)
             : int(stereo_strength_)) : 0;
         if (dots_mode < 0) {
@@ -1203,7 +1209,11 @@ const render::Framebuffer& Frame3ds::draw(
             models_.draw(*shape, pose, eye_world,
                 false, nullptr, nullptr, nullptr, &model_scratch_);
         }
+        eye_world.record_to(nullptr);
         } // Both eyes share decoded shapes, poses and source simulation.
+        if (native_world && !native_scene_.compile(native_commands_)) {
+            render::replay_raster_commands(native_commands_,world_,nullptr);
+        }
 #ifdef STARWING_DEEP_PROFILE
         profile_models = osGetTime();
 #endif
@@ -1228,13 +1238,19 @@ const render::Framebuffer& Frame3ds::draw(
                 * (1000000.0 / SYSCLOCK_ARM11));
     }
 
+    native_scene_active_=native_world && !native_scene_.stats().overflow;
     const auto stage_world = svcGetSystemTick();
     // The wider world raster already uses full PPU coordinates. Preserve
     // projected geometry that crosses the original Super FX viewport edge.
     render::LayerCompositeSettings world_to_source{};
     world_to_source.offset_x = -72;
     world_to_source.offset_y = -8;
-    if (!mode2_gameplay)
+    if (native_scene_active_ && native_mode1_background) {
+        compose_native_mode1(frame_,empty_native_,mode1_cache->bg2_low,empty_native_,
+            mode1_cache->panorama_low,ppu.bg3_high_priority?empty_native_:mode1_cache->panorama_high,
+            native_background_,false);
+        frame_.begin_write_coverage();
+    } else if (!mode2_gameplay)
         render::composite_transparent_layer(world_, frame_, world_to_source);
     const auto stage_world_composite_end = svcGetSystemTick();
 
@@ -1441,7 +1457,8 @@ const render::Framebuffer& Frame3ds::draw(
             }
         }
         if (stereo && !gpu_bg2) right_frame_.copy_pixels_from(wide_frame_);
-        if (gpu_bg2) wide_frame_.assign_transparent_layer(world_, true);
+        if (native_scene_active_) { wide_frame_.clear(); wide_frame_.begin_write_coverage(); }
+        else if (gpu_bg2) wide_frame_.assign_transparent_layer(world_, true);
         else render::composite_transparent_layer(world_, wide_frame_, {});
         overlay_source_coverage_on_native(frame_, wide_frame_, source_foreground_spans_);
         if (stereo) {
@@ -1449,6 +1466,14 @@ const render::Framebuffer& Frame3ds::draw(
             else render::composite_transparent_layer(right_world_, right_frame_, {});
             overlay_source_coverage_on_native(frame_, right_frame_, source_foreground_spans_);
         }
+    } else if (native_mode1_background && native_scene_active_) {
+        wide_frame_.clear(); wide_frame_.begin_write_coverage();
+        render::composite_transparent_layer(mode1_cache->bg2_high,wide_frame_,{});
+        if (ppu.bg3_high_priority)
+            render::composite_transparent_layer(mode1_cache->panorama_high,wide_frame_,{});
+        frame_.end_write_coverage();
+        capture_native_coverage_spans(frame_,source_foreground_spans_);
+        overlay_source_coverage_on_native(frame_,wide_frame_,source_foreground_spans_);
     } else if (native_mode1_background) {
         // All background pixels share one scroll coordinate system. The
         // source-sized foreground keeps OBJ, models and their SNES priority;
@@ -1617,7 +1642,7 @@ const render::Framebuffer& Frame3ds::draw(
         overlay_hud(wide_frame_);
         if (stereo) overlay_hud(right_frame_);
     }
-    if (mode2_gameplay && gpu_bg2) wide_frame_.end_write_coverage();
+    if ((mode2_gameplay && gpu_bg2) || native_scene_active_) wide_frame_.end_write_coverage();
     if (stereo && gpu_bg2) right_frame_.end_write_coverage();
     last_draw_stereo_ = stereo;
     if (cache_source_foreground && !reuse_source_foreground && precise_source_sprites)

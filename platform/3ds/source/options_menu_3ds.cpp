@@ -15,6 +15,8 @@
 
 namespace starfox::platform_3ds {
 namespace {
+constexpr unsigned note_rows=8U;
+constexpr int punctuation_width(char c) {return c==':'?3:c=='/'?8:c=='+'?7:0;}
 static_assert([] {
     std::size_t pixels=0U;
     for(const auto run:entry_panel_runs) pixels+=run&0x0fffU;
@@ -37,17 +39,24 @@ std::uint32_t symbol(const assets::SymbolMap& map,const char* name) {
 
 OptionsMenu3ds::OptionsMenu3ds(const assets::RomImage& rom,
     const assets::SymbolMap& symbols,bool current_ex,
-    const std::string& current_rom_path):rom_(rom),game_text_(rom,symbols),
+    const std::string& current_rom_path, HardwareProfile profile):rom_(rom),game_text_(rom,symbols),
     bomb_count_address_(symbol(symbols,"SPECWEPCNTONE")?
         symbol(symbols,"SPECWEPCNTONE"):symbol(symbols,"SPECWEPCNT")),
     font_glyphs_(symbol(symbols,"FONT0FON")),
     font_widths_(symbol(symbols,"FONT0WID")),
     font_translation_(symbol(symbols,"FONT0TRN")),
     current_ex_(current_ex),selected_rom_path_(current_rom_path),
-    current_rom_path_(current_rom_path),top_(400U*240U),bottom_(320U*240U) { load(); }
+    current_rom_path_(current_rom_path),top_(400U*240U),bottom_(320U*240U) {
+    if (profile.old_3ds) config_path_="sdmc:/3ds/Starwing/options-old3ds.cfg";
+    original_speed_=profile.original_speed;
+    interpolate_=profile.interpolate;
+    load();
+}
 
 void OptionsMenu3ds::load() {
-    std::FILE* file=std::fopen(config_path,"rb");
+    std::FILE* file=std::fopen(config_path_,"rb");
+    const bool own_profile=file!=nullptr;
+    if (!file) file=std::fopen(config_path,"rb");
     if (!file) return;
     char line[80]{};
     while (std::fgets(line,sizeof(line),file)) {
@@ -58,15 +67,19 @@ void OptionsMenu3ds::load() {
         else if (std::sscanf(line,"auto_save=%u",&n)==1) auto_save_=n!=0;
         else if (std::sscanf(line,"show_fps=%u",&n)==1) show_fps_=n!=0;
         else if (std::sscanf(line,"overlay=%u",&n)==1) overlay_enabled_=n!=0;
+        else if (own_profile && std::sscanf(line,"original_speed=%u",&n)==1) original_speed_=n!=0;
+        else if (own_profile && std::sscanf(line,"interpolation=%u",&n)==1) interpolate_=n!=0;
     }
     std::fclose(file);
 }
 void OptionsMenu3ds::save() const {
-    std::FILE* file=std::fopen(config_path,"wb");
+    std::FILE* file=std::fopen(config_path_,"wb");
     if (!file) return;
     std::fprintf(file,"wide=%u\ntop_hud=%u\nvolume=%u\nauto_save=%u\nshow_fps=%u\noverlay=%u\n",
         unsigned(wide_),unsigned(top_hud_),volume_,unsigned(auto_save_),
         unsigned(show_fps_),unsigned(overlay_enabled_));
+    std::fprintf(file,"original_speed=%u\ninterpolation=%u\n",
+        unsigned(original_speed_),unsigned(interpolate_));
     std::fclose(file);
 }
 void OptionsMenu3ds::rect(std::vector<std::uint32_t>& target,int width,
@@ -80,6 +93,21 @@ void OptionsMenu3ds::rect(std::vector<std::uint32_t>& target,int width,
 void OptionsMenu3ds::glyph(std::vector<std::uint32_t>& target,int screen_width,
     char character,int x,int y,int scale,std::uint32_t color) {
     if(character<'!'||character>'Z'||!font_glyphs_||!font_widths_||!font_translation_) return;
+    if(character==':') {
+        rect(target,screen_width,x,y+3*scale,2*scale,2*scale,color);
+        rect(target,screen_width,x,y+8*scale,2*scale,2*scale,color);
+        return;
+    }
+    if(character=='+') {
+        rect(target,screen_width,x,y+5*scale,7*scale,2*scale,color);
+        rect(target,screen_width,x+3*scale,y+2*scale,2*scale,8*scale,color);
+        return;
+    }
+    if(character=='/') {
+        for(int row=1;row<11;++row)
+            rect(target,screen_width,x+(10-row)*6/9*scale,y+row*scale,2*scale,scale,color);
+        return;
+    }
     const auto translated=rom_.read8(font_translation_+unsigned(character-' '));
     const auto width=std::min<unsigned>(rom_.read8(font_widths_+translated),16U);
     const auto base=font_glyphs_+unsigned(translated)*24U;
@@ -95,6 +123,7 @@ int OptionsMenu3ds::text_width(const char* value,int scale) const {
     int width=0;
     for(const char* p=value;*p;++p) {
         if(*p==' ') width+=5*scale;
+        else if(punctuation_width(*p)) width+=(punctuation_width(*p)+1)*scale;
         else if(font_widths_&&font_translation_&&*p>='!'&&*p<='Z') {
             const auto index=rom_.read8(font_translation_+unsigned(*p-' '));
             width+=(std::min<unsigned>(rom_.read8(font_widths_+index),16U)+1U)*scale;
@@ -106,6 +135,7 @@ void OptionsMenu3ds::text(std::vector<std::uint32_t>& target,int screen_width,
     const char* value,int x,int y,int scale,std::uint32_t color) {
     for(const char* p=value;*p;++p) {
         if(*p==' ') {x+=5*scale;continue;}
+        if(punctuation_width(*p)) {glyph(target,screen_width,*p,x,y,scale,color);x+=(punctuation_width(*p)+1)*scale;continue;}
         glyph(target,screen_width,*p,x,y,scale,color);
         if(font_widths_&&font_translation_&&*p>='!'&&*p<='Z') {
             const auto index=rom_.read8(font_translation_+unsigned(*p-' '));
@@ -117,42 +147,6 @@ void OptionsMenu3ds::centered(std::vector<std::uint32_t>& target,int screen_widt
     const char* value,int center_x,int y,int scale,std::uint32_t color) {
     text(target,screen_width,value,center_x-text_width(value,scale)/2,y,scale,color);
 }
-int OptionsMenu3ds::small_text_width(const char* value) const {
-    int result=0;
-    for(const char* p=value;*p;++p) {
-        if(*p==' ') result+=4;
-        else if(font_widths_&&font_translation_&&*p>='!'&&*p<='Z') {
-            const auto index=rom_.read8(font_translation_+unsigned(*p-' '));
-            const auto width=std::min<unsigned>(rom_.read8(font_widths_+index),16U);
-            result+=int((width*2U+1U)/3U)+1;
-        }
-    }
-    return result?result-1:0;
-}
-void OptionsMenu3ds::small_text(std::vector<std::uint32_t>& target,
-    int screen_width,const char* value,int center_x,int y,std::uint32_t color) {
-    int x=center_x-small_text_width(value)/2;
-    for(const char* p=value;*p;++p) {
-        if(*p==' ') {x+=4;continue;}
-        if(!font_glyphs_||!font_widths_||!font_translation_
-            ||*p<'!'||*p>'Z') continue;
-        const auto index=rom_.read8(font_translation_+unsigned(*p-' '));
-        const auto width=std::min<unsigned>(rom_.read8(font_widths_+index),16U);
-        if(width==0U) continue;
-        const auto small_width=(width*2U+1U)/3U;
-        const auto base=font_glyphs_+unsigned(index)*24U;
-        for(unsigned row=0;row<8U;++row) {
-            const auto source_row=(row*12U+4U)/8U;
-            const auto bits=rom_.read16(base+source_row*2U);
-            for(unsigned col=0;col<small_width;++col) {
-                const auto source_col=std::min(width-1U,(col*3U+1U)/2U);
-                if(bits&(0x8000U>>source_col))
-                    rect(target,screen_width,x+int(col),y+int(row),1,1,color);
-            }
-        }
-        x+=int(small_width)+1;
-    }
-}
 void OptionsMenu3ds::button(int x,int y,int w,int h,const char* label,
     bool selected,bool enabled) {
     const auto face=selected?blue:grey;
@@ -161,9 +155,14 @@ void OptionsMenu3ds::button(int x,int y,int w,int h,const char* label,
     rect(bottom_,320,x+1,y+2,2,h-4,enabled?white:steel);
     rect(bottom_,320,x+3,y+3,w-6,h-6,face);
     rect(bottom_,320,x+2,y+h-3,w-4,2,dark);
-    if(text_width(label)>w-12)
-        small_text(bottom_,320,label,x+w/2,y+(h-8)/2,enabled?ice:steel);
-    else centered(bottom_,320,label,x+w/2,y+(h-12)/2,1,enabled?ice:steel);
+    std::string fitted;
+    if(text_width(label)>w-12) {
+        fitted=label;
+        while(!fitted.empty()&&text_width((fitted+"...").c_str())>w-12) fitted.pop_back();
+        fitted+="...";
+        label=fitted.c_str();
+    }
+    centered(bottom_,320,label,x+w/2,y+(h-12)/2,1,enabled?ice:steel);
 }
 void OptionsMenu3ds::plate() {
     std::fill(bottom_.begin(),bottom_.end(),bg);
@@ -186,7 +185,8 @@ int OptionsMenu3ds::row_count() const {
     switch(page_) {
     case MenuPage::root:return 6;
     case MenuPage::display:return 3;
-    case MenuPage::gameplay:return 3;
+    case MenuPage::gameplay:return 4;
+    case MenuPage::timing:return 3;
     case MenuPage::developer:return 4;
     case MenuPage::update:return 4;
     case MenuPage::rom_selection:return static_cast<int>(roms_.size())+1;
@@ -241,7 +241,12 @@ MenuAction OptionsMenu3ds::hit_row(int row) {
         if(row==0) wide_=!wide_;
         if(row==1) top_hud_=!top_hud_;
         save();break;
+    case MenuPage::timing:
+        if(row==0) original_speed_=!original_speed_;
+        if(row==1) interpolate_=!interpolate_;
+        save();break;
     case MenuPage::gameplay:
+        if(row==2) {page_=MenuPage::timing;selection_=0;break;}
         if(row==0) volume_=(volume_+10U)%110U;
         if(row==1) auto_save_=!auto_save_;
         save();break;
@@ -306,6 +311,7 @@ MenuAction OptionsMenu3ds::back() {
         page_=startup_selection_?MenuPage::closed:MenuPage::rom_mode;
         startup_selection_=false;
     }
+    else if(page_==MenuPage::timing) page_=MenuPage::gameplay;
     else if(open()) page_=MenuPage::root;
     selection_=0;
     return MenuAction::none;
@@ -339,7 +345,23 @@ MenuAction OptionsMenu3ds::touch(int x,int y,bool controls_screen) {
         return MenuAction::none;
     }
     if(x<27||x>293) return MenuAction::none;
-    if(y>=203&&y<229) return back();
+    if(y>=203&&y<229) {
+        if(page_==MenuPage::rom_selection&&roms_.size()>4U&&(x<103||x>217)) {
+            const auto last=int((roms_.size()-1U)/4U)*4;
+            rom_scroll_=std::clamp(rom_scroll_+(x<103?-4:4),0,last);
+            selection_=rom_scroll_;
+            return MenuAction::none;
+        }
+        if(page_==MenuPage::update&&(x<103||x>217)) {
+            if(update_status_.state!=UpdateState::checking
+                &&update_status_.state!=UpdateState::downloading
+                &&update_status_.state!=UpdateState::installing
+                &&update_status_.state!=UpdateState::done)
+                page_update_notes(x<103?-1:1);
+            return MenuAction::none;
+        }
+        return back();
+    }
     if(page_==MenuPage::root) {
         for(int row=0;row<5;++row)
             if(y>=41+row*31&&y<67+row*31) {selection_=row;return hit_row(row);}
@@ -356,34 +378,34 @@ MenuAction OptionsMenu3ds::touch(int x,int y,bool controls_screen) {
         }
         if(y>=48&&y<75) {selection_=0;return hit_row(0);}
         if(y>=122&&y<149) {selection_=1;return hit_row(1);}
-    } else if(page_==MenuPage::gameplay) {
-        if(y>=85&&y<105&&x>=64&&x<256) {
-            volume_=static_cast<unsigned>(std::clamp((x-67)*100/186,0,100));
-            save();selection_=0;return MenuAction::none;
+    } else if(page_==MenuPage::timing) {
+        if(y>=79&&y<105&&x>=64&&x<256) {
+            original_speed_=x<156;save();selection_=0;return MenuAction::none;
+        }
+        if(y>=153&&y<179&&x>=64&&x<256) {
+            interpolate_=x>=164;save();selection_=1;return MenuAction::none;
         }
         if(y>=48&&y<75) {selection_=0;return hit_row(0);}
         if(y>=122&&y<149) {selection_=1;return hit_row(1);}
-        if(y>=153&&y<179) {
+    } else if(page_==MenuPage::gameplay) {
+        if(y>=170&&y<194) {selection_=2;return hit_row(2);}
+        if(y>=76&&y<86&&x>=64&&x<256) {
+            volume_=static_cast<unsigned>(std::clamp((x-67)*100/186,0,100));
+            save();selection_=0;return MenuAction::none;
+        }
+        if(y>=41&&y<65) {selection_=0;return hit_row(0);}
+        if(y>=98&&y<122) {selection_=1;return hit_row(1);}
+        if(y>=134&&y<158) {
             auto_save_=x>=164&&x<256;
             save();selection_=1;return MenuAction::none;
         }
     } else if(page_==MenuPage::developer) {
         for(int row=0;row<3;++row)
-            if(y>=48+row*43&&y<79+row*43) {selection_=row;return hit_row(row);}
+            if(y>=44+row*54&&y<74+row*54) {selection_=row;return hit_row(row);}
     } else if(page_==MenuPage::update) {
-        if(y>=187&&y<201) {
-            if(x<88) page_update_notes(-1);
-            if(x>232) page_update_notes(1);
-        }
         for(int row=0;row<3;++row)
-            if(y>=111+row*26&&y<135+row*26) {selection_=row;return hit_row(row);}
+            if(y>=99+row*32&&y<123+row*32) {selection_=row;return hit_row(row);}
     } else if(page_==MenuPage::rom_selection) {
-        if(y>=187&&y<203) {
-            if(x>=37&&x<129) rom_scroll_=std::max(0,rom_scroll_-4);
-            if(x>=191&&x<283) rom_scroll_=std::min(
-                std::max(0,static_cast<int>(roms_.size())-4),rom_scroll_+4);
-            return MenuAction::none;
-        }
         for(int visible=0;visible<4;++visible) {
             const int row=rom_scroll_+visible;
             if(row<static_cast<int>(roms_.size())
@@ -392,9 +414,9 @@ MenuAction OptionsMenu3ds::touch(int x,int y,bool controls_screen) {
             }
         }
     } else if(page_==MenuPage::rom_mode) {
-        if(y>=65&&y<99) {selection_=0;return hit_row(0);}
-        if(y>=108&&y<142) {selection_=1;return hit_row(1);}
-        if(y>=151&&y<185) {selection_=2;return hit_row(2);}
+        if(y>=45&&y<79) {selection_=0;return hit_row(0);}
+        if(y>=101&&y<135) {selection_=1;return hit_row(1);}
+        if(y>=157&&y<191) {selection_=2;return hit_row(2);}
     }
     return MenuAction::none;
 }
@@ -729,13 +751,13 @@ void OptionsMenu3ds::draw_level_hud(
     }
 }
 void OptionsMenu3ds::set_update_notes(const std::string& notes) {
-    update_lines_=update_note_lines(notes.empty()?"## Changelog\n- Initial release.":notes,
+    update_lines_=update_note_lines(notes,
         [this](const char* value){return text_width(value);},356);
     update_notes_page_=0;
 }
 void OptionsMenu3ds::page_update_notes(int delta) {
-    if(page_!=MenuPage::update) return;
-    const int pages=std::max(1,(int(update_lines_.size())+10)/11);
+    if(page_!=MenuPage::update||update_status_.state==UpdateState::error) return;
+    const int pages=std::max(1,(int(update_lines_.size())+int(note_rows)-1)/int(note_rows));
     update_notes_page_=unsigned(std::clamp(int(update_notes_page_)+delta,0,pages-1));
 }
 
@@ -783,27 +805,38 @@ void OptionsMenu3ds::draw_options() {
     if(page_==MenuPage::update) {
         std::fill(top_.begin(),top_.end(),navy);
         rect(top_,400,14,14,372,2,steel);
-        centered(top_,400,"CHANGELOG",200,25,1,ice);
+        centered(top_,400,update_status_.state==UpdateState::error?"UPDATE ERROR":"CHANGELOG",200,25,1,ice);
         char label[64]{};
         std::snprintf(label,sizeof(label),"%s",update_status_.version[0]
             ?update_status_.version:STARWING_BUILD_VERSION);
         std::transform(label,label+std::strlen(label),label,
             [](unsigned char c){return static_cast<char>(std::toupper(c));});
         centered(top_,400,label,200,46,1,white);
-        for(unsigned row=0;row<11U;++row) {
-            const auto i=update_notes_page_*11U+row;
-            if(i>=update_lines_.size()) break;
-            text(top_,400,update_lines_[i].c_str(),22,69+int(row)*12,1,white);
+        const auto error_lines=update_status_.state==UpdateState::error
+            ?update_note_lines(update_status_.message,
+                [this](const char* value){return text_width(value);},356)
+            :std::vector<std::string>{};
+        for(unsigned row=0;row<note_rows;++row) {
+            const auto i=update_notes_page_*note_rows+row;
+            if(!error_lines.empty()) {
+                if(row>=error_lines.size()) break;
+                text(top_,400,error_lines[row].c_str(),22,69+int(row)*16,1,white);
+            } else {
+                if(i>=update_lines_.size()) break;
+                text(top_,400,update_lines_[i].c_str(),22,69+int(row)*16,1,white);
+            }
         }
-        std::snprintf(label,sizeof(label),"L / R  PAGE %u / %u",update_notes_page_+1U,
-            std::max(1U,(unsigned(update_lines_.size())+10U)/11U));
+        if(update_status_.state==UpdateState::error)
+            std::snprintf(label,sizeof(label),"CHECK DETAILS AND RETRY");
+        else std::snprintf(label,sizeof(label),"L  PAGE %u OF %u  R",update_notes_page_+1U,
+            std::max(1U,(unsigned(update_lines_.size())+note_rows-1U)/note_rows));
         centered(top_,400,label,200,218,1,ice);
     }
     if(confirming_update_) {
         rect(bottom_,320,35,64,250,117,steel);
         rect(bottom_,320,38,67,244,111,navy);
         centered(bottom_,320,"INSTALL AND CLOSE?",160,83,1,white);
-        small_text(bottom_,320,"UNSAVED PROGRESS WILL BE LOST",160,105,steel);
+        centered(bottom_,320,"PROGRESS WILL BE LOST",160,105,1,steel);
         button(57,125,92,34,"YES",confirmation_yes_);
         button(171,125,92,34,"NO",!confirmation_yes_);
         return;
@@ -828,54 +861,73 @@ void OptionsMenu3ds::draw_options() {
         button(37,122,246,26,"TOP HUD",selection_==1);
         button(64,153,92,26,"SHOW",false,top_hud_);
         button(164,153,92,26,"HIDE",false,!top_hud_);
+    } else if(page_==MenuPage::timing) {
+        button(37,48,246,26,"GAME SPEED",selection_==0);
+        button(64,79,92,26,"ORIGINAL",false,original_speed_);
+        button(164,79,92,26,"20 HZ",false,!original_speed_);
+        button(37,122,246,26,"INTERPOLATION",selection_==1);
+        button(64,153,92,26,"OFF",false,!interpolate_);
+        button(164,153,92,26,"ON",false,interpolate_);
     } else if(page_==MenuPage::gameplay) {
-        button(37,48,246,26,"MASTER VOLUME",selection_==0);
-        rect(bottom_,320,64,88,192,12,steel);
-        rect(bottom_,320,67,91,186,6,dark);
-        rect(bottom_,320,67,91,186*int(volume_)/100,6,ice);
-        button(37,122,246,26,"AUTO SAVE",selection_==1);
-        button(64,153,92,26,"OFF",false,!auto_save_);
-        button(164,153,92,26,"ON",false,auto_save_);
+        button(37,170,246,24,"SPEED / INTERPOLATION",selection_==2);
+        button(37,41,246,24,"MASTER VOLUME",selection_==0);
+        rect(bottom_,320,64,76,192,10,steel);
+        rect(bottom_,320,67,79,186,4,dark);
+        rect(bottom_,320,67,79,186*int(volume_)/100,4,ice);
+        button(37,98,246,24,"AUTO SAVE",selection_==1);
+        button(64,134,92,24,"OFF",false,!auto_save_);
+        button(164,134,92,24,"ON",false,auto_save_);
     } else if(page_==MenuPage::developer) {
-        button(37,48,246,27,"MEMORY DUMP",selection_==0);
-        button(37,91,246,27,show_fps_?"SHOW FPS ON":"SHOW FPS OFF",selection_==1);
-        button(37,134,246,27,overlay_enabled_?"OVERLAY ON":"OVERLAY OFF",selection_==2);
+        button(37,44,246,30,"MEMORY DUMP",selection_==0);
+        button(37,98,246,30,show_fps_?"SHOW FPS ON":"SHOW FPS OFF",selection_==1);
+        button(37,152,246,30,overlay_enabled_?"OVERLAY ON":"OVERLAY OFF",selection_==2);
     } else if(page_==MenuPage::update) {
         char label[80]{};
         std::snprintf(label,sizeof(label),"INSTALLED  %s",STARWING_BUILD_VERSION);
-        centered(bottom_,320,label,160,44,1,white);
+        centered(bottom_,320,label,160,40,1,white);
         std::snprintf(label,sizeof(label),"LATEST  %s",
             update_status_.version[0]?update_status_.version:"--");
         std::transform(label,label+std::strlen(label),label,
             [](unsigned char c){return static_cast<char>(std::toupper(c));});
-        centered(bottom_,320,label,160,64,1,ice);
-        small_text(bottom_,320,update_status_.message,160,88,
-            update_status_.state==UpdateState::error?white:steel);
+        centered(bottom_,320,label,160,59,1,ice);
+        const auto status=update_status_.state==UpdateState::error?"UPDATE FAILED":
+            update_status_.state==UpdateState::installing?"INSTALLING":
+            update_status_.state==UpdateState::done?"UPDATE COMPLETE":update_status_.message;
+        const auto status_lines=update_note_lines(status,
+            [this](const char* value){return text_width(value);},246);
+        for(unsigned row=0;row<std::min<std::size_t>(2U,status_lines.size());++row)
+            centered(bottom_,320,status_lines[row].c_str(),160,79+int(row)*16,1,steel);
         const bool busy=update_status_.state==UpdateState::checking
             ||update_status_.state==UpdateState::downloading
             ||update_status_.state==UpdateState::installing
             ||update_status_.state==UpdateState::done;
         if(busy) {
-            rect(bottom_,320,37,121,246,12,steel);
-            rect(bottom_,320,40,124,240,6,dark);
-            rect(bottom_,320,40,124,240*int(update_status_.percent)/100,6,ice);
+            const auto percent=update_status_.state==UpdateState::done?100U:
+                update_status_.state==UpdateState::checking?0U:std::min(update_status_.percent,100U);
+            rect(bottom_,320,37,123,246,12,steel);
+            rect(bottom_,320,40,126,240,6,dark);
+            rect(bottom_,320,40,126,240*int(percent)/100,6,ice);
             if(update_status_.state!=UpdateState::checking) {
-                std::snprintf(label,sizeof(label),"%u%%",update_status_.percent);
-                centered(bottom_,320,label,160,145,1,white);
+                std::snprintf(label,sizeof(label),"%u%%",percent);
+                centered(bottom_,320,label,160,151,1,white);
             }
-            small_text(bottom_,320,update_status_.state==UpdateState::installing
+            centered(bottom_,320,update_status_.state==UpdateState::installing
                 ?"DO NOT POWER OFF":update_status_.state==UpdateState::done
-                ?"CLOSING GAME":"B  CANCEL",160,173,steel);
+                ?"CLOSING GAME":"B TO CANCEL",160,176,1,steel);
         } else {
-            button(37,111,246,24,update_status_.experimental
-                ?"CHANNEL: EXPERIMENTAL":"CHANNEL: STABLE",selection_==0);
-            button(37,137,246,24,"CHECK FOR UPDATES",selection_==1);
+            button(37,99,246,24,update_status_.experimental
+                ?"CHANNEL  EXPERIMENTAL":"CHANNEL  STABLE",selection_==0);
+            button(37,131,246,24,"CHECK FOR UPDATES",selection_==1);
             button(37,163,246,24,"INSTALL UPDATE",selection_==2,
                 update_status_.state==UpdateState::available);
-            small_text(bottom_,320,"L  PREV                  NEXT  R",160,190,steel);
         }
         const bool installing=update_status_.state==UpdateState::installing
             ||update_status_.state==UpdateState::done;
+        if(!busy) {
+            const auto pages=std::max(1U,(unsigned(update_lines_.size())+note_rows-1U)/note_rows);
+            button(27,204,75,23,"PREV",false,update_status_.state!=UpdateState::error&&update_notes_page_>0U);
+            button(218,204,75,23,"NEXT",false,update_status_.state!=UpdateState::error&&update_notes_page_+1U<pages);
+        }
         button(110,204,100,23,installing?"WAIT":busy?"CANCEL":"BACK",
             selection_==3,!installing);
         return;
@@ -890,13 +942,13 @@ void OptionsMenu3ds::draw_options() {
             button(37,43+visible*37,246,30,label.c_str(),selection_==row);
         }
         if(roms_.size()>4U) {
-            button(37,187,92,16,"PREV");
-            button(191,187,92,16,"NEXT");
+            button(27,204,75,23,"PREV",false,rom_scroll_>0);
+            button(218,204,75,23,"NEXT",false,rom_scroll_+4<int(roms_.size()));
         }
     } else if(page_==MenuPage::rom_mode) {
-        button(53,65,214,34,"ORIGINAL",selection_==0);
-        button(53,108,214,34,"STAR FOX EX",selection_==1);
-        button(53,151,214,34,"ROM FILES",selection_==2);
+        button(53,45,214,34,"ORIGINAL",selection_==0);
+        button(53,101,214,34,"STAR FOX EX",selection_==1);
+        button(53,157,214,34,"ROM FILES",selection_==2);
     }
     button(110,204,100,23,"BACK",selection_==row_count()-1);
 }
@@ -951,12 +1003,14 @@ void OptionsMenu3ds::draw_overlay(const OverlayMetrics& metrics) {
         std::min(175U,175U*metrics.linear_free_kib/metrics.linear_total_kib),3,ice);
     text(bottom_,320,metrics.new_3ds?"NEW 3DS 400X240 PICA":"OLD 3DS 400X240 PICA",
         126,112,1,white);
-    std::snprintf(value,sizeof(value),"CSND %s CORE %d BG2 %s %s",
+    std::snprintf(value,sizeof(value),"CSND %s CORE %d  BG2 %s",
         metrics.audio_ready?"ON":"OFF",metrics.audio_core,
-        metrics.gpu_bg2?"PICA":"CPU",metrics.flow?metrics.flow:"BOOT");
-    text(bottom_,320,value,15,143,1,ice);
-    text(bottom_,320,"L+R+SELECT TO CLOSE",15,157,1,white);
-    const char* labels[]{"QUICK DUMP","FULL MEMORY","CLEAR DUMPS"};
+        metrics.gpu_bg2?"PICA":"CPU");
+    text(bottom_,320,value,15,133,1,ice);
+    std::snprintf(value,sizeof(value),"FLOW: %s",metrics.flow?metrics.flow:"BOOT");
+    text(bottom_,320,value,15,149,1,steel);
+    text(bottom_,320,"L+R+SELECT TO CLOSE",15,165,1,white);
+    const char* labels[]{"QUICK","FULL","CLEAR"};
     const char* combos[]{"L+R+A","L+R+B","L+R+X"};
     for(int n=0;n<3;++n) {
         const int x=8+n*104;

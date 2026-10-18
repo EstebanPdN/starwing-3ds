@@ -9,6 +9,20 @@ for TEST in frame_pacing launch_selection screen_transfer presentation_metrics p
   "${TEST_BUILD}/${TEST}_test"
   printf 'PASS: %s\n' "${TEST}"
 done
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -I"${ROOT}/include" \
+  "${ROOT}/tests/saturate_test.cpp" -o "${TEST_BUILD}/saturate_test"
+"${TEST_BUILD}/saturate_test"
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra \
+  -I"${ROOT}/include" -I"${ROOT}/platform/3ds/source" \
+  "${ROOT}/tests/native_scene_test.cpp" \
+  "${ROOT}/platform/3ds/source/native_engine/scene.cpp" \
+  "${ROOT}/src/render/gpu_raster.cpp" -o "${TEST_BUILD}/native_scene_test"
+"${TEST_BUILD}/native_scene_test"
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra \
+  -I"${ROOT}/tests/audio_3ds_host" -I"${ROOT}/platform/3ds/source" \
+  "${ROOT}/tests/hardware_profile_test.cpp" \
+  "${ROOT}/platform/3ds/source/audio_3ds.cpp" -o "${TEST_BUILD}/hardware_profile_test"
+"${TEST_BUILD}/hardware_profile_test"
 python3 "${ROOT}/platform/3ds/tools/test_analyze_hardware_dump.py"
 
 if [[ -n "${STARWING_JANSSON_PREFIX:-}" ]]; then

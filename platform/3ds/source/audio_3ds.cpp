@@ -51,11 +51,10 @@ bool Audio3ds::open() {
         if (worker_ != nullptr) diagnostics_.selected_core = 2;
     }
 
-    if (R_SUCCEEDED(diagnostics_.model_result)
-        && !diagnostics_.new_3ds) {
-        // Old 3DS only grants this title a 30% core-1 slice. A 50 ms SPC
-        // packet then holds the next simulation tick for roughly 170 ms.
-        // Run the unchanged SPC tick on the application core instead.
+    if (R_FAILED(diagnostics_.model_result) || !diagnostics_.new_3ds) {
+        // Share the cartridge DSP voices and avoid quota-limited core 1.
+        spc_ = audio::Spc700Audio{audio::Spc700Audio::Routing::cartridge};
+        spc_.set_parallel_stems_enabled(false);
         diagnostics_.selected_core = 0;
     } else if (worker_ == nullptr) {
         // If New 3DS core 2 was unavailable (or model detection failed),

@@ -174,4 +174,6 @@ void SPC_DSP::run( int clocks_remain )
     }
 }
 ]=] dsp_source "${dsp_source}")
+include("${CMAKE_CURRENT_LIST_DIR}/SpcDspOptimizations.cmake")
 starfox_write_spc_file("SPC_DSP.cpp" "${dsp_source}")
+include("${CMAKE_CURRENT_LIST_DIR}/SpcNativeBlocks.cmake")

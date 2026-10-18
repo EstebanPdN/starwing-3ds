@@ -128,6 +128,7 @@ add_library(snes_spc_core STATIC
     "${STARFOX_SPC_SOURCE}/SPC_DSP.cpp"
     "${STARFOX_SPC_SOURCE}/SPC_Filter.cpp"
 )
+target_include_directories(snes_spc_core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_include_directories(snes_spc_core SYSTEM PUBLIC
     "${STARFOX_SPC_SOURCE}"
 )

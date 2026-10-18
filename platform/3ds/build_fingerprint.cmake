@@ -6,6 +6,7 @@ file(GLOB_RECURSE STARWING_FINGERPRINT_FILES CONFIGURE_DEPENDS
     "${STARFOX_SOURCE_ROOT}/src/*.h" "${STARFOX_SOURCE_ROOT}/src/*.hpp"
     "${STARFOX_SOURCE_ROOT}/tools/cmake/*.cmake"
     "${CMAKE_CURRENT_LIST_DIR}/source/*.c" "${CMAKE_CURRENT_LIST_DIR}/source/*.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/source/*.pica"
     "${CMAKE_CURRENT_LIST_DIR}/source/*.h" "${CMAKE_CURRENT_LIST_DIR}/source/*.hpp"
     "${CMAKE_CURRENT_LIST_DIR}/vendor/*.c" "${CMAKE_CURRENT_LIST_DIR}/vendor/*.h"
     "${STARWING_UI_INCLUDE_DIR}/*.hpp")

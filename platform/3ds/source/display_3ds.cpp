@@ -191,9 +191,9 @@ bool Display3ds::open() {
     gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);
     // Bottom telemetry is written directly at native 320x240 pixel positions.
     gfxSetScreenFormat(GFX_BOTTOM, GSP_RGBA8_OES);
-    // Mono submissions still duplicate the left buffer through libctru.
-    // Only paired gameplay submissions address the right render target.
-    gfxSet3D(true);
+    bool new_3ds=false;
+    if (R_FAILED(APT_CheckNew3DS(&new_3ds))) new_3ds=false;
+    gfxSet3D(new_3ds);
     if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) return false;
     c3d_ready_ = true;
     // Per-line HDMA on the 400x240 native raster can approach 16k fragments.
@@ -207,35 +207,37 @@ bool Display3ds::open() {
         linearAlloc(texture_width_ * texture_height_ * sizeof(std::uint16_t)));
     linear_overlay_ = static_cast<std::uint16_t*>(
         linearAlloc(texture_width_ * texture_height_ * sizeof(std::uint16_t)));
-    linear_right_ = static_cast<std::uint16_t*>(
+    if (new_3ds) linear_right_ = static_cast<std::uint16_t*>(
         linearAlloc(texture_width_ * texture_height_ * sizeof(std::uint16_t)));
     if (linear_pixels_ == nullptr
         || linear_overlay_ == nullptr
-        || linear_right_ == nullptr
+        || (new_3ds && linear_right_ == nullptr)
         || !C3D_TexInitVRAM(&texture_, texture_width_,
             texture_height_, GPU_RGB565)
         || !C3D_TexInitVRAM(&overlay_texture_, texture_width_,
             texture_height_, GPU_RGBA5551)
-        || !C3D_TexInitVRAM(&right_texture_, texture_width_,
-            texture_height_, GPU_RGB565)
-        || !C3D_TexInitVRAM(&right_overlay_texture_, texture_width_,
-            texture_height_, GPU_RGBA5551)
+        || (new_3ds && !C3D_TexInitVRAM(&right_texture_, texture_width_,
+            texture_height_, GPU_RGB565))
+        || (new_3ds && !C3D_TexInitVRAM(&right_overlay_texture_, texture_width_,
+            texture_height_, GPU_RGBA5551))
         || !C3D_TexInit(&tile_atlas_, 1024U, 512U, GPU_RGBA5551)) {
         close();
         return false;
     }
     std::memset(linear_pixels_, 0,
         texture_width_ * texture_height_ * sizeof(std::uint16_t));
-    std::memset(linear_right_, 0,
+    if (linear_right_) std::memset(linear_right_, 0,
         texture_width_ * texture_height_ * sizeof(std::uint16_t));
     C3D_TexSetFilter(&texture_, GPU_NEAREST, GPU_NEAREST);
     C3D_TexSetWrap(&texture_, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
     C3D_TexSetFilter(&overlay_texture_, GPU_NEAREST, GPU_NEAREST);
     C3D_TexSetWrap(&overlay_texture_, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+    if (new_3ds) {
     C3D_TexSetFilter(&right_texture_, GPU_NEAREST, GPU_NEAREST);
     C3D_TexSetWrap(&right_texture_, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
     C3D_TexSetFilter(&right_overlay_texture_, GPU_NEAREST, GPU_NEAREST);
     C3D_TexSetWrap(&right_overlay_texture_, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+    }
     C3D_TexSetFilter(&tile_atlas_, GPU_NEAREST, GPU_NEAREST);
     C3D_TexSetWrap(&tile_atlas_, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
     if (C3D_TexInit(&bg2_map_texture_, 512U, 512U, GPU_RGBA5551)) {
@@ -251,10 +253,10 @@ bool Display3ds::open() {
     top_ = C3D_RenderTargetCreate(
         GSP_SCREEN_WIDTH, GSP_SCREEN_HEIGHT_TOP,
         GPU_RB_RGBA8, GPU_RB_DEPTH16);
-    top_right_ = C3D_RenderTargetCreate(
+    if (new_3ds) top_right_ = C3D_RenderTargetCreate(
         GSP_SCREEN_WIDTH, GSP_SCREEN_HEIGHT_TOP,
         GPU_RB_RGBA8, GPU_RB_DEPTH16);
-    if (top_ == nullptr || top_right_ == nullptr) {
+    if (top_ == nullptr || (new_3ds && top_right_ == nullptr)) {
         close();
         return false;
     }
@@ -265,7 +267,7 @@ bool Display3ds::open() {
         | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565)
         | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO);
     C3D_RenderTargetSetOutput(top_, GFX_TOP, GFX_LEFT, output);
-    C3D_RenderTargetSetOutput(top_right_, GFX_TOP, GFX_RIGHT, output);
+    if (top_right_) C3D_RenderTargetSetOutput(top_right_, GFX_TOP, GFX_RIGHT, output);
     // Optional fixed 512 KiB VRAM cache. If allocation is unavailable, retain
     // direct BG2 drawing. RGBA8 matches the screen render target exactly;
     // using 16-bit colour here would quantize the background a second time.
@@ -285,8 +287,7 @@ bool Display3ds::open() {
     LightEvent_Init(&bg2_plan_completed_, RESET_ONESHOT);
     stop_bg2_plan_worker_.store(false, std::memory_order_release);
     bg2_plan_worker_completed_.store(false, std::memory_order_release);
-    bool new_3ds = false;
-    if (R_SUCCEEDED(APT_CheckNew3DS(&new_3ds)) && new_3ds) {
+    if (new_3ds) {
         // Audio uses core 2 at priority 0x30. This lower-priority worker
         // gets only idle slices while the main core builds the foreground.
         bg2_plan_worker_ = threadCreate(&Display3ds::bg2_plan_worker_main,
@@ -296,6 +297,8 @@ bool Display3ds::open() {
 }
 
 void Display3ds::close() noexcept {
+    if (c3d_ready_ && gpu_active_ && C3D_FrameBegin(0)) C3D_FrameEnd(0);
+    native_engine_.close();
     if (bg2_plan_pending_) wait_for_bg2_plan();
     if (bg2_plan_worker_ != nullptr) {
         stop_bg2_plan_worker_.store(true, std::memory_order_release);
@@ -478,6 +481,7 @@ bool Display3ds::present(const render::Framebuffer& indexed,
     if (!gpu_active_) {
         return present_cpu(indexed, palette, reuse_source);
     }
+    if (right && !top_right_) return false;
     const auto width = std::min<std::uint32_t>(indexed.width(), 400U);
     const auto height = std::min<std::uint32_t>(indexed.height(), 240U);
     std::array<std::uint16_t, 256U> colours{};
@@ -867,15 +871,70 @@ bool Display3ds::draw_bg2_quads(const render::Palette256& palette) {
     return true;
 }
 
+bool Display3ds::present_native(const render::Framebuffer& background,
+    const render::Framebuffer& foreground,const render::Palette256& palette,
+    const native_engine::Scene& scene) {
+    frame_timing_={};
+    if (!gpu_active_ || !native_engine_.ready() || background.width()!=400
+        || background.height()!=240 || foreground.width()!=400
+        || foreground.height()!=240 || foreground.write_coverage().size()!=400U*240U) return false;
+    auto begin=svcGetSystemTick();
+    if (!C3D_FrameBegin(C3D_FRAME_NONBLOCK)) {
+        frame_timing_.gpu_begin_failed=true;return false;
+    }
+    frame_timing_.acquire_us=ticks_to_microseconds(svcGetSystemTick()-begin);
+    std::array<std::uint16_t,256> back_colours{},front_colours{};
+    for(unsigned i=0;i<256;++i) {
+        back_colours[i]=rgb565(palette[i]);front_colours[i]=rgba5551(palette[i]);
+    }
+    begin=svcGetSystemTick();
+    const auto coverage=foreground.write_coverage();
+    for(unsigned y=0;y<240;++y) for(unsigned x=0;x<400;++x) {
+        const auto source=y*400+x;const auto target=y*texture_width_+x;
+        linear_pixels_[target]=back_colours[background.pixels()[source]];
+        linear_overlay_[target]=coverage[source]?front_colours[foreground.pixels()[source]]:0;
+    }
+    frame_timing_.build_us=ticks_to_microseconds(svcGetSystemTick()-begin);
+    const auto transfer=[&](std::uint16_t* source,C3D_Tex& target,bool alpha) {
+        begin=svcGetSystemTick();
+        starwing_clean_device_cache(source,texture_width_*texture_height_*2U);
+        frame_timing_.flush_us+=ticks_to_microseconds(svcGetSystemTick()-begin);
+        begin=svcGetSystemTick();
+        const auto format=alpha?GX_TRANSFER_FMT_RGB5A1:GX_TRANSFER_FMT_RGB565;
+        queue_display_transfer(reinterpret_cast<u32*>(source),GX_BUFFER_DIM(512,256),
+            reinterpret_cast<u32*>(target.data),GX_BUFFER_DIM(512,256),
+            GX_TRANSFER_FLIP_VERT(0)|GX_TRANSFER_OUT_TILED(1)|GX_TRANSFER_RAW_COPY(0)
+            |GX_TRANSFER_IN_FORMAT(format)|GX_TRANSFER_OUT_FORMAT(format)
+            |GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
+        frame_timing_.transfer_us+=ticks_to_microseconds(svcGetSystemTick()-begin);
+    };
+    transfer(linear_pixels_,texture_,false);transfer(linear_overlay_,overlay_texture_,true);
+    begin=svcGetSystemTick();
+    bool drawn=native_engine_.draw(scene,palette);
+    if(drawn) {
+        C2D_TargetClear(top_,C2D_Color32(0,0,0,255));C2D_SceneBegin(top_);
+        const Tex3DS_SubTexture sub{400,240,0,1,400.0f/512,1.0f-240.0f/256};
+        const C2D_DrawParams params{{0,0,400,240},{0,0},0,0};
+        for(auto* texture:{&texture_,native_engine_.texture(),&overlay_texture_}) {
+            const C2D_Image image{texture,&sub};drawn=C2D_DrawImage(image,&params,nullptr)&&drawn;
+        }
+    }
+    frame_texture_valid_=false;overlay_texture_valid_=false;
+    last_top_framebuffer_=gfxGetFramebuffer(GFX_TOP,GFX_LEFT,nullptr,nullptr);
+    C3D_FrameEnd(GX_CMDLIST_FLUSH);frame_timing_.gpu_submitted=true;
+    frame_timing_.submit_us=ticks_to_microseconds(svcGetSystemTick()-begin);
+    return drawn;
+}
+
 bool Display3ds::present_mode2(
     const simulation::SnesPpuState& ppu,
     std::uint64_t ppu_vram_revision,
     std::int32_t scroll_x, std::int32_t scroll_y,
     const render::Framebuffer& foreground,
     const render::Palette256& palette, bool reuse_source,
-    const render::Framebuffer* right) {
+    const render::Framebuffer* right, const native_engine::Scene* scene) {
     frame_timing_ = {};
-    if (!eligible_mode2(ppu) || foreground.width() != 400U
+    if ((right && !top_right_) || !eligible_mode2(ppu) || foreground.width() != 400U
         || foreground.height() != 240U || foreground.draw_scale() != 1U) {
         wait_for_bg2_plan();
         return false;
@@ -1044,6 +1103,11 @@ bool Display3ds::present_mode2(
         // Both commands execute in order in the same GPU queue.
         bg2_raster_valid_ = true;
     }
+    if (scene && !native_engine_.draw(*scene,palette)) {
+        C3D_FrameEnd(GX_CMDLIST_FLUSH);
+        frame_timing_.gpu_submitted=true;
+        return false;
+    }
     const auto draw_eye = [&](C3D_RenderTarget* target, C3D_Tex* overlay) {
     C2D_TargetClear(target, C2D_Color32(
         palette[0].r, palette[0].g, palette[0].b, 255));
@@ -1061,6 +1125,12 @@ bool Display3ds::present_mode2(
             return false;
         ++frame_timing_.bg2_emitted_quads;
     } else if (!draw_bg2_quads(palette)) return false;
+    if (scene) {
+        const Tex3DS_SubTexture sub{400U,240U,0.0f,1.0f,400.0f/512.0f,1.0f-240.0f/256.0f};
+        const C2D_Image image{native_engine_.texture(),&sub};
+        const C2D_DrawParams params{{0.0f,0.0f,400.0f,240.0f},{0.0f,0.0f},0.0f,0.0f};
+        if (!C2D_DrawImage(image,&params,nullptr)) return false;
+    }
     const Tex3DS_SubTexture foreground_subtexture{
         400U, 240U, 0.0F, 1.0F,
         400.0F / static_cast<float>(texture_width_),

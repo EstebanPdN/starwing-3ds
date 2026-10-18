@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(starwing_3ds_diagnostic VERSION 0.1 LANGUAGES C CXX)
+project(starwing_3ds_diagnostic VERSION 0.1 LANGUAGES C CXX ASM)
 
 set(STARFOX_SOURCE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/version.txt" STARWING_VERSION LIMIT_COUNT 1)
@@ -81,6 +81,9 @@ target_include_directories(starwing_citro2d PUBLIC vendor/citro2d/include)
 target_compile_options(starwing_citro2d PRIVATE -O3 -ffunction-sections -fdata-sections)
 target_link_libraries(starwing_citro2d PUBLIC citro3d ctru m)
 
+ctr_add_shader_library(starwing_span_shader OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/span.shbin" source/native_engine/span.v.pica)
+dkp_add_embedded_binary_library(starwing_span_binary starwing_span_shader)
+
 add_executable(starwing-3ds-game
     source/game_3ds.cpp
     source/memory_3ds.cpp
@@ -96,7 +99,9 @@ add_executable(starwing-3ds-game
     source/input_3ds.cpp
     source/options_menu_3ds.cpp
     source/diagnostics_3ds.cpp
-    source/bg2_plan.cpp)
+    source/bg2_plan.cpp
+    source/native_engine/scene.cpp
+    source/native_engine/pica.cpp)
 target_include_directories(starwing-3ds-game PRIVATE
     "${STARFOX_SOURCE_ROOT}/include" "${STARWING_UI_INCLUDE_DIR}")
 set(STARWING_UPDATE_DEPS_ROOT "${DEVKITPRO}/portlibs/3ds" CACHE PATH "3DS curl, Jansson and mbedTLS prefix")
@@ -116,7 +121,7 @@ target_compile_options(starwing-3ds-game PRIVATE
     -O3 -Wall -Wextra -ffunction-sections -fdata-sections)
 target_link_libraries(starwing-3ds-game PRIVATE
     starfox_core_arm retro_cpu_65816_arm retro_cpu_core_arm
-    snes_spc_core_arm starwing_citro2d citro3d ctru m)
+    snes_spc_core_arm starwing_citro2d starwing_span_binary citro3d ctru m)
 
 set(STARWING_GAME_SMDH "${CMAKE_CURRENT_BINARY_DIR}/starwing-game.smdh")
 ctr_generate_smdh(
