@@ -1,20 +1,34 @@
 <h1 align="center">Starwing 3DS</h1>
-<p align="center">Star Fox / Starwing, adapted for Nintendo 3DS.</p>
+
 <p align="center">
-  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.0">Download v1.0</a> ·
+  <strong>Set course for Lylat. Take the squadron with you.</strong><br>
+  Star Fox / Starwing, adapted for Nintendo 3DS.
+</p>
+
+<p align="center">
+  <a href="#download-and-installation">Download</a> ·
   <a href="#features">Features</a> ·
   <a href="#documentation">Documentation</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
-  <a href="CONTRIBUTING.md">Contribute</a>
+  <a href="CONTRIBUTING.md">Contribute</a> ·
+  <a href="#community-and-bug-reports">Community</a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.0"><img src="docs/badges/version.svg" alt="Version 1.0"></a>
-  <a href="docs/COMPATIBILITY.md"><img src="docs/badges/platform.svg" alt="Nintendo 3DS"></a>
-  <a href="THIRD_PARTY_NOTICES.md"><img src="docs/badges/license.svg" alt="Component-specific licenses"></a>
+  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.0"><img src="docs/badges/version.svg" alt="Release: v1.0" height="22"></a>
+  <a href="docs/COMPATIBILITY.md"><img src="docs/badges/platform.svg" alt="Nintendo 3DS" height="22"></a>
+  <a href="docs/UPDATING.md"><img src="docs/badges/updater.svg" alt="Updates: built in" height="22"></a>
+  <a href="THIRD_PARTY_NOTICES.md"><img src="docs/badges/license.svg" alt="Component-specific licenses" height="22"></a>
 </p>
 
-<img width="1672" height="941" alt="Starwing 3DS project artwork showing the dual-screen presentation" src="showcase.png" />
+<p align="center">
+  <img src="docs/images/showcase-rounded.png" alt="Starwing 3DS project artwork showing the dual-screen presentation" width="1200">
+</p>
+
+<p align="center">
+  <a href="https://estebanpdn.github.io/"><img src="docs/images/website.svg" alt="Visit Esteban’s Forge" width="142" height="46"></a>
+  <a href="https://discord.gg/BjbzfRYpV"><img src="docs/images/discord.svg" alt="Join our Discord community" width="166" height="46"></a>
+</p>
 
 A Nintendo 3DS adaptation of the SNES **Star Fox / Starwing**, based on
 KandoWontU's Starfox Enhanced, UltraStarFox, and Team SFEX's work. Made with
@@ -23,11 +37,16 @@ coverage are described in [Compatibility](docs/COMPATIBILITY.md).
 
 ## Features
 
-| Play | Nintendo 3DS integration |
-| --- | --- |
-| Original Star Fox and an experimental Star Fox EX selection. | Native 400×240 upper presentation and a separate 320×240 touch interface. |
-| Circle Pad and D-pad movement with SNES button mapping. | Native SPC audio, volume settings, and persistent options. |
-| Wide presentation, optional top HUD, and experimental stereoscopic depth. | Per-ROM EX SRAM, optional checkpoints, and local diagnostics. |
+<table>
+  <tr>
+    <td width="50%" valign="top"><strong>Take flight</strong><br>Play the Original experience, with wide presentation and optional top HUD. Star Fox EX and stereoscopic depth are experimental.</td>
+    <td width="50%" valign="top"><strong>Made for two screens</strong><br>Native 400×240 upper presentation, a separate 320×240 touch interface, Circle Pad and D-pad controls.</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><strong>Pick up and play</strong><br>Native SPC audio, volume settings, persistent options, per-ROM EX SRAM and optional checkpoints.</td>
+    <td width="50%" valign="top"><strong>Keep it current</strong><br>Built-in Stable and Experimental updates, release notes, verified downloads and local diagnostics.</td>
+  </tr>
+</table>
 
 The simulation targets 20 source ticks per second; presentation targets 60
 frames per second. These are scheduling targets, not a sustained hardware FPS
@@ -35,7 +54,14 @@ claim. Star Fox EX is not fully supported.
 
 ## Download and installation
 
-[**Download Starwing 3DS v1.0**](https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.0)
+<p>
+  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/download/v1.0/Starwing-3DS.cia"><img src="docs/images/download-cia.svg" alt="Download Starwing 3DS CIA" width="210" height="46"></a>
+  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/download/v1.0/Starwing-3DS.3dsx"><img src="docs/images/download-3dsx.svg" alt="Download Starwing 3DS for Homebrew Launcher" width="210" height="46"></a>
+</p>
+
+**v1.0 is the first public release. Bugs may occur. Performance has not been tested on Old Nintendo 3DS.**
+
+[Release notes and FBI QR](https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.0) · [Project website](https://estebanpdn.github.io/star-fox.html)
 
 1. Install `Starwing-3DS.cia` with FBI, or scan the release's QR in
    **Remote Install → Scan QR Code**.
@@ -91,9 +117,9 @@ in the [build guide](docs/BUILDING.md). The clean source checkout alone does
 not generate a playable package. See [Contributing](CONTRIBUTING.md) before
 changing timing, rendering, data formats, or the platform boundary.
 
-## Community
+## Community and bug reports
 
-[Join the project Discord](https://discord.gg/zy8BqH5ss) for updates, testing,
+[Join the project Discord](https://discord.gg/BjbzfRYpV) for updates, testing,
 suggestions, and support. Use [GitHub issues](https://github.com/EstebanPdN/starwing-3ds/issues)
 for reproducible reports. Capture shortcuts and sharing precautions are in
 [Diagnostics](docs/DIAGNOSTICS.md).
@@ -112,7 +138,6 @@ for reproducible reports. Capture shortcuts and sharing precautions are in
 component. GitHub's automatic license label refers to this detected license;
 it is not a blanket license for every file or for the game content.
 
-
 Third-party components retain their own licenses and notices. See
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the vendored
 [Citro2D license](platform/3ds/vendor/citro2d/LICENSE). No blanket MIT or GPL
@@ -124,3 +149,13 @@ Nintendo owns Star Fox / Starwing and its game content. This is an unofficial
 fan project and is not affiliated with or endorsed by Nintendo. The showcase
 image is illustrative project artwork; it does not license the depicted game
 or trademark assets for redistribution.
+
+---
+
+<p align="center">
+  <a href="https://estebanpdn.github.io/">Esteban’s Forge</a> ·
+  <a href="https://discord.gg/BjbzfRYpV">Discord</a> ·
+  <a href="CREDITS.md">Credits</a> ·
+  <a href="THIRD_PARTY_NOTICES.md">Third-party notices</a><br>
+  <sub>Star Fox / Starwing belongs to Nintendo. This is an independent fan project.</sub>
+</p>

@@ -60,7 +60,7 @@ def main() -> int:
                 problems.append(f'Personal absolute path: {name}')
         if len(data) > 5 * 1024 * 1024:
             problems.append(f'Unexpected large source file: {name}')
-        if b'\0' in data and name != 'showcase.png':
+        if b'\0' in data and name not in {'showcase.png', 'docs/images/showcase-rounded.png'}:
             problems.append(f'Unexpected binary payload: {name}')
     version = (ROOT / 'platform/3ds/version.txt').read_text().strip()
     cia = (ROOT / 'platform/3ds/cia-version.txt').read_text().strip()
