@@ -96,6 +96,13 @@ void composite_transparent_layer(const Framebuffer& source,
             && source_tags.size() == source_pixels.size();
         constexpr auto geometry_tag =
             static_cast<std::uint8_t>(PixelLayer::three_d);
+        // ARM11 has no NEON. Plain indexed overlays can transfer four
+        // pixels with a word mask, leaving every zero byte transparent.
+        // Keep ownership and overlapping self-copies on the scalar path.
+        const auto copy_words = !destination.layer_tags_enabled()
+            && !destination.tracks_write_coverage()
+            && destination.command_buffer() == nullptr
+            && &source != &destination;
         for (auto y = stored_source_top; y < stored_source_bottom; ++y) {
             auto source_index = y * source.stored_width()
                 + stored_source_left;
@@ -105,7 +112,29 @@ void composite_transparent_layer(const Framebuffer& source,
                 + static_cast<std::size_t>(
                     static_cast<std::int64_t>(stored_source_left)
                         + stored_offset_x);
-            for (auto x = stored_source_left; x < stored_source_right; ++x) {
+            auto x = stored_source_left;
+            if (copy_words) {
+                for (; x + 4U <= stored_source_right; x += 4U) {
+                    std::uint32_t colours;
+                    std::memcpy(&colours, source_pixels.data() + source_index, 4U);
+                    if (colours != 0U) {
+                        // The per-byte sum is at most 254, so its carry
+                        // cannot cross into a neighbouring pixel's lane.
+                        const auto nonzero = ((((colours & 0x7f7f7f7fU)
+                            + 0x7f7f7f7fU) | colours) >> 7U) & 0x01010101U;
+                        const auto mask = nonzero * 255U;
+                        std::uint32_t previous;
+                        std::memcpy(&previous,
+                            destination_pixels.data() + destination_index, 4U);
+                        const auto blended = (colours & mask) | (previous & ~mask);
+                        std::memcpy(destination_pixels.data() + destination_index,
+                            &blended, 4U);
+                    }
+                    source_index += 4U;
+                    destination_index += 4U;
+                }
+            }
+            for (; x < stored_source_right; ++x) {
                 const auto colour = source_pixels[source_index];
                 if (colour != 0U) {
                     destination_pixels[destination_index] = colour;

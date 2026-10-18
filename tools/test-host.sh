@@ -3,10 +3,32 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_BUILD="${STARWING_HOST_TEST_BUILD_DIR:-${ROOT}/build/host-tests}"
 mkdir -p "${TEST_BUILD}"
-for TEST in frame_pacing launch_selection screen_transfer; do
+for TEST in frame_pacing launch_selection screen_transfer presentation_metrics performance_history diagnostic_sha256 update_notes; do
   "${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra \
     "${ROOT}/tests/${TEST}_test.cpp" -o "${TEST_BUILD}/${TEST}_test"
   "${TEST_BUILD}/${TEST}_test"
   printf 'PASS: %s\n' "${TEST}"
 done
 python3 "${ROOT}/platform/3ds/tools/test_analyze_hardware_dump.py"
+
+if [[ -n "${STARWING_JANSSON_PREFIX:-}" ]]; then
+  JANSSON_FLAGS=(-I"${STARWING_JANSSON_PREFIX}/include" "${STARWING_JANSSON_PREFIX}/lib/libjansson.a")
+else
+  read -r -a JANSSON_FLAGS <<< "$(pkg-config --cflags --libs jansson)"
+fi
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra \
+  "${ROOT}/tests/update_manifest_test.cpp" \
+  "${ROOT}/platform/3ds/source/update_manifest.cpp" \
+  "${JANSSON_FLAGS[@]}" -o "${TEST_BUILD}/update_manifest_test"
+"${TEST_BUILD}/update_manifest_test"
+
+"${CXX:-c++}" -std=c++20 -O1 -g -Wall -Wextra \
+  '-DSTARWING_BUILD_VERSION="1.0"' -DSTARWING_CIA_VERSION=81 \
+  -I"${ROOT}/tests/updater_host" \
+  "${ROOT}/tests/updater_install_test.cpp" \
+  "${ROOT}/platform/3ds/source/updater_3ds.cpp" \
+  "${ROOT}/platform/3ds/source/update_manifest.cpp" \
+  "${JANSSON_FLAGS[@]}" -lcurl -o "${TEST_BUILD}/update_install_test"
+FIXTURES="$(mktemp -d "${TEST_BUILD}/update-fixtures.XXXXXX")"
+trap 'rm -rf "${FIXTURES}"' EXIT
+(cd "${FIXTURES}" && "${TEST_BUILD}/update_install_test")

@@ -88,11 +88,3 @@ for Sunlit's patch. The pack README also thanks qwertymodo for MSUPCM++.
 
 Library authors, pinned revisions, licences, and the MSU asset notice are in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
-## Starwing 3DS adaptation
-
-- Esteban PDN — Nintendo 3DS adaptation, touch interface, diagnostics, rendering/audio integration, and repository maintenance.
-- devkitPro contributors — devkitARM, libctru, Citro3D, and Citro2D.
-- Codex — development assistance.
-
-Original-game, Star Fox EX, UltraStarFox, and native-engine authorship remains credited in the sections above.

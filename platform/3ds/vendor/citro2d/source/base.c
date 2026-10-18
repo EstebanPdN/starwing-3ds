@@ -1,4 +1,5 @@
 #include "internal.h"
+#include "../../../source/cache_3ds.h"
 #include "render2d_shbin.h"
 
 C2Di_Context __C2Di_Context;
@@ -27,9 +28,9 @@ static void C2Di_FrameEndHook(void* unused)
 	Result vr = 0, ir = 0;
 	frameCacheFlushBytes = ctx->vtxBufPos * sizeof(C2Di_Vertex)
 		+ ctx->idxBufPos * sizeof(u16);
-	if (ctx->vtxBufPos) vr = GSPGPU_FlushDataCache(ctx->vtxBuf,
+	if (ctx->vtxBufPos) vr = starwing_clean_device_cache(ctx->vtxBuf,
 		ctx->vtxBufPos * sizeof(C2Di_Vertex));
-	if (ctx->idxBufPos) ir = GSPGPU_FlushDataCache(ctx->idxBuf,
+	if (ctx->idxBufPos) ir = starwing_clean_device_cache(ctx->idxBuf,
 		ctx->idxBufPos * sizeof(u16));
 	if (R_FAILED(vr) || R_FAILED(ir)) {
 		++frameCacheFlushFallbacks;

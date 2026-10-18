@@ -78,6 +78,10 @@ AccessControlInfo:
     FlushProcessDataCache: 84
     SendSyncRequest: 50
   ServiceAccessControl:
+    - ac:u
+    - soc:U
+    - ssl:C
+    - am:net
     - APT:U
     - cfg:u
     - csnd:SND
@@ -93,6 +97,10 @@ SystemControlInfo:
   RemasterVersion: 0
   StackSize: 0x40000
   Dependency:
+    ac: 0x0004013000002402
+    am: 0x0004013000001502
+    soc: 0x0004013000002e02
+    ssl: 0x0004013000002f02
     cfg: 0x0004013000001702
     dsp: 0x0004013000001a02
     gsp: 0x0004013000001c02

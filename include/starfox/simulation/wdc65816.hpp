@@ -134,6 +134,9 @@ public:
     [[nodiscard]] std::span<const std::uint8_t> cartridge_ram() const noexcept;
     [[nodiscard]] std::vector<ApuPortWrite> take_apu_port_writes();
     [[nodiscard]] std::vector<MsuRegisterWrite> take_msu_register_writes();
+    // SPC-only frontends must still consume the cartridge's MSU event log.
+    // Keep the largest packet allocation for reuse without changing registers.
+    void discard_msu_register_writes() noexcept;
     void set_apu_clock_offset(std::uint32_t clocks) noexcept;
     void set_apu_output_ports(
         const std::array<std::uint8_t, 4>& ports) noexcept;
@@ -218,6 +221,12 @@ public:
         bool service_transfer_flag = false);
 
 private:
+    friend class MapVm;
+    [[nodiscard]] std::uint8_t open_bus() const noexcept;
+    void restore_open_bus(std::uint8_t value) noexcept;
+    template<bool CollisionCall, bool AccelerateTransferCall> std::size_t call_impl(
+        std::uint32_t address, Wdc65816Registers& registers,
+        std::size_t instruction_limit, bool service_transfer_flag, bool long_return);
     std::size_t call(
         std::uint32_t address,
         Wdc65816Registers& registers,

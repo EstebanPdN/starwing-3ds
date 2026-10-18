@@ -25,10 +25,13 @@ the permission does not extend to Nintendo's cartridge data or other assets.
   and generated game data.
 - Private HOME Menu model/audio, UI artwork payloads, and presentation binaries.
 - Saves, autosaves, settings, dumps, memory pages, credentials, caches, builds,
-  installable packages, and the original engine's Git history.
+  and the original engine's Git history.
 - Local operational instructions and private investigation records.
 
 The showcase image documents the project's existing visual presentation. It
 is separate from playable game data and is not a measured physical-console
 result. Original third-party copyright notices and all upstream credits are
 retained; the 3DS work is credited separately.
+
+Public installable releases are separate GitHub release assets. User ROMs,
+companions, saves, and diagnostic process memory remain excluded.

@@ -23,7 +23,7 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
     std::vector<Bg2Rect>& output, std::size_t capacity,
     std::uint32_t target_width, std::uint32_t target_height,
     std::int32_t origin_x, std::int32_t origin_y,
-    bool cache_rolled_ground_samples) {
+    bool cache_rolled_ground_samples, bool use_map_texture, bool map_is_opaque) {
     output.clear();
     if (ppu.background_mode != 2U || (ppu.mosaic & 0x02U) != 0U)
         return false;
@@ -115,6 +115,50 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
 
     auto& planned = output;
     planned.reserve(std::min<std::size_t>(capacity, 16384U));
+    // Rolled columns and HDMA bands split flat sky/floor characters at
+    // different tile boundaries. Resolve those opaque characters once and
+    // join their runs before they become thousands of GPU rectangles.
+    // Colour zero keeps its ordinary textured rectangle and transparency.
+    std::array<std::int8_t, 1024U> flat_characters;
+    flat_characters.fill(-2);
+    const auto flat_character = [&](std::uint16_t character) {
+        auto& cached = flat_characters[character];
+        if (cached != -2) return cached;
+        const auto base = (static_cast<std::uint32_t>(
+            ppu.bg2_character_base) * 2U + character * 32U) & 0xffffU;
+        const std::array<std::uint32_t, 4U> offsets{0U, 1U, 16U, 17U};
+        unsigned colour = 0U;
+        for (unsigned plane = 0U; plane < 4U; ++plane) {
+            const auto bits = ppu.vram[(base + offsets[plane]) & 0xffffU];
+            if (bits != 0U && bits != 0xffU) return cached = -1;
+            for (unsigned y = 1U; y < 8U; ++y)
+                if (ppu.vram[(base + offsets[plane] + y * 2U)
+                        & 0xffffU] != bits) return cached = -1;
+            if (bits != 0U) colour |= 1U << plane;
+        }
+        return cached = static_cast<std::int8_t>(colour);
+    };
+    constexpr auto no_flat_run = std::numeric_limits<std::size_t>::max();
+    std::array<std::size_t, 240U> flat_run_by_y;
+    flat_run_by_y.fill(no_flat_run);
+    const auto append_rectangle = [&](const Bg2Rect& rectangle) {
+        if (rectangle.solid) {
+            auto& prior_index = flat_run_by_y[rectangle.y];
+            if (prior_index != no_flat_run) {
+                auto& prior = planned[prior_index];
+                if (prior.x + prior.width == rectangle.x
+                    && prior.height == rectangle.height
+                    && prior.solid_colour == rectangle.solid_colour) {
+                    prior.width += rectangle.width;
+                    return true;
+                }
+            }
+            if (planned.size() == capacity) return false;
+            prior_index = planned.size();
+        } else if (planned.size() == capacity) return false;
+        planned.push_back(rectangle);
+        return true;
+    };
     for (std::uint32_t band_top = 0U; band_top < target_height;) {
         const auto band_scroll_x = row_scroll_x_values[band_top];
         const auto band_scroll_y = row_scroll_y_values[band_top];
@@ -122,7 +166,10 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
         while (band_end < target_height
             && (!ppu.bg2_horizontal_offsets_enabled
                 || row_scroll_x_values[band_end] == band_scroll_x)
-            && (!ppu.bg2_scanline_scroll_enabled
+            // A fitted column supplies Y for every output pixel. Its value
+            // supersedes scanline Y, so splitting on that unused HDMA table
+            // can create hundreds of bands without changing a single sample.
+            && (fitted_samples != 0U || !ppu.bg2_scanline_scroll_enabled
                 || row_scroll_y_values[band_end] == band_scroll_y)) {
             ++band_end;
         }
@@ -145,6 +192,42 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
                 && (vertical_offsets[index] & 0x4000U) != 0U) {
                 column_scroll_y = vertical_offsets[index] & 0x1fffU;
             }
+            if (use_map_texture) {
+                // An immutable, predecoded tile map already contains tile
+                // flips and palette indices. Split only where the sampled
+                // scroll changes or the source map wraps, never every 8 px.
+                auto width = std::min(target_width - x, x_mask + 1U - source_x);
+                for (std::uint32_t dx = 1U; dx < width; ++dx) {
+                    const auto next_logical_x = static_cast<std::int32_t>(x + dx) - origin_x;
+                    const auto next_column = next_logical_x >= 0
+                        ? (static_cast<std::uint32_t>(next_logical_x) + offset_phase) / 8U : 33U;
+                    const auto next_index = next_column == 0U ? 0U : next_column - 1U;
+                    auto next_y = band_scroll_y;
+                    if (column_offsets[x + dx] != no_column_offset) next_y = column_offsets[x + dx];
+                    else if (ppu.bg2_vertical_offsets_enabled && next_index < vertical_offsets.size()
+                        && (vertical_offsets[next_index] & 0x4000U) != 0U)
+                        next_y = vertical_offsets[next_index] & 0x1fffU;
+                    if (next_y != column_scroll_y) { width = dx; break; }
+                }
+                for (auto y = band_top; y < band_end;) {
+                    const auto source_y = static_cast<std::uint32_t>(
+                        static_cast<std::int32_t>(y) - origin_y + column_scroll_y) & y_mask;
+                    const auto height = std::min(band_end - y, y_mask + 1U - source_y);
+                    if (planned.size() == capacity) { output.clear(); return false; }
+                    Bg2Rect rectangle{};
+                    rectangle.x = static_cast<std::uint16_t>(x);
+                    rectangle.y = static_cast<std::uint16_t>(y);
+                    rectangle.width = static_cast<std::uint16_t>(width);
+                    rectangle.height = static_cast<std::uint16_t>(height);
+                    rectangle.source_x = static_cast<std::uint16_t>(source_x);
+                    rectangle.source_y = static_cast<std::uint16_t>(source_y);
+                    rectangle.map_sample = true;
+                    planned.push_back(rectangle);
+                    y += height;
+                }
+                x += width;
+                continue;
+            }
             auto width = std::min<std::uint32_t>({target_width - x,
                 8U - (source_x & 7U), 8U - (column_coordinate & 7U)});
             if (fitted_samples != 0U) {
@@ -158,6 +241,13 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
             if (logical_x < 0 && origin_x > 0)
                 width = std::min(width,
                     static_cast<std::uint32_t>(origin_x - static_cast<std::int32_t>(x)));
+            Bg2Rect flat_run{};
+            const auto flush_flat_run = [&] {
+                if (flat_run.height == 0U) return true;
+                const bool ok = append_rectangle(flat_run);
+                flat_run.height = 0U;
+                return ok;
+            };
             for (auto y = band_top; y < band_end;) {
                 const auto logical_y = static_cast<std::int32_t>(y) - origin_y;
                 const auto source_y = static_cast<std::uint32_t>(logical_y
@@ -184,11 +274,7 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
                         + (sub_x >= 8U ? 1U : 0U)
                         + (sub_y >= 8U ? 16U : 0U)) & 0x03ffU);
                 }
-                if (planned.size() == capacity) {
-                    output.clear();
-                    return false;
-                }
-                planned.push_back({
+                Bg2Rect rectangle{
                     static_cast<std::uint16_t>(x),
                     static_cast<std::uint16_t>(y),
                     static_cast<std::uint16_t>(width),
@@ -199,9 +285,28 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
                         ? 7U - (source_x & 7U) : (source_x & 7U)),
                     static_cast<std::uint8_t>(reverse_y
                         ? 7U - (source_y & 7U) : (source_y & 7U)),
-                    reverse_x, reverse_y});
+                    reverse_x, reverse_y};
+                const auto flat_colour = flat_character(character);
+                if (flat_colour > 0) {
+                    rectangle.solid = true;
+                    rectangle.solid_colour = static_cast<std::uint8_t>(
+                        rectangle.palette_bank * 16U + flat_colour);
+                    if (flat_run.height != 0U
+                        && flat_run.solid_colour == rectangle.solid_colour) {
+                        flat_run.height += rectangle.height;
+                    } else {
+                        if (!flush_flat_run()) { output.clear(); return false; }
+                        flat_run = rectangle;
+                    }
+                } else {
+                    if (!flush_flat_run() || !append_rectangle(rectangle)) {
+                        output.clear();
+                        return false;
+                    }
+                }
                 y += height;
             }
+            if (!flush_flat_run()) { output.clear(); return false; }
             x += width;
         }
         band_top = band_end;
@@ -220,18 +325,16 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
         std::array<std::uint16_t, 4096U> sampled_tile_words;
         std::array<std::uint64_t, 64U> sampled_tile_words_valid{};
         std::array<std::uint8_t, 1024U * 64U> sampled_character_pixels;
+        std::array<bool, 1024U> sampled_characters_opaque;
         std::array<std::uint64_t, 16U> sampled_characters_valid{};
-        // -2: not decoded; -1: mixed; 0..15: identical texels. Ground and
-        // sky characters are often flat even when the camera rolls, so their
-        // sample is independent of source coordinates and tile flips.
-        std::array<std::int8_t, 1024U> uniform_characters;
-        uniform_characters.fill(-2);
         // Consecutive pixels in a rolled column often share one map entry.
         std::uint32_t last_tile_entry = 4096U;
         std::uint16_t last_tile_word = 0U;
         const auto sample_colour = [&](std::uint32_t source_x,
-                                       std::uint32_t source_y, bool* uniform_sample = nullptr) {
+                                       std::uint32_t source_y, bool* uniform_sample = nullptr,
+                                       bool* opaque_sample = nullptr) {
             if (uniform_sample) *uniform_sample = false;
+            if (opaque_sample) *opaque_sample = false;
             const auto tile_x = source_x >> tile_shift;
             const auto tile_y = source_y >> tile_shift;
             const auto page = (tile_x >> 5U) + (tile_y >> 5U) * pages_wide;
@@ -263,9 +366,10 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
             // Full 8x8 characters of one colour do not depend on pixel
             // coordinates or flips. Their palette still belongs to this tile.
             if (cache_rolled_ground_samples && !ppu.bg2_tile_size_16) {
-                const auto uniform = uniform_characters[tile & 0x03ffU];
+                const auto uniform = flat_character(tile & 0x03ffU);
                 if (uniform >= 0) {
                     if (uniform_sample) *uniform_sample = true;
+                    if (opaque_sample) *opaque_sample = uniform != 0;
                     return uniform == 0 ? std::uint8_t{0U}
                         : static_cast<std::uint8_t>(
                             ((tile >> 10U) & 7U) * 16U + uniform);
@@ -279,6 +383,16 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
             if (ppu.bg2_tile_size_16) character = (character
                 + (pixel_x >= 8U ? 1U : 0U)
                 + (pixel_y >= 8U ? 16U : 0U)) & 0x03ffU;
+            if (cache_rolled_ground_samples && ppu.bg2_tile_size_16) {
+                const auto uniform = flat_character(character);
+                if (uniform >= 0) {
+                    if (uniform_sample) *uniform_sample = true;
+                    if (opaque_sample) *opaque_sample = uniform != 0;
+                    return uniform == 0 ? std::uint8_t{0U}
+                        : static_cast<std::uint8_t>(
+                            ((tile >> 10U) & 7U) * 16U + uniform);
+                }
+            }
             pixel_x &= 7U;
             pixel_y &= 7U;
             std::uint8_t colour{};
@@ -288,7 +402,7 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
                 auto& character_bits =
                     sampled_characters_valid[character >> 6U];
                 if ((character_bits & character_mask) == 0U) {
-                    int uniform = -2;
+                    bool opaque = true;
                     for (std::uint32_t row = 0U; row < 8U; ++row) {
                         const auto base = (static_cast<std::uint32_t>(
                             ppu.bg2_character_base) + character * 16U + row)
@@ -297,6 +411,7 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
                         const auto low_1 = ppu.vram[(base + 1U) & 0xffffU];
                         const auto high_0 = ppu.vram[(base + 16U) & 0xffffU];
                         const auto high_1 = ppu.vram[(base + 17U) & 0xffffU];
+                        opaque = opaque && (low_0 | low_1 | high_0 | high_1) == 0xffU;
                         for (std::uint32_t column = 0U; column < 8U;
                              ++column) {
                             const auto mask = static_cast<std::uint8_t>(
@@ -308,15 +423,12 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
                                     | ((low_1 & mask) != 0U ? 2U : 0U)
                                     | ((high_0 & mask) != 0U ? 4U : 0U)
                                     | ((high_1 & mask) != 0U ? 8U : 0U));
-                            const auto decoded = sampled_character_pixels[
-                                character * 64U + row * 8U + column];
-                            if (uniform == -2) uniform = decoded;
-                            else if (uniform != decoded) uniform = -1;
                         }
                     }
-                    uniform_characters[character] = static_cast<std::int8_t>(uniform);
+                    sampled_characters_opaque[character] = opaque;
                     character_bits |= character_mask;
                 }
+                if (opaque_sample) *opaque_sample = sampled_characters_opaque[character];
                 colour = sampled_character_pixels[character * 64U
                     + pixel_y * 8U + pixel_x];
             } else {
@@ -331,7 +443,7 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
                     | (bit(16U) ? 4U : 0U) | (bit(17U) ? 8U : 0U));
             }
             if (uniform_sample && cache_rolled_ground_samples)
-                *uniform_sample = uniform_characters[character] >= 0;
+                *uniform_sample = flat_characters[character] >= 0;
             return colour == 0U ? std::uint8_t{0U}
                 : static_cast<std::uint8_t>(((tile >> 10U) & 7U) * 16U
                     + colour);
@@ -407,11 +519,32 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
                     + fixed_scroll_y) & y_mask;
             };
             const auto colour_at = [&](std::uint32_t y,
-                                       std::uint32_t source_y, bool* uniform_sample = nullptr) {
+                                       std::uint32_t source_y, bool* uniform_sample = nullptr,
+                                       bool* opaque_sample = nullptr) {
                 const auto source_x = static_cast<std::uint32_t>(logical_x
                     + row_scroll_x_values[y]) & x_mask;
-                return sample_colour(source_x, source_y, uniform_sample);
+                return sample_colour(source_x, source_y, uniform_sample, opaque_sample);
             };
+            if (use_map_texture && map_is_opaque && !ppu.bg2_tile_size_16
+                && fixed_vertical_scroll) {
+                // Every preceding sample is nonzero, even with horizontal
+                // HDMA changes. The last source pixel before the first
+                // lower-edge wrap is therefore the exact carry colour.
+                // A viewport is shorter than this map, so there is at most
+                // one wrap in this ground segment. Avoid rescanning opaque
+                // characters for every row of every rolled column.
+                const auto first_source_y = fixed_source_y_at(first_ground_y);
+                const auto wrap_y = first_ground_y
+                    + (first_source_y == 0U && first_ground_y != 0U
+                        ? 0U : y_mask + 1U - first_source_y);
+                if (wrap_y < target_height
+                    && !append_solid(x, wrap_y, target_height - wrap_y,
+                        colour_at(wrap_y - 1U, y_mask))) {
+                    output.clear();
+                    return false;
+                }
+                continue;
+            }
             auto rolling_source_y = fixed_vertical_scroll
                 ? fixed_source_y_at(first_ground_y) : 0U;
             std::int32_t previous_source_y = first_ground_y == 0U ? -1
@@ -469,17 +602,24 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
                 std::uint32_t sample_height = 1U;
                 if (!wrapped) {
                     bool uniform_sample = false;
-                    const auto sampled = colour_at(y, source_y, &uniform_sample);
+                    bool opaque_sample = false;
+                    auto sampled = colour_at(y, source_y, &uniform_sample, &opaque_sample);
                     // A uniform 8x8 character cannot change until its next
                     // sub-tile row or horizontal HDMA change. Resolve that
                     // run once while retaining palette, transparency and wrap
                     // boundaries; the uncached path remains a pixel oracle.
-                    if (uniform_sample && fixed_vertical_scroll) {
+                    if ((uniform_sample || opaque_sample) && fixed_vertical_scroll) {
                         const auto limit = std::min(target_height - y,
                             8U - (source_y & 7U));
                         while (sample_height < limit
                             && row_scroll_x_values[y + sample_height]
                                 == row_scroll_x_values[y]) ++sample_height;
+                        // An opaque patterned tile also needs no carry
+                        // corrections inside this span. Preserve its LAST
+                        // pixel, which a later transparent/wrapped row uses.
+                        if (!uniform_sample && sample_height > 1U)
+                            sampled = colour_at(y + sample_height - 1U,
+                                (source_y + sample_height - 1U) & y_mask);
                     }
                     if (sampled != 0U) {
                         last_opaque = sampled;

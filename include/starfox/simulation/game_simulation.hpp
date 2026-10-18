@@ -265,10 +265,35 @@ public:
     [[nodiscard]] const std::array<double, 11>& tick_phase_ms() const noexcept {
         return tick_phase_ms_;
     }
+    struct TransferRoutineSample {
+        std::uint64_t start_system_tick{}, elapsed_system_ticks{}, tick_call_sequence{};
+        std::uint64_t returned_instructions{};
+        std::uint32_t source_address{}, instruction_limit{};
+        std::uint8_t flow_state{}, request_flags{};
+        bool completed{}; // On exception, partial instruction count is unknown.
+    };
+    struct TransferRoutineProfile {
+        std::uint64_t calls{}, errors{};
+        TransferRoutineSample last{}, maximum{};
+    };
+    // Dump-only records of the RESTART_L and DOBGREQ bridge boundaries.
+    // Wall time includes bridge synchronization and thread preemption.
+    // Not serialized; a replacement constructed for state load starts fresh.
+    [[nodiscard]] const std::array<TransferRoutineProfile, 2>& transfer_routine_profiles() const noexcept {
+        return transfer_routine_profiles_;
+    }
+    [[nodiscard]] std::uint64_t diagnostic_tick_call_sequence() const noexcept {
+        return diagnostic_tick_call_sequence_;
+    }
 private:
     // setup, object, strategy, view, draw, tail total, then tail sub-stages:
     // window wipe, dialogue, palette/OAM, collisions, and flow bookkeeping.
     std::array<double, 11> tick_phase_ms_{};
+    std::array<TransferRoutineProfile, 2> transfer_routine_profiles_{};
+    std::uint64_t diagnostic_tick_call_sequence_{};
+    void call_profiled_transfer_routine(std::size_t profile_index,
+        std::uint32_t address, Wdc65816Registers& registers,
+        std::uint32_t instruction_limit, std::uint8_t request_flags);
 public:
     GameSimulation(
         const assets::RomImage& rom,

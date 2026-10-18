@@ -80,7 +80,7 @@ std::size_t NativeStrategyScheduler::tick_object(
                 static_cast<std::uint8_t>(map->read_native_byte(address) | 1U));
         }
     } restore;
-    if (objects_->at(object).strategy_address == escape_camera_strategy_
+    if (native_state_->strategy_address(object) == escape_camera_strategy_
         && (native_state_->read_native_byte(game_flags_2_) & 1U) != 0U
         && !native_state_->is_native_object_active(
             native_state_->read_native_word(escape_anchor_))) {
@@ -91,10 +91,11 @@ std::size_t NativeStrategyScheduler::tick_object(
     }
     native_state_->write_native_byte(alien_dead_, 0);
     try {
-        return native_state_->call_native_object_routine(
+        return native_state_->call_native_object_routine_impl(
             do_strategy_, object, 0x7eU, 0x24U,
-            object_instruction_limit_, sync_objects_before_call);
+            object_instruction_limit_, sync_objects_before_call, true);
     } catch (const std::exception& error) {
+        native_state_->abort_strategy_batch();
         std::ostringstream message;
         const auto& state = objects_->at(object);
         const auto stratmem = static_cast<std::uint16_t>(state.extended[48])
@@ -151,7 +152,20 @@ std::size_t NativeStrategyScheduler::tick_object(
     }
 }
 
-StrategyTickStats NativeStrategyScheduler::tick_all(bool force_full_object_sync) {
+StrategyTickStats NativeStrategyScheduler::tick_all(
+    bool force_full_object_sync, bool batch_object_payloads) {
+    // No host payload consumer runs between these private calls. The scheduler
+    // needs live list membership/generations and reads strategy addresses from
+    // WRAM; native code itself always reads and writes the same WRAM image.
+    struct PayloadBatch {
+        MapVm* state{};
+        ~PayloadBatch() { if (state) state->finish_strategy_batch(); }
+    } batch;
+    if (batch_object_payloads && !force_full_object_sync
+        && objects_->active_count() >= 8U) {
+        native_state_->begin_strategy_batch();
+        batch.state = native_state_;
+    }
     StrategyTickStats result;
     std::array<std::uint64_t, kMaximumObjects + 1> visited{};
     const auto next_unvisited = [&]() {
@@ -188,7 +202,11 @@ StrategyTickStats NativeStrategyScheduler::tick_all(bool force_full_object_sync)
         }
         const auto next = objects_->next_active(object);
         if (native_state_->read_native_byte(alien_dead_) != 0) {
+            // Removal's public bridge canonicalizes native list links before
+            // running REMOVEDEADAL, so retain that boundary exactly.
+            native_state_->finish_strategy_batch();
             result.instructions += native_state_->call_native_object_routine(remove_dead_, object);
+            if (batch.state) native_state_->begin_strategy_batch();
             sync_objects_before_call = false;
             ++result.objects_removed;
         }

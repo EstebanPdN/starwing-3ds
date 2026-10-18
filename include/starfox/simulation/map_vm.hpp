@@ -37,6 +37,13 @@ private:
     std::uint32_t strategies_table_{};
 };
 
+// Diagnostic totals are hints, not saved gameplay state. Wide totals preserve
+// useful before/after differences during long physical-hardware sessions.
+struct StrategyBatchCounters {
+    std::uint64_t batches{}, batched_calls{}, list_imports{};
+    std::uint64_t payload_passes{}, payload_slots{}, checkpoint_bytes{};
+};
+
 class MapVm {
     friend class GameSimulation;
 public:
@@ -49,6 +56,9 @@ public:
 
     void start(std::uint32_t address, ObjectHandle player);
     [[nodiscard]] std::vector<std::uint8_t> save_state() const;
+    [[nodiscard]] const StrategyBatchCounters& strategy_batch_counters() const noexcept {
+        return strategy_batch_counters_;
+    }
     // ObjectPool is restored separately by the enclosing game transaction.
     void load_state(std::span<const std::uint8_t> bytes);
     void set_player(ObjectHandle player);
@@ -111,6 +121,9 @@ public:
     }
     [[nodiscard]] std::vector<MsuRegisterWrite> take_msu_register_writes() {
         return cpu_.take_msu_register_writes();
+    }
+    void discard_msu_register_writes() noexcept {
+        cpu_.discard_msu_register_writes();
     }
     void set_apu_clock_offset(std::uint32_t clocks) noexcept {
         cpu_.set_apu_clock_offset(clocks);
@@ -231,6 +244,18 @@ public:
         bool sync_objects = false);
 
 private:
+    friend class NativeStrategyScheduler;
+    void begin_strategy_batch();
+    void finish_strategy_batch() noexcept;
+    void abort_strategy_batch() noexcept;
+    void capture_strategy_checkpoint();
+    [[nodiscard]] std::uint32_t strategy_address(ObjectHandle object);
+    std::size_t call_native_object_routine_impl(
+        std::uint32_t address, ObjectHandle object, std::uint8_t data_bank,
+        std::uint8_t status, std::size_t instruction_limit,
+        bool sync_objects_before_call, bool scheduler_call);
+    void sync_object_lists_from_cpu();
+    void sync_object_payloads_from_cpu(bool checkpoint = false);
     void execute_ready_records();
     template<class Archive,class Self> static void transfer_state(Archive& archive,Self& self);
     void spawn_table_object(std::uint8_t opcode);
@@ -337,6 +362,14 @@ private:
     std::vector<ObjectHandle> object_bridge_active_scratch_;
     std::vector<ObjectHandle> object_bridge_free_scratch_;
     bool object_pool_needs_native_sync_{};
+    // Scheduler-private hint only, never serialized. Native WRAM remains
+    // authoritative during the batch; lists/generations are imported at each
+    // boundary. The bounded raw checkpoint preserves pre-call error recovery.
+    StrategyBatchCounters strategy_batch_counters_{};
+    bool strategy_batch_active_{};
+    bool strategy_batch_dirty_{};
+    std::array<std::uint8_t, kMaximumObjects * 57U> strategy_checkpoint_base_{};
+    std::array<std::uint8_t, kMaximumObjects * 57U> strategy_checkpoint_extended_{};
     Wdc65816 cpu_;
 };
 

@@ -1,4 +1,5 @@
 #include "diagnostics_3ds.hpp"
+#include "diagnostic_sha256.hpp"
 
 #include <algorithm>
 #include <array>
@@ -206,11 +207,17 @@ bool hash_file(const std::string& dir, const char* name, std::string& hashes) {
     const long length = std::ftell(file);
     if (length < 0 || length > static_cast<long>(chunk_size)
         || std::fseek(file, 0, SEEK_SET) != 0) { std::fclose(file); return false; }
-    std::vector<u8> data(static_cast<std::size_t>(length));
-    const bool read = std::fread(data.data(), 1, data.size(), file) == data.size();
-    std::fclose(file);
-    u8 hash[32]{};
-    if (!read || R_FAILED(FSUSER_UpdateSha256Context(data.data(), data.size(), hash))) return false;
+    DiagnosticSha256 sha;
+    std::array<u8, 16U * 1024U> data;
+    std::size_t total = 0U;
+    while (const auto read = std::fread(data.data(), 1, data.size(), file)) {
+        sha.update({data.data(), read});
+        total += read;
+    }
+    const bool read_ok = std::ferror(file) == 0 && total == static_cast<std::size_t>(length);
+    const bool closed = std::fclose(file) == 0;
+    if (!read_ok || !closed) return false;
+    const auto hash = sha.finish();
     char hex[65];
     for (unsigned i = 0; i < 32; ++i)
         std::snprintf(hex + i * 2, sizeof(hex) - i * 2, "%02x", hash[i]);
@@ -403,13 +410,16 @@ Diagnostics3ds::Result Diagnostics3ds::capture(DiagnosticKind3ds kind,
     }
     if (!unique || !make_dir(base + ".partial")) return {false, {}, "Cannot create capture"};
     const std::string dir = base + ".partial";
-    const std::string manifest = std::string("{\"schema\":1,\"kind\":")
+    const std::string manifest = std::string("{\"schema\":2,\"kind\":")
         + json_string(kind == DiagnosticKind3ds::full ? "full" : "quick")
-        + ",\"build\":" + json_string(report.build) + ",\"complete\":false}\n";
+        + ",\"build\":" + json_string(report.build)
+        + ",\"build_fingerprint\":" + json_string(report.build_fingerprint)
+        + ",\"complete\":false}\n";
     if (!write_text(dir + "/manifest.json", manifest.c_str()))
         return {false, dir, "Manifest write failed"};
     const bool common = write_text(dir + "/runtime.json", report.runtime_json)
         && write_text(dir + "/performance.csv", report.performance_csv)
+        && write_text(dir + "/presentation.csv", report.presentation_csv)
         && screenshot(dir + "/top.png", GFX_TOP, 400, report.top_framebuffer,
             report.framebuffer_snapshots)
         && screenshot(dir + "/bottom.png", GFX_BOTTOM, 320, report.bottom_framebuffer,
@@ -417,25 +427,46 @@ Diagnostics3ds::Result Diagnostics3ds::capture(DiagnosticKind3ds kind,
         && write_text(dir + "/renderer.txt", report.renderer_text)
         && write_text(dir + "/audio.txt", report.audio_text)
         && write_text(dir + "/config.txt", report.config_text)
+        && write_text(dir + "/memory.txt", report.memory_text)
+        && write_text(dir + "/flow-profile.txt", report.flow_profile_text)
         && log_tail(dir + "/log-tail.txt", report.log_path);
     if (!common) return {false, dir, "Capture file or physical framebuffer failed"};
+    if (report.game_state && report.game_state_bytes
+        && !write_bytes(dir + "/game-state.bin", report.game_state, report.game_state_bytes))
+        return {false, dir, "Game RAM snapshot failed"};
+    if (report.ppu_state && report.ppu_state_bytes
+        && !write_bytes(dir + "/ppu-state.bin", report.ppu_state, report.ppu_state_bytes))
+        return {false, dir, "PPU RAM snapshot failed"};
+    if (report.spc_state && report.spc_state_bytes
+        && !write_bytes(dir + "/spc-state.bin", report.spc_state, report.spc_state_bytes))
+        return {false, dir, "SPC RAM snapshot failed"};
     std::string hashes, error;
     if (kind == DiagnosticKind3ds::full
         && !full_memory(dir, hashes, error, memory, report))
         return {false, dir, error};
-    if (kind == DiagnosticKind3ds::full) {
+    {
         progress("CHECKING FILES", memory, memory);
-        constexpr const char* common_names[] = {"runtime.json", "performance.csv",
+        constexpr const char* common_names[] = {"runtime.json", "performance.csv", "presentation.csv",
             "top.png", "bottom.png", "renderer.txt", "audio.txt", "config.txt",
-            "log-tail.txt", "memory-map.txt"};
+            "log-tail.txt", "memory.txt", "flow-profile.txt"};
         for (const char* name : common_names)
             if (!hash_file(dir, name, hashes)) return {false, dir, "Checksum failed"};
+        if (kind == DiagnosticKind3ds::full
+            && !hash_file(dir, "memory-map.txt", hashes)) return {false, dir, "Memory map checksum failed"};
+        if (report.game_state && report.game_state_bytes
+            && !hash_file(dir, "game-state.bin", hashes)) return {false, dir, "Game RAM checksum failed"};
+        if (report.ppu_state && report.ppu_state_bytes
+            && !hash_file(dir, "ppu-state.bin", hashes)) return {false, dir, "PPU RAM checksum failed"};
+        if (report.spc_state && report.spc_state_bytes
+            && !hash_file(dir, "spc-state.bin", hashes)) return {false, dir, "SPC RAM checksum failed"};
         if (!write_text(dir + "/SHA256SUMS.txt", hashes.c_str()))
             return {false, dir, "Checksum list write failed"};
     }
-    const std::string done = std::string("{\"schema\":1,\"kind\":")
+    const std::string done = std::string("{\"schema\":2,\"kind\":")
         + json_string(kind == DiagnosticKind3ds::full ? "full" : "quick")
-        + ",\"build\":" + json_string(report.build) + ",\"complete\":true}\n";
+        + ",\"build\":" + json_string(report.build)
+        + ",\"build_fingerprint\":" + json_string(report.build_fingerprint)
+        + ",\"complete\":true}\n";
     if (!write_text(dir + "/manifest.json.tmp", done.c_str())
         || std::remove((dir + "/manifest.json").c_str()) != 0
         || std::rename((dir + "/manifest.json.tmp").c_str(),

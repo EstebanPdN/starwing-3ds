@@ -10,6 +10,17 @@
 namespace starfox::assets {
 namespace {
 
+constexpr auto crc32_table = [] {
+    std::array<std::uint32_t, 256> table{};
+    for (std::uint32_t value = 0; value < table.size(); ++value) {
+        auto bits = value;
+        for (unsigned bit = 0; bit < 8; ++bit)
+            bits = (bits >> 1U) ^ (0xedb88320U & (0U - (bits & 1U)));
+        table[value] = bits;
+    }
+    return table;
+}();
+
 class PatchReader {
 public:
     explicit PatchReader(std::span<const std::uint8_t> bytes) : bytes_(bytes) {}
@@ -86,14 +97,8 @@ std::int64_t signed_offset(std::uint64_t encoded) {
 
 std::uint32_t crc32(std::span<const std::uint8_t> bytes) noexcept {
     auto result = std::uint32_t{0xffffffffU};
-    for (const auto byte : bytes) {
-        result ^= byte;
-        for (std::uint32_t bit = 0; bit < 8U; ++bit) {
-            const auto mask = static_cast<std::uint32_t>(
-                -static_cast<std::int32_t>(result & 1U));
-            result = (result >> 1U) ^ (0xedb88320U & mask);
-        }
-    }
+    for (const auto byte : bytes)
+        result = (result >> 8U) ^ crc32_table[(result ^ byte) & 0xffU];
     return result ^ 0xffffffffU;
 }
 

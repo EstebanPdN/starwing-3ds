@@ -35,6 +35,7 @@ static Result GSPGPU_FlushDataCache(void* ptr,size_t bytes) {
     assert(call_count<3);addresses[call_count]=ptr;sizes[call_count]=bytes;++call_count;
     return call_count==fail_call?-1:0;
 }
+static Result starwing_clean_device_cache(const void* ptr,u32 bytes) { return GSPGPU_FlushDataCache((void*)ptr,bytes); }
 HOOK
 int main(void) {
     _Static_assert(sizeof(C2Di_Vertex)==32,"actual GPU vertex stride changed");

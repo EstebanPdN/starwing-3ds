@@ -2,6 +2,8 @@
 
 #include "starfox/render/framebuffer.hpp"
 #include "bg2_plan.hpp"
+#include "bg2_atlas_cache.hpp"
+#include "bg2_map_cache.hpp"
 #include "starfox/render/palette.hpp"
 #include "starfox/simulation/snes_ppu.hpp"
 
@@ -21,6 +23,7 @@ struct DiagnosticSnapshot {
     float upload_ms{}, vblank_ms{}, phase_ms{};
     unsigned missed{}, audio_late_packets{}, heap_free_kib{}, heap_total_kib{};
     unsigned linear_free_kib{}, linear_total_kib{}, ppu_mode{};
+    unsigned heap_used_kib{}, heap_peak_kib{}, linear_used_kib{}, linear_peak_kib{};
     unsigned session_seconds{};
     int audio_core{-1};
     const char* flow{"BOOT"};
@@ -34,6 +37,8 @@ struct DisplayFrameTiming {
     std::uint32_t transfer_us{}, submit_us{};
     bool reuse_hit{}, bg2_plan_checked{}, plan_cache_hit{};
     bool gpu_begin_failed{}, gpu_submitted{}, bg2_plan_worker_used{};
+    bool bg2_raster_cache_used{}, bg2_raster_cache_hit{};
+    std::uint32_t bg2_emitted_quads{};
 };
 
 // CPU builds the indexed source raster and palette. PICA200 owns the texture
@@ -65,6 +70,8 @@ public:
         const render::Framebuffer* right = nullptr);
     // Start the New 3DS geometry job before software rendering. The caller
     // must not advance the PPU until present_mode2() has consumed the job.
+    // Pass false while higher-priority audio is still computing on core 2:
+    // present_mode2 then plans on the main core instead of waiting in its queue.
     void prepare_mode2_plan(const simulation::SnesPpuState& ppu,
         std::uint64_t ppu_vram_revision,
         std::int32_t scroll_x, std::int32_t scroll_y,
@@ -85,6 +92,30 @@ public:
     [[nodiscard]] std::size_t bg2_source_fragment_count() const noexcept {
         return bg2_plan_.size();
     }
+    [[nodiscard]] std::size_t bg2_raster_cache_bytes() const noexcept {
+        return bg2_target_ != nullptr ? texture_width_ * texture_height_ * 4U : 0U;
+    }
+    [[nodiscard]] std::size_t bg2_map_texture_bytes() const noexcept {
+        return bg2_map_texture_.data != nullptr ? 512U * 512U * sizeof(std::uint16_t) : 0U;
+    }
+    struct MemoryStats {
+        std::size_t quad_capacity_bytes{}, plan_capacity_bytes{};
+        std::size_t worker_plan_capacity_bytes{}, linear_staging_bytes{};
+        bool worker_plan_available{};
+    };
+    // Dump-only ownership snapshot; never inspect a worker-owned vector while
+    // that worker exists, even if the GPU queue has already been fenced.
+    [[nodiscard]] MemoryStats memory_stats() const noexcept {
+        return {
+            (tile_quads_.capacity() + uniform_quads_.capacity()
+                + edge_corrections_.capacity()) * sizeof(TileQuad),
+            bg2_plan_.capacity() * sizeof(Bg2Rect),
+            bg2_plan_worker_ == nullptr ? bg2_worker_plan_.capacity() * sizeof(Bg2Rect) : 0U,
+            (std::size_t(linear_pixels_ != nullptr) + std::size_t(linear_overlay_ != nullptr)
+                + std::size_t(linear_right_ != nullptr))
+                * texture_width_ * texture_height_ * sizeof(std::uint16_t),
+            bg2_plan_worker_ == nullptr};
+    }
     [[nodiscard]] bool show_full_dump_progress(const char* stage,
         std::uint64_t written, std::uint64_t total);
     const u8* top_framebuffer() const noexcept { return last_top_framebuffer_; }
@@ -102,10 +133,11 @@ public:
 private:
     struct TileQuad {
         std::uint16_t x, y, width, height, slot;
-        std::uint8_t first_x, first_y;
+        std::uint16_t first_x, first_y;
         bool reverse_x, reverse_y;
         bool solid;
         std::uint8_t solid_colour;
+        bool map_sample{};
     };
     struct Bg2PlanKey {
         std::uint8_t background_mode{}, mosaic{}, main_screen{}, bg2_screen_size{};
@@ -129,6 +161,10 @@ private:
         const simulation::SnesPpuState& ppu,
         const render::Palette256& palette,
         std::uint16_t character, std::uint8_t palette_bank);
+    [[nodiscard]] bool draw_bg2_quads(const render::Palette256& palette);
+    [[nodiscard]] bool build_bg2_map(const simulation::SnesPpuState& ppu,
+        const render::Palette256& palette);
+    void remember_bg2_map_source(const simulation::SnesPpuState& ppu) noexcept;
     [[nodiscard]] bool present_cpu(const render::Framebuffer& indexed,
         const render::Palette256& palette, bool reuse_source);
     void upload_right(const render::Framebuffer& frame,
@@ -150,6 +186,15 @@ private:
     C3D_Tex right_texture_{};
     C3D_Tex right_overlay_texture_{};
     C3D_Tex tile_atlas_{};
+    C3D_Tex bg2_map_texture_{}; // Optional fixed 512 KiB source-map texture.
+    Bg2MapSourceCache bg2_map_source_cache_{};
+    std::array<render::Rgba8, 128U> bg2_map_palette_{};
+    bool bg2_map_valid_{};
+    // A single immutable BG2 image is shared by both eyes and intermediate
+    // world presentations. No CPU readback or per-frame allocation is needed.
+    C3D_Tex bg2_texture_{};
+    C3D_RenderTarget* bg2_target_{};
+    bool bg2_raster_valid_{};
     std::array<std::int16_t, 8192U> tile_slots_{};
     std::array<std::int16_t, 8192U> tile_solid_colours_{};
     std::vector<TileQuad> tile_quads_{};
@@ -168,8 +213,12 @@ private:
     std::int32_t bg2_worker_scroll_x_{}, bg2_worker_scroll_y_{};
     std::uint32_t bg2_worker_plan_us_{};
     bool bg2_worker_plan_succeeded_{};
+    bool bg2_worker_use_map_{};
+    bool bg2_worker_map_opaque_{};
     bool bg2_plan_pending_{};
     std::uint16_t tile_slot_count_{};
+    std::uint16_t tile_dirty_begin_{};
+    Bg2AtlasSourceCache tile_source_cache_{};
     Bg2PlanKey cached_tile_plan_key_{};
     std::uint64_t cached_tile_vram_revision_{};
     render::Palette256 cached_tile_palette_{};

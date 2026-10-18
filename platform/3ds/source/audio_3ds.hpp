@@ -44,7 +44,9 @@ public:
         std::uint32_t cache_flush_failures{};
         std::uint32_t max_lead_frames{};
         std::uint64_t rate_adjust_frames{};
-        // SPC compute time excludes waiting for the worker and CSND upload.
+        // Elapsed time inside SPC rendering, excluding the caller's wait and
+        // CSND upload. Includes preemption by another thread on this core;
+        // it is not an isolated CPU-time measurement.
         std::uint64_t spc_compute_total_ms{};
         std::uint32_t spc_compute_last_ms{};
         std::uint32_t spc_compute_max_ms{};
@@ -78,6 +80,10 @@ public:
     }
     [[nodiscard]] const AsyncDiagnostics& diagnostics() const noexcept {
         return diagnostics_;
+    }
+    // Stable main-thread ownership; excludes the worker-mutated SPC buffers.
+    [[nodiscard]] std::size_t pcm_ring_bytes() const noexcept {
+        return (std::size_t(pcm_left_ != nullptr) + std::size_t(pcm_right_ != nullptr)) * ring_bytes_;
     }
 
     // Feed the complete cartridge boot APU upload before the first logic tick.

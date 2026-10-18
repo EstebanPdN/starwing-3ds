@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <limits>
 #include <span>
@@ -73,6 +74,12 @@ public:
     }
     [[nodiscard]] const std::vector<std::uint8_t>& pixels() const noexcept { return pixels_; }
     [[nodiscard]] std::vector<std::uint8_t>& pixels() noexcept { return pixels_; }
+
+    // Diagnostic-only retained payload; vector object/allocator overhead is
+    // deliberately excluded. Reading capacities never allocates or scans.
+    [[nodiscard]] std::size_t storage_capacity_bytes() const noexcept {
+        return pixels_.capacity() + tags_.capacity() + coverage_.capacity();
+    }
 
     // Layer tags are opt-in so a frame presented without a 2D filter pays
     // neither the allocation nor the per-write store.
@@ -293,6 +300,43 @@ public:
             tags_.assign(pixels_.size(),
                 static_cast<std::uint8_t>(PixelLayer::three_d));
         }
+    }
+
+    // Replace an empty, same-sized compositing target with a transparent
+    // layer. Unlike copy_pixels_from(), index zero retains no ownership.
+    // This is equivalent to clear(0), begin_write_coverage (when requested),
+    // then composite_transparent_layer(source, *this, {}). Bulk writes avoid
+    // per-pixel clipping and coverage dispatch while preserving layer tags.
+    void assign_transparent_layer(const Framebuffer& source, bool coverage) {
+        track_coverage_ = coverage;
+        if (coverage) {
+            pixels_.resize(source.pixels_.size());
+            coverage_.resize(pixels_.size());
+            // Copy and derive alpha together. ARM11 has no NEON: four exact
+            // byte comparisons in a word avoid a second scalar framebuffer
+            // walk. The masked sum cannot carry between byte lanes.
+            std::size_t i = 0U;
+            for (; i + 4U <= pixels_.size(); i += 4U) {
+                std::uint32_t colours;
+                std::memcpy(&colours, source.pixels_.data() + i, 4U);
+                const auto nonzero = (((colours & 0x7f7f7f7fU)
+                    + 0x7f7f7f7fU) | colours) >> 7U & 0x01010101U;
+                std::memcpy(pixels_.data() + i, &colours, 4U);
+                std::memcpy(coverage_.data() + i, &nonzero, 4U);
+            }
+            for (; i < pixels_.size(); ++i) {
+                const auto colour = source.pixels_[i];
+                pixels_[i] = colour;
+                coverage_[i] = colour != 0U;
+            }
+        } else pixels_ = source.pixels_;
+        if (!layer_tags_enabled_) return;
+        constexpr auto geometry = static_cast<std::uint8_t>(PixelLayer::three_d);
+        if (source.layer_tags_enabled_ && source.tags_.size() == pixels_.size()) {
+            tags_.resize(pixels_.size());
+            for (std::size_t i = 0; i < pixels_.size(); ++i)
+                tags_[i] = pixels_[i] != 0U ? source.tags_[i] : geometry;
+        } else tags_.assign(pixels_.size(), geometry);
     }
 
     [[nodiscard]] std::uint8_t get_stored(

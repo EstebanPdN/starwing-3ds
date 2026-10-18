@@ -32,7 +32,8 @@ public:
     // force_full_object_sync is retained for differential simulation checks.
     // Production leaves it false and pushes the object pool only before the
     // first strategy; each completed native call imports its full result.
-    [[nodiscard]] StrategyTickStats tick_all(bool force_full_object_sync = false);
+    [[nodiscard]] StrategyTickStats tick_all(bool force_full_object_sync = false,
+        bool batch_object_payloads = true);
     [[nodiscard]] StrategyTickStats tick_all_no_objects(
         std::span<const ObjectHandle> protected_objects);
     [[nodiscard]] std::size_t tick_object(ObjectHandle object);

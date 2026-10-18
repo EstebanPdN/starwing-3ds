@@ -4899,6 +4899,44 @@ void GameSimulation::update_special_exit() {
     enter_planet_map(false, selected_route_stage(next_stage), true);
 }
 
+void GameSimulation::call_profiled_transfer_routine(std::size_t profile_index,
+    std::uint32_t address, Wdc65816Registers& registers,
+    std::uint32_t instruction_limit, std::uint8_t request_flags) {
+#if defined(__3DS__)
+    auto& profile = transfer_routine_profiles_[profile_index];
+    TransferRoutineSample sample{};
+    sample.start_system_tick = svcGetSystemTick();
+    sample.tick_call_sequence = diagnostic_tick_call_sequence_;
+    sample.source_address = address;
+    sample.instruction_limit = instruction_limit;
+    sample.flow_state = static_cast<std::uint8_t>(flow_state_);
+    sample.request_flags = request_flags;
+    ++profile.calls;
+    const auto record = [&] {
+        sample.elapsed_system_ticks = svcGetSystemTick() - sample.start_system_tick;
+        profile.last = sample;
+        if (profile.calls == 1U
+            || sample.elapsed_system_ticks > profile.maximum.elapsed_system_ticks)
+            profile.maximum = sample;
+    };
+    try {
+        sample.returned_instructions = map_.call_native_routine(
+            address, registers, instruction_limit, true);
+        sample.completed = true;
+        record();
+    } catch (...) {
+        ++profile.errors;
+        record();
+        throw;
+    }
+#else
+    static_cast<void>(profile_index);
+    static_cast<void>(request_flags);
+    static_cast<void>(map_.call_native_routine(
+        address, registers, instruction_limit, true));
+#endif
+}
+
 void GameSimulation::service_transfer_request() {
     Wdc65816Registers registers;
     registers.status = 0x24U;
@@ -4909,7 +4947,7 @@ void GameSimulation::service_transfer_request() {
         // original routine rebuilds the object lists and advances WORLD.ASM's
         // map interpreter from its saved checkpoint, so import those native
         // registers before returning to the host interpreter.
-        map_.call_native_routine(restart_, registers, 20'000'000, true);
+        call_profiled_transfer_routine(0U, restart_, registers, 20'000'000U, flags);
         default_laser_pending_ = true;
         map_.restore_map_state_from_native();
         refresh_player_reference();
@@ -4947,8 +4985,8 @@ void GameSimulation::service_transfer_request() {
         }
         registers = {};
         registers.status = 0x24U;
-        map_.call_native_routine(
-            do_background_request_, registers, 10'000'000, true);
+        call_profiled_transfer_routine(1U,
+            do_background_request_, registers, 10'000'000U, flags);
         map_.complete_background_request();
         for(std::size_t i=0;i<overlay.size();++i)
             map_.write_native_byte(bitmap_address+static_cast<std::uint32_t>(i),overlay[i]);
@@ -5222,6 +5260,7 @@ std::size_t GameSimulation::update_view_flags_and_cull() {
 GameTickResult GameSimulation::tick(const input::TickInput& input) {
     tick_phase_ms_ = {};
 #if defined(__3DS__)
+    ++diagnostic_tick_call_sequence_;
     const auto profile_begin = svcGetSystemTick();
     auto profile_setup = profile_begin;
     auto profile_object = profile_begin;

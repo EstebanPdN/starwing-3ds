@@ -15,12 +15,14 @@ struct Bg2Rect {
     std::uint16_t x{}, y{}, width{}, height{};
     std::uint16_t character{};
     std::uint8_t palette_bank{};
-    std::uint8_t source_x{}, source_y{};
+    std::uint16_t source_x{}, source_y{};
     bool reverse_x{}, reverse_y{};
     // A solid palette index used to continue rolled ground after its source
     // tilemap wraps or a ground character has a transparent pixel.
     bool solid{};
     std::uint8_t solid_colour{};
+    // Coordinates in the predecoded BG2 tile map rather than one character.
+    bool map_sample{};
     friend constexpr bool operator==(const Bg2Rect&, const Bg2Rect&) = default;
 };
 
@@ -38,6 +40,9 @@ struct Bg2Rect {
     std::uint32_t target_height = 224U,
     std::int32_t origin_x = 0,
     std::int32_t origin_y = 0,
-    bool cache_rolled_ground_samples = true);
+    bool cache_rolled_ground_samples = true,
+    bool use_map_texture = false,
+    // True only with a current Bg2MapSourceCache::all_opaque() certificate.
+    bool map_is_opaque = false);
 
 } // namespace starfox::platform_3ds

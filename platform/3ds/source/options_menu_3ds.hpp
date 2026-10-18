@@ -6,6 +6,7 @@
 #include "starfox/render/scaled_text_renderer.hpp"
 #include "starfox/render/sprite_renderer.hpp"
 #include "starfox/simulation/game_simulation.hpp"
+#include "updater_3ds.hpp"
 
 #include <cstdint>
 #include <string>
@@ -13,11 +14,11 @@
 
 namespace starfox::platform_3ds {
 
-enum class MenuAction { none, main_menu, memory_dump, launch_rom };
+enum class MenuAction { none, main_menu, memory_dump, launch_rom, check_update, install_update, cancel_update, switch_update_channel };
 enum class MenuPage { closed, root, display, gameplay, developer, update, rom_selection, rom_mode };
 
 struct OverlayMetrics {
-    float fps{},logic_hz{};
+    float fps{},logic_hz{},gap_p95_ms{};
     unsigned heap_free_kib{},heap_total_kib{};
     unsigned linear_free_kib{},linear_total_kib{};
     bool new_3ds{},audio_ready{},gpu_bg2{};
@@ -41,24 +42,33 @@ public:
     [[nodiscard]] bool show_fps() const noexcept { return show_fps_; }
     [[nodiscard]] bool overlay_enabled() const noexcept { return overlay_enabled_; }
     [[nodiscard]] bool confirming() const noexcept {
-        return confirming_main_menu_ || confirming_version_;
+        return confirming_main_menu_ || confirming_version_ || confirming_update_;
     }
     [[nodiscard]] const std::string& selected_rom_path() const noexcept { return selected_rom_path_; }
     [[nodiscard]] bool selected_rom_ex() const noexcept { return selected_rom_ex_; }
     [[nodiscard]] MenuAction touch(int x, int y, bool controls_screen);
     [[nodiscard]] MenuAction navigate(int delta);
     [[nodiscard]] MenuAction activate();
+    [[nodiscard]] MenuAction adjust_update_channel() {
+        return page_==MenuPage::update&&selection_==0?hit_row(0):MenuAction::none;
+    }
     [[nodiscard]] MenuAction activate_confirmation() noexcept;
     void select_confirmation(bool yes) noexcept {
         confirmation_yes_=yes;
     }
     void cancel_confirmation() noexcept {
-        confirming_main_menu_=confirming_version_=false;
+        confirming_main_menu_=confirming_version_=confirming_update_=false;
     }
-    void back();
+    void set_update_status(const UpdateStatus& status) noexcept { update_status_ = status; }
+    MenuAction back();
+    void page_update_notes(int delta);
+    void set_update_notes(const std::string& notes);
     void close() noexcept {
+        if(page_==MenuPage::update && (update_status_.state==UpdateState::installing
+            || update_status_.state==UpdateState::checking
+            || update_status_.state==UpdateState::downloading)) return;
         page_=MenuPage::closed; selection_=0;
-        confirming_main_menu_=confirming_version_=false;
+        confirming_main_menu_=confirming_version_=confirming_update_=false;
         startup_selection_=false;
     }
     void open_rom_picker();
@@ -111,7 +121,10 @@ private:
     int selection_{};
     bool wide_{true}, top_hud_{true}, auto_save_{false};
     bool show_fps_{false}, overlay_enabled_{false};
-    bool confirming_main_menu_{false}, confirming_version_{false};
+    bool confirming_main_menu_{false}, confirming_version_{false}, confirming_update_{false};
+    UpdateStatus update_status_{};
+    std::vector<std::string> update_lines_;
+    unsigned update_notes_page_{};
     bool confirmation_yes_{false}, current_ex_{false};
     unsigned volume_{100};
     std::vector<RomEntry> roms_;

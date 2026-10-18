@@ -66,12 +66,12 @@ std::vector<std::uint8_t> GameSimulation::save_state() const {
     transfer_host_state(a, *this);
     a(objects_.save_state(), map_.save_state(), particles_.save_state(), dust_.save_state());
     a(infinite_lives_,host_god_mode_override_);
-    return state::pack(0x47414d01U, assets::crc32(rom_->bytes()), a.bytes());
+    return state::pack(0x47414d01U, rom_->crc32(), a.bytes());
 }
 
 std::unique_ptr<GameSimulation> GameSimulation::restored_state(
     std::span<const std::uint8_t> bytes) const {
-    state::Reader a{state::unpack(bytes, 0x47414d01U, assets::crc32(rom_->bytes()))};
+    state::Reader a{state::unpack(bytes, 0x47414d01U, rom_->crc32())};
     auto result = std::make_unique<GameSimulation>(*rom_, *symbols_, "LEVEL1_1");
     transfer_host_state(a, *result);
     std::vector<std::uint8_t> objects, map, particles, dust;

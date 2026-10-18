@@ -1,8 +1,15 @@
 # Changelog
 
-These are development candidates, not published stable releases.
+Published releases are listed first; earlier entries describe development candidates.
 
-## 0.67 — current development candidate
+## 1.0 — 2026-10-17
+
+- Initial release.
+
+See [Compatibility](docs/COMPATIBILITY.md) and [Verification status](docs/STATUS.md)
+for the scope of this first public distribution.
+
+## 0.67 — historical development candidate
 
 - Experimental inward stereo during eligible wide Mode 2 gameplay and training,
   controlled by the console's 3D slider; flat scenes keep their original path.

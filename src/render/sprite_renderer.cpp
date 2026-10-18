@@ -288,22 +288,7 @@ void SpriteRenderer::draw_objects(
         // groups to the Shield layout. These are the source HUD life tiles in
         // retail and EX (EX substitutes tile 230 for the final digit glyph),
         // so identify the independent group before applying band heuristics.
-        const auto lives_tile = tile == 189U || tile == 226U
-            || tile == 229U || tile == 230U;
-        auto element = std::optional<HudElement>{};
-        if (cockpit_crosshair_tile || vertical_warning_arrow) {
-            // Reticles and border warnings are gameplay geometry, not a
-            // configurable HUD group.
-        } else if (boss_label_tile) {
-            element = HudElement::boss_health;
-        } else if (lives_tile || (y_byte < 32U && x < 128)) {
-            element = HudElement::lives;
-        } else if (y_byte >= 168U) {
-            element = x < 128
-                ? HudElement::shield : HudElement::bombs_boost;
-        } else if (y_byte >= 128U && x < 128) {
-            element = HudElement::comms;
-        }
+        const auto element = object_hud_element(tile, y_byte, x);
         if (suppress_configurable_hud && element) continue;
         if (suppress_comms && element == HudElement::comms) continue;
         if (only_status_hud && element != HudElement::lives
@@ -346,6 +331,7 @@ void SpriteRenderer::draw_objects(
                 if (screen_y < 0 || screen_y >= static_cast<std::int32_t>(target.height())) {
                     continue;
                 }
+                auto row = target.raster_row(screen_y);
                 for (auto destination_x = first_x;
                     destination_x < last_x; ++destination_x) {
                     const auto screen_x = object_screen_x + destination_x;
@@ -358,7 +344,7 @@ void SpriteRenderer::draw_objects(
                     }
                     const auto pixel = decoded_rows[tile_column][source_x & 7U];
                     if (pixel == 0U) continue;
-                    target.set(screen_x, screen_y, static_cast<std::uint8_t>(
+                    row.set(screen_x, static_cast<std::uint8_t>(
                         128U + palette * 16U + pixel));
                 }
             }
