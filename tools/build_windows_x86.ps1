@@ -10,7 +10,7 @@ $sourceRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 $toolchainRoot = (Resolve-Path -LiteralPath $LlvmMingwRoot).Path
 $buildPath = [IO.Path]::GetFullPath((Join-Path $sourceRoot $BuildDirectory))
 $installPath = [IO.Path]::GetFullPath((Join-Path $sourceRoot $InstallDirectory))
-$toolchainFile = Join-Path $sourceRoot "cmake/toolchains/windows-i686-llvm-mingw.cmake"
+$toolchainFile = Join-Path $sourceRoot "tools/cmake/toolchains/windows-i686-llvm-mingw.cmake"
 
 $configureArguments = @(
     "-S", $sourceRoot,

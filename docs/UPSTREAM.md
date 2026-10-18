@@ -6,7 +6,7 @@ based on an N64 engine. The 3DS adapter uses libctru, Citro3D, and a modified
 Citro2D v1.7.0. Existing engine responsibilities and CMake targets are retained.
 
 The exact engine commit, upstream URL, UltraStarFox revision, and port version
-are recorded in `config/upstream-3ds.json`. The repository contains the current
+are recorded in `tools/config/upstream-3ds.json`. The repository contains the current
 engine sources, the 3DS adaptation, and their existing tests. The original
 working tree, Git history, and private build inputs are preserved locally.
 

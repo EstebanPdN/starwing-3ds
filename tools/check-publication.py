@@ -44,7 +44,7 @@ def main() -> int:
         target = ROOT / path
         if name in gitlinks:
             import json
-            metadata = json.loads((ROOT / 'config/upstream-3ds.json').read_text())
+            metadata = json.loads((ROOT / 'tools/config/upstream-3ds.json').read_text())
             if name != 'upstream-ultrastarfox' or gitlinks[name] != metadata['ultrastarfox_commit']:
                 problems.append(f'Unreviewed submodule reference: {name}')
             continue

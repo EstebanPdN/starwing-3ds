@@ -119,7 +119,7 @@ if(STARFOX_ENABLE_XBRZ)
     endif()
 endif()
 
-include(cmake/SpcState.cmake)
+include(tools/cmake/SpcState.cmake)
 add_library(snes_spc_core STATIC
     "${STARFOX_SPC_SOURCE}/spc.cpp"
     "${STARFOX_SPC_SOURCE}/SNES_SPC.cpp"

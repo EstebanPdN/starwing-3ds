@@ -31,7 +31,7 @@ the existing build environment variables, outside the source checkout:
 
 Missing inputs must stop configuration; do not substitute another version's
 ROM data or publish private inputs to make a source-only check succeed.
-See [credits](../CREDITS.md) and [third-party notices](../THIRD_PARTY_NOTICES.md).
+See [credits](legal/CREDITS.md) and [third-party notices](legal/THIRD_PARTY_NOTICES.md).
 
 ## Native verification
 

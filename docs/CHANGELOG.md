@@ -6,7 +6,7 @@ Published releases are listed first; earlier entries describe development candid
 
 - Initial release.
 
-See [Compatibility](docs/COMPATIBILITY.md) and [Verification status](docs/STATUS.md)
+See [Compatibility](COMPATIBILITY.md) and [Verification status](STATUS.md)
 for the scope of this first public distribution.
 
 ## 0.67 — historical development candidate

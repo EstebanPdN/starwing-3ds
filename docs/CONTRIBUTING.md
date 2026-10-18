@@ -1,7 +1,7 @@
 # Contributing
 
-Start with [Architecture](docs/ARCHITECTURE.md), [Building](docs/BUILDING.md),
-and [Testing](docs/TESTING.md). Keep changes focused and explain their concrete
+Start with [Architecture](ARCHITECTURE.md), [Building](BUILDING.md),
+and [Testing](TESTING.md). Keep changes focused and explain their concrete
 benefit. Preserve the port's title identity, approved visual resources, control
 mapping, SD layout, save compatibility, and timing policy unless a change is
 explicitly intended and documented.
@@ -25,7 +25,7 @@ result. Keep public fixtures synthetic or independently distributable.
 
 Use [GitHub issues](https://github.com/EstebanPdN/starwing-3ds/issues) for a small
 reproduction with version, console model, experience, ROM revision, scene, and
-settings. Read [Diagnostics](docs/DIAGNOSTICS.md) before sharing a capture.
+settings. Read [Diagnostics](DIAGNOSTICS.md) before sharing a capture.
 Share full process memory only through a private maintainer route.
 
 For a suspected security issue, avoid publishing user data or credentials in
@@ -34,7 +34,7 @@ maintainer before public disclosure.
 
 ## Repository organization
 
-Read the [repository map](docs/REPOSITORY.md) before moving files. Keep new public text in English.
+Read the [repository map](REPOSITORY.md) before moving files. Keep new public text in English.
 Group source, platform adapters, resources, documentation and generated output
 by responsibility. Update build manifests, scripts and documentation links
 together. Preserve existing version tags and released package bytes.

@@ -9,8 +9,8 @@
   <a href="#download-and-installation">Download</a> ·
   <a href="#features">Features</a> ·
   <a href="#documentation">Documentation</a> ·
-  <a href="CHANGELOG.md">Changelog</a> ·
-  <a href="CONTRIBUTING.md">Contribute</a> ·
+  <a href="docs/CHANGELOG.md">Changelog</a> ·
+  <a href="docs/CONTRIBUTING.md">Contribute</a> ·
   <a href="#community-and-bug-reports">Community</a>
 </p>
 
@@ -18,7 +18,7 @@
   <a href="https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.0"><img src="docs/badges/version.svg?v=2" alt="Release: v1.0" height="22"></a>
   <a href="docs/COMPATIBILITY.md"><img src="docs/badges/platform.svg?v=2" alt="Nintendo 3DS" height="22"></a>
   <a href="docs/UPDATING.md"><img src="docs/badges/updater.svg" alt="Updates: built in" height="22"></a>
-  <a href="THIRD_PARTY_NOTICES.md"><img src="docs/badges/license.svg?v=2" alt="Component-specific licenses" height="22"></a>
+  <a href="docs/legal/THIRD_PARTY_NOTICES.md"><img src="docs/badges/license.svg?v=2" alt="Component-specific licenses" height="22"></a>
 </p>
 
 <p align="center">
@@ -117,7 +117,7 @@ bash tools/test-host.sh
 
 A full game build additionally needs devkitPro and the locally prepared inputs
 in the [build guide](docs/BUILDING.md). The clean source checkout alone does
-not generate a playable package. See [Contributing](CONTRIBUTING.md) before
+not generate a playable package. See [Contributing](docs/CONTRIBUTING.md) before
 changing timing, rendering, data formats, or the platform boundary.
 
 ## Community and bug reports
@@ -130,19 +130,19 @@ for reproducible reports. Capture shortcuts and sharing precautions are in
 ## Credits
 
 - KandoWontU, UltraStarFox, and Team SFEX — engine, reconstruction, EX, research,
-  tools, and upstream work; individual credits are in [CREDITS.md](CREDITS.md).
+  tools, and upstream work; individual credits are in [CREDITS.md](docs/legal/CREDITS.md).
 - Nintendo and Argonaut Software — the original Star Fox / Starwing.
 - devkitPro contributors — devkitARM, libctru, Citro3D, and Citro2D.
 - Esteban PDN — Nintendo 3DS adaptation and repository maintenance.
 
 ## License and legal notice
 
-[LICENSE-XBRZ.txt](LICENSE-XBRZ.txt) contains **GNU GPL v3.0** for the xBRZ
+[LICENSE-XBRZ.txt](docs/legal/LICENSE-XBRZ.txt) contains **GNU GPL v3.0** for the xBRZ
 component. GitHub's automatic license label refers to this detected license;
 it is not a blanket license for every file or for the game content.
 
 Third-party components retain their own licenses and notices. See
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the vendored
+[THIRD_PARTY_NOTICES.md](docs/legal/THIRD_PARTY_NOTICES.md) and the vendored
 [Citro2D license](platform/3ds/vendor/citro2d/LICENSE). No blanket MIT or GPL
 license is assigned to the whole project. The native engine is republished with permission confirmed by the repository
 maintainer. Its inspected checkout has no general root license; this permission
@@ -158,7 +158,7 @@ or trademark assets for redistribution.
 <p align="center">
   <a href="https://estebanpdn.github.io/">Esteban’s Forge</a> ·
   <a href="https://discord.gg/BjbzfRYpV">Discord</a> ·
-  <a href="CREDITS.md">Credits</a> ·
-  <a href="THIRD_PARTY_NOTICES.md">Third-party notices</a><br>
+  <a href="docs/legal/CREDITS.md">Credits</a> ·
+  <a href="docs/legal/THIRD_PARTY_NOTICES.md">Third-party notices</a><br>
   <sub>Star Fox / Starwing belongs to Nintendo. This is an independent fan project.</sub>
 </p>

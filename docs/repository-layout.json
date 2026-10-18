@@ -4,16 +4,9 @@
     ".github",
     ".gitignore",
     ".gitmodules",
-    "CHANGELOG.md",
     "CMakeLists.txt",
-    "CONTRIBUTING.md",
-    "CREDITS.md",
-    "LICENSE-XBRZ.txt",
     "README.md",
-    "THIRD_PARTY_NOTICES.md",
     "assets",
-    "cmake",
-    "config",
     "docs",
     "include",
     "platform",
@@ -26,7 +19,7 @@
   "current_documents": [
     "README.md",
     "docs/REPOSITORY.md",
-    "CONTRIBUTING.md"
+    "docs/CONTRIBUTING.md"
   ],
   "required_paths": [
     "README.md",

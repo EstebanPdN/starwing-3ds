@@ -42,7 +42,7 @@ with tempfile.TemporaryDirectory(prefix="starfox-switch-audio-") as directory:
         raise RuntimeError("Unexpected Switch backend revision")
     extract_files(patch.decode(), work)
     subprocess.run(["git", "apply", "--unsafe-paths",
-                    str(ROOT / "cmake/sdl3-switch-audio-pipeline.patch")],
+                    str(ROOT / "tools/cmake/sdl3-switch-audio-pipeline.patch")],
                    cwd=work, check=True)
     source = (work / "src/audio/switch/SDL_switchaudio.c").read_text()
     harness = r'''

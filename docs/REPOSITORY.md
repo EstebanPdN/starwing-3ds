@@ -12,8 +12,8 @@ notices. Implementation, resources and supporting documents are grouped below.
 | `src/` | Native engine and platform-independent implementation. |
 | `include/` | Public and internal engine declarations. |
 | `platform/` | Nintendo 3DS device adapters and packaging. |
-| `config/` | Runtime defaults and build configuration. |
-| `cmake/` | Build modules and dependency configuration. |
+| `tools/config/` | Runtime defaults and build configuration. |
+| `tools/cmake/` | Build modules and dependency configuration. |
 | `assets/` | Redistributable project presentation resources. |
 | `tests/` | ROM-free engine and port regressions. |
 | `tools/` | Build, data generation and host verification utilities. |
