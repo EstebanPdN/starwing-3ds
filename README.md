@@ -89,6 +89,9 @@ See [Updating](docs/UPDATING.md) for installation and recovery.
 
 ## Documentation
 
+- [Repository map and maintenance conventions](docs/REPOSITORY.md)
+
+
 | Guide | Purpose |
 | --- | --- |
 | [Compatibility and current status](docs/COMPATIBILITY.md) | Supported inputs, implemented paths, and validation limits. |

@@ -1,0 +1,39 @@
+{
+  "root_entries": [
+    ".gitattributes",
+    ".github",
+    ".gitignore",
+    ".gitmodules",
+    "CHANGELOG.md",
+    "CMakeLists.txt",
+    "CONTRIBUTING.md",
+    "CREDITS.md",
+    "LICENSE-XBRZ.txt",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md",
+    "assets",
+    "cmake",
+    "config",
+    "docs",
+    "include",
+    "platform",
+    "scripts",
+    "src",
+    "tests",
+    "tools",
+    "upstream-ultrastarfox"
+  ],
+  "current_documents": [
+    "README.md",
+    "docs/REPOSITORY.md",
+    "CONTRIBUTING.md"
+  ],
+  "required_paths": [
+    "README.md",
+    "docs/REPOSITORY.md",
+    "scripts/check-repository.py",
+    "CMakeLists.txt",
+    "platform/3ds/build.sh",
+    "tools/test-host.sh"
+  ]
+}

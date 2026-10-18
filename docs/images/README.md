@@ -1,6 +1,6 @@
 # README presentation assets
 
-The original owner-supplied `showcase.png` remains at the repository root.
+The original owner-supplied `docs/images/original/showcase.png` remains at the repository root.
 `showcase-rounded.webp` is the lossless web export; `showcase-rounded.png`
 retains its PNG counterpart. Both present the same image inside a 40 px rounded frame;
 its editable SVG frame is `tools/readme-cover.svg`. The image content and game

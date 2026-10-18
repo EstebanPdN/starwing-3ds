@@ -55,3 +55,6 @@ AGENTS.md
 /platform/3ds/assets/*.rgb
 /platform/3ds/assets/*.bnr
 /platform/3ds/assets/*.wav
+
+# Maintained repository organization check.
+!scripts/check-repository.py
