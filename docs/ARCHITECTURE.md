@@ -2,8 +2,9 @@
 
 Starwing 3DS keeps the native Starfox Enhanced engine and places the console
 adapter under `platform/3ds/`. This is a SNES Star Fox / Starwing adaptation.
-The desktop, Switch, Vita, and other inherited adapters retain their own build
-paths; a successful 3DS build does not qualify those platforms.
+This branch maintains the 3DS adapter and its shared engine/host verification
+tools. Independent desktop and other-console application shells have been
+retired; shared engine dependencies retain their source and attribution.
 
 ## Source map
 
@@ -33,7 +34,6 @@ paths; a successful 3DS build does not qualify those platforms.
 | `save_storage_3ds.*` | Checkpoint serialization, restoration, and EX SRAM file I/O. | Receives per-session paths; preserves existing bytes and schema. |
 | `performance_history.hpp` | A 180-row CSV ring and truncation counts. | Append uses fixed storage; export allocates only on request. |
 | `memory_3ds.*` | Allocation-failure context and a pre-unwind memory snapshot. | The failure handler does not allocate or write files. |
-| `updater_3ds.*`, `update_manifest.*` | Stable release metadata, HTTPS transfer, digest checks, and executable replacement. | One worker; installation requires confirmation and package identity. |
 | `updater_3ds.*`, `update_manifest.*` | Stable release metadata, HTTPS transfer, digest checks, and executable replacement. | One worker; installation requires confirmation and package identity. |
 | `diagnostics_3ds.*` | Capture staging, files, checksums, completion markers, and progress. | Whole-process dumps are private process memory. |
 
