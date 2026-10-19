@@ -5,6 +5,7 @@ Uses a locally supplied ROM/font map, never the system font. Generated artwork
 is a private build input, just like the existing menu artwork headers.
 """
 import argparse
+import unicodedata
 from pathlib import Path
 from PIL import Image, ImageDraw
 
@@ -12,6 +13,7 @@ p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--rom', type=Path, required=True)
 p.add_argument('--symbols', type=Path, required=True)
 p.add_argument('--output', type=Path, required=True)
+p.add_argument('--version', default='1.1.1')
 a = p.parse_args()
 a.output.mkdir(parents=True, exist_ok=True)
 rom = a.rom.read_bytes()
@@ -26,7 +28,9 @@ def read(address):
     return rom[((address >> 16) & 0x7f)*0x8000 + (address & 0x7fff)]
 
 def glyph(c):
-    base = {'Á':'A', 'É':'E', 'Í':'I', 'Ó':'O', 'Ú':'U'}.get(c, c)
+    parts = unicodedata.normalize('NFD', c)
+    base = parts[0]
+    assert ' ' <= base <= 'Z', c
     if base == ' ': return 4, []
     if base == '/': return 8, [(int((10-y)*6/9)+dx,y) for y in range(1,11) for dx in (0,1)]
     index = read(symbols['FONT0TRN'] + ord(base)-32)
@@ -34,8 +38,15 @@ def glyph(c):
     addr = symbols['FONT0FON']+index*24
     pixels = [(x,y) for y in range(12) for x in range(width)
               if (read(addr+y*2) | (read(addr+y*2+1)<<8)) & (0x8000>>x)]
-    if c != base:
-        pixels += [(width//2+dx,-3+dy) for dx,dy in [(0,1),(1,0),(1,1),(2,0)]]
+    accents = {
+        '\u0301': [(0,1),(1,0),(1,1),(2,0)],
+        '\u0300': [(0,0),(1,0),(1,1),(2,1)],
+        '\u0303': [(-1,1),(0,0),(1,0),(2,1),(3,1),(4,0)],
+        '\u0308': [(-1,0),(-1,1),(2,0),(2,1)],
+    }
+    for mark in parts[1:]:
+        assert mark in accents, (c, mark)
+        pixels += [(width//2+dx,-3+dy) for dx,dy in accents[mark]]
     return width, pixels
 
 BLACK=(0,0,0); BG=(41,56,74); NAVY=(18,30,46)
@@ -69,44 +80,63 @@ def panel(im):
     rect(im,(im.width-110)//2,202,110,12,WHITE)
     rect(im,(im.width-102)//2,205,102,7,NAVY)
 
-top=Image.new('RGB',(400,240),BG);bottom=Image.new('RGB',(320,240),BG)
-panel(top);panel(bottom)
-text(top,'STAR FOX',49,ICE,2)
-text(top,'VERSIÓN 1.1',82,STEEL)
-text(top,'ESTE JUEGO TODAVÍA',112)
-text(top,'NO ESTÁ DISPONIBLE',132)
-text(top,'PARA LA OLD 3DS.',152)
-text(top,'OLD 3DS / 2DS',179,STEEL)
-text(bottom,'FUTURA',58,ICE)
-text(bottom,'COMPATIBILIDAD',82,ICE)
-text(bottom,'PLANEADA',106,ICE)
-rect(bottom,47,134,226,2,BLUE)
-x,y,w,h=70,157,180,27
-rect(bottom,x,y,w,h,STEEL);rect(bottom,x+1,y,w-2,2,WHITE)
-rect(bottom,x+1,y+2,2,h-4,WHITE);rect(bottom,x+3,y+3,w-6,h-6,BLUE)
-rect(bottom,x+2,y+h-3,w-4,2,DARK)
-text(bottom,'START  SALIR',y+(h-12)//2,ICE)
-# PNGs are previews of the very same pixels encoded into the executable.
-top.save(a.output/'old-3ds-top.png');bottom.save(a.output/'old-3ds-bottom.png')
-preview=Image.new('RGB',(400,480),BLACK);preview.paste(top,(0,0));preview.paste(bottom,(40,240))
-preview.resize((800,960),Image.Resampling.NEAREST).save(a.output/'Old-3DS-pixel-preview.png')
-colors=sorted(set(top.getdata())|set(bottom.getdata()))
+# Order is mirrored by NoticeLanguage in notice_language.hpp.
+translations = {
+    'en': ('VERSION', ('THIS GAME IS NOT YET', 'AVAILABLE FOR', 'THE OLD 3DS.'),
+           ('FUTURE', 'COMPATIBILITY', 'PLANNED'), 'EXIT'),
+    'es': ('VERSIÓN', ('ESTE JUEGO TODAVÍA', 'NO ESTÁ DISPONIBLE', 'PARA LA OLD 3DS.'),
+           ('FUTURA', 'COMPATIBILIDAD', 'PLANEADA'), 'SALIR'),
+    'pt': ('VERSÃO', ('ESTE JOGO AINDA NÃO', 'ESTÁ DISPONÍVEL', 'PARA A OLD 3DS.'),
+           ('COMPATIBILIDADE', 'FUTURA', 'PREVISTA'), 'SAIR'),
+    'it': ('VERSIONE', ('QUESTO GIOCO NON È', 'ANCORA DISPONIBILE', 'PER OLD 3DS.'),
+           ('COMPATIBILITÀ', 'FUTURA', 'PREVISTA'), 'ESCI'),
+    'de': ('VERSION', ('DIESES SPIEL IST NOCH', 'NICHT FÜR DEN', 'OLD 3DS VERFÜGBAR.'),
+           ('ZUKÜNFTIGE', 'KOMPATIBILITÄT', 'GEPLANT'), 'BEENDEN'),
+    'fr': ('VERSION', ("CE JEU N'EST PAS ENCORE", 'DISPONIBLE POUR', 'LA OLD 3DS.'),
+           ('COMPATIBILITÉ', 'FUTURE', 'PRÉVUE'), 'QUITTER'),
+}
+images = {}
+for language,(version,message,badge,exit_label) in translations.items():
+    top=Image.new('RGB',(400,240),BG);bottom=Image.new('RGB',(320,240),BG)
+    panel(top);panel(bottom)
+    text(top,'STAR FOX',49,ICE,2)
+    text(top,version+' '+a.version,82,STEEL)
+    for label,y in zip(message,(112,132,152)):text(top,label,y)
+    text(top,'OLD 3DS / 2DS',179,STEEL)
+    for label,y in zip(badge,(58,82,106)):text(bottom,label,y,ICE)
+    rect(bottom,47,134,226,2,BLUE)
+    x,y,w,h=70,157,180,27
+    rect(bottom,x,y,w,h,STEEL);rect(bottom,x+1,y,w-2,2,WHITE)
+    rect(bottom,x+1,y+2,2,h-4,WHITE);rect(bottom,x+3,y+3,w-6,h-6,BLUE)
+    rect(bottom,x+2,y+h-3,w-4,2,DARK)
+    label='START  '+exit_label
+    assert sum(glyph(c)[0]+1 for c in label)-1<=w-12, label
+    text(bottom,label,y+(h-12)//2,ICE)
+    for name,im in [('top',top),('bottom',bottom)]:
+        images[language+'_'+name]=im
+        im.save(a.output/('old-3ds-'+language+'-'+name+'.png'))
+    preview=Image.new('RGB',(400,480),BLACK)
+    preview.paste(top,(0,0));preview.paste(bottom,(40,240))
+    preview.resize((800,960),Image.Resampling.NEAREST).save(a.output/('Old-3DS-'+language+'.png'))
+colors=sorted(set(pixel for im in images.values() for pixel in im.getdata()))
 assert len(colors)<=16
 header=['#pragma once','#include <array>','#include <cstdint>',
         'namespace starfox::platform_3ds {',
         'inline constexpr std::array<std::uint32_t,%d> old_notice_colors{{'%len(colors),
         ','.join('0x%02x%02x%02xffU'%c for c in colors),'}};']
-for name,im in [('top',top),('bottom',bottom)]:
+for name,im in images.items():
     runs=[]
     for pixel in im.getdata():
         index=colors.index(pixel)
         if runs and runs[-1][0]==index and runs[-1][1]<4095:runs[-1][1]+=1
         else:runs.append([index,1])
-    assert sum(n for _,n in runs)==im.width*im.height
+    # Verify lossless encoding for every pixel of every localized screen.
+    decoded=[colors[i] for i,n in runs for _ in range(n)]
+    assert decoded==list(im.getdata())
     header+=['inline constexpr std::array<std::uint16_t,%d> old_notice_%s{{'%(len(runs),name)]
     for start in range(0,len(runs),12):
         header += [','.join('0x%04xU'%((i<<12)|n) for i,n in runs[start:start+12])+',']
     header+=['}};']
 header+=['} // namespace starfox::platform_3ds','']
 (a.output/'old_3ds_notice_art_data.hpp').write_text('\n'.join(header))
-print('Generated native 400x240 + 320x240 artwork; %d colors; no antialiasing.'%len(colors))
+print('PASS: six languages, text bounds, accent coverage and 1,036,800 lossless pixels.')

@@ -55,13 +55,16 @@ of sustained hardware FPS. Star Fox EX is not fully supported.
 ## Download and installation
 
 <p>
-  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/download/v1.1/Starwing-3DS.cia"><img src="docs/images/download-cia.svg" alt="Download Starwing 3DS CIA" width="210" height="46"></a>
-  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/download/v1.1/Starwing-3DS.3dsx"><img src="docs/images/download-3dsx.svg" alt="Download Starwing 3DS for Homebrew Launcher" width="210" height="46"></a>
+  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/download/v1.1.1/Starwing-3DS.cia"><img src="docs/images/download-cia.svg" alt="Download Starwing 3DS CIA" width="210" height="46"></a>
+  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/download/v1.1.1/Starwing-3DS.3dsx"><img src="docs/images/download-3dsx.svg" alt="Download Starwing 3DS for Homebrew Launcher" width="210" height="46"></a>
 </p>
 
-**v1.1 requires New Nintendo 3DS / New 2DS XL for gameplay. Old 3DS / 2DS displays an automatic notice; future compatibility is planned.**
+**v1.1.1 requires New Nintendo 3DS / New 2DS XL for gameplay. Old 3DS / 2DS displays an automatic notice; future compatibility is planned.**
 
-[Release notes and FBI QR](https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.1) · [Project website](https://estebanpdn.github.io/star-fox.html)
+The notice follows the console language: English, Spanish, Portuguese, Italian,
+German or French. Other languages fall back to English.
+
+[Release notes and FBI QR](https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.1.1) · [Project website](https://estebanpdn.github.io/star-fox.html)
 
 1. Install `Starwing-3DS.cia` with FBI, or scan the release's QR in
    **Remote Install → Scan QR Code**.

@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_BUILD="${STARWING_HOST_TEST_BUILD_DIR:-${ROOT}/build/host-tests}"
 mkdir -p "${TEST_BUILD}"
-for TEST in presentation_limit frame_pacing launch_selection screen_transfer presentation_metrics performance_history diagnostic_sha256 update_notes; do
+for TEST in notice_language presentation_limit frame_pacing launch_selection screen_transfer presentation_metrics performance_history diagnostic_sha256 update_notes; do
   "${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra \
     "${ROOT}/tests/${TEST}_test.cpp" -o "${TEST_BUILD}/${TEST}_test"
   "${TEST_BUILD}/${TEST}_test"

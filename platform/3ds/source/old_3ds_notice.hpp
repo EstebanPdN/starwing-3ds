@@ -1,5 +1,7 @@
 #pragma once
 #include <3ds.h>
+#include <span>
+#include "notice_language.hpp"
 #include "old_3ds_notice_art_data.hpp"
 
 namespace starfox::platform_3ds {
@@ -9,14 +11,46 @@ constexpr std::size_t notice_pixels(const std::array<std::uint16_t,N>& runs) {
     for (auto run:runs) count+=run&0xfffU;
     return count;
 }
-static_assert(notice_pixels(old_notice_top)==400U*240U);
-static_assert(notice_pixels(old_notice_bottom)==320U*240U);
+static_assert(notice_pixels(old_notice_en_top)==400U*240U);
+static_assert(notice_pixels(old_notice_en_bottom)==320U*240U);
+static_assert(notice_pixels(old_notice_es_top)==400U*240U);
+static_assert(notice_pixels(old_notice_es_bottom)==320U*240U);
+static_assert(notice_pixels(old_notice_pt_top)==400U*240U);
+static_assert(notice_pixels(old_notice_pt_bottom)==320U*240U);
+static_assert(notice_pixels(old_notice_it_top)==400U*240U);
+static_assert(notice_pixels(old_notice_it_bottom)==320U*240U);
+static_assert(notice_pixels(old_notice_de_top)==400U*240U);
+static_assert(notice_pixels(old_notice_de_bottom)==320U*240U);
+static_assert(notice_pixels(old_notice_fr_top)==400U*240U);
+static_assert(notice_pixels(old_notice_fr_bottom)==320U*240U);
+
+static_assert(CFG_LANGUAGE_EN==1 && CFG_LANGUAGE_FR==2 && CFG_LANGUAGE_DE==3
+    && CFG_LANGUAGE_IT==4 && CFG_LANGUAGE_ES==5 && CFG_LANGUAGE_PT==9);
+struct NoticeArtwork {
+    std::span<const std::uint16_t> top, bottom;
+};
+inline NoticeArtwork notice_artwork(NoticeLanguage language) {
+    switch(language) {
+    case NoticeLanguage::es: return {old_notice_es_top,old_notice_es_bottom};
+    case NoticeLanguage::pt: return {old_notice_pt_top,old_notice_pt_bottom};
+    case NoticeLanguage::it: return {old_notice_it_top,old_notice_it_bottom};
+    case NoticeLanguage::de: return {old_notice_de_top,old_notice_de_bottom};
+    case NoticeLanguage::fr: return {old_notice_fr_top,old_notice_fr_bottom};
+    default: return {old_notice_en_top,old_notice_en_bottom};
+    }
+}
+inline NoticeLanguage console_notice_language() {
+    if (R_FAILED(cfguInit())) return NoticeLanguage::en;
+    u8 language=CFG_LANGUAGE_EN;
+    const auto result=CFGU_GetSystemLanguage(&language);
+    cfguExit();
+    return notice_language(language,R_SUCCEEDED(result));
+}
 
 // Python-authored native-resolution pixels, copied without filtering to the
 // rotated BGR8 framebuffer. No game assets, SD access, GPU or audio startup.
-template<std::size_t N>
 inline void draw_notice(gfxScreen_t screen,
-    const std::array<std::uint16_t,N>& runs) {
+    std::span<const std::uint16_t> runs) {
     u16 height{},width{};
     auto* output=gfxGetFramebuffer(screen,GFX_LEFT,&height,&width);
     if (!output || height!=240U || width!=(screen==GFX_TOP?400U:320U)) return;
@@ -32,6 +66,7 @@ inline void draw_notice(gfxScreen_t screen,
     }
 }
 inline void show_old_3ds_notice() {
+    const auto artwork=notice_artwork(console_notice_language());
     gfxSetScreenFormat(GFX_TOP,GSP_BGR8_OES);
     gfxSetScreenFormat(GFX_BOTTOM,GSP_BGR8_OES);
     unsigned populated=0;
@@ -45,8 +80,8 @@ inline void show_old_3ds_notice() {
         }
         // Populate both buffers once; this static screen has no redraw cost.
         if (populated<2U) {
-            draw_notice(GFX_TOP,old_notice_top);
-            draw_notice(GFX_BOTTOM,old_notice_bottom);
+            draw_notice(GFX_TOP,artwork.top);
+            draw_notice(GFX_BOTTOM,artwork.bottom);
             gfxFlushBuffers();
             gfxSwapBuffers();
             ++populated;

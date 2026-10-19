@@ -39,11 +39,12 @@ native pixel grid. Supply your own ROM and matching symbol map:
 ```sh
 python3 platform/3ds/tools/make-old-3ds-notice.py \
   --rom /path/to/original.sfc --symbols /path/to/original-symbols.txt \
-  --output /path/to/private-ui
+  --output /path/to/private-ui --version 1.1.1
 ```
 
 Place `old_3ds_notice_art_data.hpp` alongside the other generated UI headers
-in `STARWING_UI_INCLUDE_DIR`. This screen needs no user ROM or SD data at
+in `STARWING_UI_INCLUDE_DIR`. The generator produces all six languages and checks text bounds and exact
+pixel encoding. This screen needs no user ROM or SD data at
 runtime. The generator source is public; its ROM-derived output follows the
 same private-input boundary as the other game artwork.
 

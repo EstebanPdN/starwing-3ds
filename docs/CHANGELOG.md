@@ -2,6 +2,14 @@
 
 Published releases are listed first; earlier entries describe development candidates.
 
+## 1.1.1 — 2026-10-19
+
+- Select the Old 3DS notice language automatically from console settings:
+  English, Spanish, Portuguese, Italian, German and French.
+- Use English for unsupported console languages or failed system-language reads.
+- Localize the message, planned-compatibility panel, version label and exit
+  button while retaining the Python-drawn pixel interface and game lettering.
+
 ## 1.1 — 2026-10-19
 
 - Show a game-style, Python-rasterized compatibility notice automatically on
