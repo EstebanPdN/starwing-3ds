@@ -18,9 +18,13 @@ int main(int argc,char** argv) {
         std::filesystem::create_directories(argv[3]);std::filesystem::current_path(argv[3]);
         std::filesystem::create_directories("sdmc:/3ds/Starwing");
         std::filesystem::remove("sdmc:/3ds/Starwing/options-old3ds.cfg");
-        {std::ofstream f("sdmc:/3ds/Starwing/options.cfg");f<<"volume=70\noriginal_speed=0\ninterpolation=1\n";}
+        std::filesystem::remove("sdmc:/3ds/Starwing/options.cfg");
+        OptionsMenu3ds fresh(rom,symbols,false,"",hardware_profile(true));
+        require(fresh.original_speed() && fresh.interpolate() && fresh.fps_limit()==60U,
+            "Fresh install must use Original/ON/60");
+        {std::ofstream f("sdmc:/3ds/Starwing/options.cfg");f<<"volume=70\noriginal_speed=0\ninterpolation=0\nfps_limit=30\n";}
         OptionsMenu3ds old(rom,symbols,false,"",hardware_profile(false));
-        require(old.original_speed()&&!old.interpolate()&&old.volume()==70,"Old profile defaults/fallback wrong");
+        require(old.original_speed()&&old.interpolate()&&old.volume()==70,"Old profile defaults/fallback wrong");
         (void)old.touch(160,95,true);(void)old.touch(160,85,true);
         require(old.page()==MenuPage::gameplay,"Gameplay navigation failed");
         old.draw_options();image("gameplay.ppm",old.bottom_pixels());
@@ -30,7 +34,7 @@ int main(int argc,char** argv) {
         (void)old.touch(200,80,true);require(!old.original_speed(),"20 Hz touch failed");
         (void)old.navigate(1);(void)old.navigate(-1);(void)old.activate();require(old.original_speed(),"D-pad speed selection failed");
         (void)old.navigate(1);(void)old.activate();require(!old.interpolate(),"D-pad interpolation selection failed");
-        require(old.fps_limit()==0U,"FPS limit must default off");
+        require(old.fps_limit()==60U,"FPS limit must default to 60");
         (void)old.touch(160,188,true);require(old.fps_limit()==30U,"30 FPS touch failed");
         old.draw_options();image("timing-30.ppm",old.bottom_pixels());
         (void)old.touch(240,188,true);require(old.fps_limit()==60U,"60 FPS touch failed");
@@ -42,8 +46,8 @@ int main(int argc,char** argv) {
         OptionsMenu3ds resumed(rom,symbols,false,"",hardware_profile(false));
         require(resumed.original_speed()&&!resumed.interpolate()&&resumed.fps_limit()==30U,"Old preferences did not persist");
         OptionsMenu3ds newer(rom,symbols,false,"",hardware_profile(true));
-        require(!newer.original_speed()&&newer.interpolate()&&newer.fps_limit()==0U,"Old settings changed New profile");
-        require(hardware_profile(false).default_fps_limit==0U&&hardware_profile(true).default_fps_limit==0U,"Profile targets wrong");
+        require(!newer.original_speed()&&!newer.interpolate()&&newer.fps_limit()==30U,"Old settings changed New profile");
+        require(hardware_profile(false).default_fps_limit==60U&&hardware_profile(true).default_fps_limit==60U,"Profile targets wrong");
         std::cout<<"PASS: model defaults, old-file migration, original+interpolation, touch/D-pad, persistence and profile isolation\n";
     } catch(const std::exception& e) {std::cerr<<e.what()<<'\n';return 1;}
 }

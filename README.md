@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.0"><img src="docs/badges/version.svg?v=2" alt="Release: v1.0" height="22"></a>
+  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.1"><img src="docs/badges/version.svg?v=2" alt="Release: v1.0" height="22"></a>
   <a href="docs/COMPATIBILITY.md"><img src="docs/badges/platform.svg?v=2" alt="Nintendo 3DS" height="22"></a>
   <a href="docs/UPDATING.md"><img src="docs/badges/updater.svg" alt="Updates: built in" height="22"></a>
   <a href="docs/legal/THIRD_PARTY_NOTICES.md"><img src="docs/badges/license.svg?v=2" alt="Component-specific licenses" height="22"></a>
@@ -48,20 +48,20 @@ coverage are described in [Compatibility](docs/COMPATIBILITY.md).
   </tr>
 </table>
 
-The simulation targets 20 source ticks per second; presentation targets 60
-frames per second. These are scheduling targets, not a sustained hardware FPS
-claim. Star Fox EX is not fully supported.
+Original game speed, interpolation ON and a 60 FPS presentation limit are the
+defaults. Existing saved preferences are preserved. The limit is not a claim
+of sustained hardware FPS. Star Fox EX is not fully supported.
 
 ## Download and installation
 
 <p>
-  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/download/v1.0/Starwing-3DS.cia"><img src="docs/images/download-cia.svg" alt="Download Starwing 3DS CIA" width="210" height="46"></a>
-  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/download/v1.0/Starwing-3DS.3dsx"><img src="docs/images/download-3dsx.svg" alt="Download Starwing 3DS for Homebrew Launcher" width="210" height="46"></a>
+  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/download/v1.1/Starwing-3DS.cia"><img src="docs/images/download-cia.svg" alt="Download Starwing 3DS CIA" width="210" height="46"></a>
+  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/download/v1.1/Starwing-3DS.3dsx"><img src="docs/images/download-3dsx.svg" alt="Download Starwing 3DS for Homebrew Launcher" width="210" height="46"></a>
 </p>
 
-**v1.0 is the first public release. Bugs may occur. Performance has not been tested on Old Nintendo 3DS.**
+**v1.1 requires New Nintendo 3DS / New 2DS XL for gameplay. Old 3DS / 2DS displays an automatic notice; future compatibility is planned.**
 
-[Release notes and FBI QR](https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.0) · [Project website](https://estebanpdn.github.io/star-fox.html)
+[Release notes and FBI QR](https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.1) · [Project website](https://estebanpdn.github.io/star-fox.html)
 
 1. Install `Starwing-3DS.cia` with FBI, or scan the release's QR in
    **Remote Install → Scan QR Code**.

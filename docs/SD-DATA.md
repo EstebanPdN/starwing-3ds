@@ -43,6 +43,9 @@ path; there is no live external-file watcher.
 | `volume` | `100` | Clamped to 100; zero mutes. |
 | `auto_save` | `0` | Nonzero enables automatic checkpoints/restoration. |
 | `show_fps` | `0` | Nonzero enables the FPS display. |
+| `original_speed` | `1` | Original game timing; zero selects 20 Hz. |
+| `interpolation` | `1` | Interpolated presentation enabled. |
+| `fps_limit` | `60` | Presentation cap: 0 (off), 30, or 60. |
 | `overlay` | `0` | Nonzero enables SELECT access to the diagnostic overlay. |
 
 Unrecognized or unparsable lines are ignored by the existing loader. Repeated
@@ -57,6 +60,9 @@ volume=100
 auto_save=0
 show_fps=0
 overlay=0
+original_speed=1
+interpolation=1
+fps_limit=60
 ```
 
 To restore defaults, close the application and rename `options.cfg` as a backup.

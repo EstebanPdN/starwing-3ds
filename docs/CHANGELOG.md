@@ -2,6 +2,16 @@
 
 Published releases are listed first; earlier entries describe development candidates.
 
+## 1.1 — 2026-10-19
+
+- Show a game-style, Python-rasterized compatibility notice automatically on
+  Old 3DS / 2DS, before reading ROMs or starting gameplay. Future support is planned.
+- Default to Original game speed, interpolation ON and a 60 FPS limit.
+  Preserve previously saved user preferences.
+- Include the ordered PICA world backend and exact native SPC optimizations
+  from 1.1-E1, with reference fallback for stereo and unsupported scenes.
+- Retain the timing menu, updater, diagnostics, saves and title identity.
+
 ## 1.0 — 2026-10-17
 
 - Initial release.

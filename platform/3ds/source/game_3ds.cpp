@@ -1,3 +1,4 @@
+#include "old_3ds_notice.hpp"
 #include "asset_stage.h"
 #include "asset_stage.hpp"
 #include "audio_3ds.hpp"
@@ -1876,14 +1877,21 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
 
 int main(int argc, char** argv) {
     std::set_new_handler(capture_allocation_failure);
+    gfxInitDefault();
+    gfxSet3D(false);
+    bool new_3ds=false;
+    const auto model_result=APT_CheckNew3DS(&new_3ds);
+    if (R_FAILED(model_result) || !new_3ds) {
+        starfox::platform_3ds::show_old_3ds_notice();
+        gfxExit();
+        return 0;
+    }
     osSetSpeedupEnable(true);
     speedup_init_result = ptmSysmInit();
     if (R_SUCCEEDED(speedup_init_result)) {
         speedup_config_result = PTMSYSM_ConfigureNew3DSCPU(3);
         ptmSysmExit();
     }
-    gfxInitDefault();
-    gfxSet3D(false);
     consoleInit(GFX_TOP, nullptr);
     const bool romfs_ready = R_SUCCEEDED(romfsInit());
     try {

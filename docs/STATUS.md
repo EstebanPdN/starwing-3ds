@@ -1,7 +1,9 @@
 # Verification status
 
-Current development version: **1.1-E1**; CIA internal title version: **84**.
-This is the first public 1.1 experimental. Stable remains **1.0**.
+Current development version: **1.1**; CIA internal title version: **85**.
+Stable 1.1 retains the renderer/audio implementation from 1.1-E1.
+Old 3DS / 2DS now displays a Python-rasterized, game-style compatibility notice
+before ROMFS, SD, audio, or gameplay initialization. New models continue normally.
 The application and HOME Menu title remain **Starwing 3DS**.
 
 ## Behavior
@@ -18,13 +20,21 @@ SPC blocks and ARM saturation apply to both audio routes. Configuration and
 checkpoints stay isolated by model; cartridge SRAM paths are unchanged.
 
 Options > Gameplay > Speed / Interpolation has independent GAME SPEED,
-INTERPOLATION and FPS LIMIT controls. The limit is OFF / 30 / 60, OFF by default
-on both models. It gates drawing without altering source/audio clocks. OFF
+INTERPOLATION and FPS LIMIT controls. Defaults are Original speed,
+interpolation ON and a 60 FPS limit. Existing saved choices are preserved. It gates drawing without altering source/audio clocks. OFF
 removes the explicit software limiter; source scheduling and the physical
 60 Hz display still bound visible output. Option buttons are 3 px shorter
 and the group is 3 px higher; touch bounds follow the rendered controls.
 
-## Completed checks
+## 1.1 checks
+
+- ARM Release build; fresh-install Original/ON/60 defaults and saved-choice persistence.
+- Timing/menu navigation and updater state regression checks.
+- Old-profile Azahar launch without a ROM: notice and START exit.
+- New-profile Azahar launch reaches the game intro with the same executable.
+- Native pixel artwork uses the Options palette, borders and game glyph grid.
+
+## Inherited 1.1-E1 checks (not rerun for this release)
 
 - All 75 discovered level/scene entries: 27 Original and 48 EX, each with Old
   and New audio/render policies. The 150-case matrix compares 187,200 candidate
@@ -72,7 +82,7 @@ uses direct replays and GPU readback, with no additional process/quick dumps.
 
 ## Remaining acceptance
 
-Physical Old/New sustained FPS, sound continuity, all-stage playthroughs,
+Physical New sustained FPS, sound continuity, all-stage playthroughs,
 HOME/sleep, stereo comfort, updater installation and the intermittent New 3DS
 system shutdown require device evidence. No claim of complete coverage or
 elimination of that shutdown is made.
