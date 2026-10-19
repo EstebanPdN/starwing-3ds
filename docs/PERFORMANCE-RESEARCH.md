@@ -1,4 +1,4 @@
-# Performance research for 1.1-E1
+# Performance research for 1.1
 
 Read the Nintendo 3DS optimization cases and selected architecture/audit sections of [Code Atlas](https://code-atlas.estebanpdn.chatgpt.site/nintendo-3ds-manual.html). The applied principles are independent model budgets, a measured critical path, explicit GPU ownership, bounded buffers, exact cache identity and differential rendering/audio checks. This is selected chapter/source review, not a claim to have read every chapter or benchmarked every port.
 

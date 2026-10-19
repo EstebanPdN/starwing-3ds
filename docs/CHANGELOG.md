@@ -2,23 +2,12 @@
 
 Published releases are listed first; earlier entries describe development candidates.
 
-## 1.1.1 — 2026-10-19
-
-- Select the Old 3DS notice language automatically from console settings:
-  English, Spanish, Portuguese, Italian, German and French.
-- Use English for unsupported console languages or failed system-language reads.
-- Localize the message, planned-compatibility panel, version label and exit
-  button while retaining the Python-drawn pixel interface and game lettering.
-
 ## 1.1 — 2026-10-19
 
-- Show a game-style, Python-rasterized compatibility notice automatically on
-  Old 3DS / 2DS, before reading ROMs or starting gameplay. Future support is planned.
-- Default to Original game speed, interpolation ON and a 60 FPS limit.
-  Preserve previously saved user preferences.
-- Include the ordered PICA world backend and exact native SPC optimizations
-  from 1.1-E1, with reference fallback for stereo and unsupported scenes.
-- Retain the timing menu, updater, diagnostics, saves and title identity.
+- Improve PICA rendering, audio processing and memory use.
+- Default to Original speed, interpolation ON and a 60 FPS cap.
+- Add an automatic Old 3DS compatibility notice in six console languages,
+  with English fallback.
 
 ## 1.0 — 2026-10-17
 

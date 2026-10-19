@@ -1,6 +1,6 @@
 # Experimental native rendering and audio
 
-Public experimental: 1.1-E1, internal CIA version 84. Product: Starwing 3DS.
+Included in stable 1.1, internal CIA version 87. Product: Starwing 3DS.
 Physical Old/New 3DS acceptance remains pending. Host measurements below are
 workload-specific and cannot be converted into console FPS.
 

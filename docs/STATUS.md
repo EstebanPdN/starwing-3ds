@@ -1,7 +1,7 @@
 # Verification status
 
-Current development version: **1.1.1**; CIA internal title version: **86**.
-Stable 1.1.1 retains the renderer/audio implementation from 1.1-E1.
+Current development version: **1.1**; CIA internal title version: **87**.
+Stable 1.1 includes the renderer/audio implementation tested in development.
 Old 3DS / 2DS now displays a Python-rasterized, game-style compatibility notice
 before ROMFS, SD, audio, or gameplay initialization. New models continue normally.
 The application and HOME Menu title remain **Starwing 3DS**.
@@ -26,7 +26,7 @@ removes the explicit software limiter; source scheduling and the physical
 60 Hz display still bound visible output. Option buttons are 3 px shorter
 and the group is 3 px higher; touch bounds follow the rendered controls.
 
-## 1.1.1 checks
+## Current 1.1 checks
 
 - All 12 console language identifiers, every unknown byte value, and failed
   language reads: supported selection or English fallback as appropriate.
@@ -36,7 +36,7 @@ and the group is 3 px higher; touch bounds follow the rendered controls.
 - Azahar system CFG set to Portuguese selects Portuguese; Dutch selects English.
   Captures are emulator evidence, not physical-console validation.
 
-## Inherited 1.1 checks
+## Earlier 1.1 checks
 
 - ARM Release build; fresh-install Original/ON/60 defaults and saved-choice persistence.
 - Timing/menu navigation and updater state regression checks.
@@ -44,7 +44,7 @@ and the group is 3 px higher; touch bounds follow the rendered controls.
 - New-profile Azahar launch reaches the game intro with the same executable.
 - Native pixel artwork uses the Options palette, borders and game glyph grid.
 
-## Inherited 1.1-E1 checks (not rerun for this release)
+## Earlier development checks (not rerun for this package)
 
 - All 75 discovered level/scene entries: 27 Original and 48 EX, each with Old
   and New audio/render policies. The 150-case matrix compares 187,200 candidate

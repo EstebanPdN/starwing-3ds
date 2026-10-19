@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.1"><img src="docs/badges/version.svg?v=2" alt="Release: v1.0" height="22"></a>
+  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.1"><img src="docs/badges/version.svg?v=3" alt="Release: v1.1" height="22"></a>
   <a href="docs/COMPATIBILITY.md"><img src="docs/badges/platform.svg?v=2" alt="Nintendo 3DS" height="22"></a>
   <a href="docs/UPDATING.md"><img src="docs/badges/updater.svg" alt="Updates: built in" height="22"></a>
   <a href="docs/legal/THIRD_PARTY_NOTICES.md"><img src="docs/badges/license.svg?v=2" alt="Component-specific licenses" height="22"></a>
@@ -32,8 +32,9 @@
 
 A Nintendo 3DS adaptation of the SNES **Star Fox / Starwing**, based on
 KandoWontU's Starfox Enhanced, UltraStarFox, and Team SFEX's work. Made with
-help from Codex. **v1.0 is the first public release.** Performance and hardware
-coverage are described in [Compatibility](docs/COMPATIBILITY.md).
+help from Codex. **This is an early release.** The port is expected to be
+completable, but extensive playtesting is still pending. See
+[Compatibility](docs/COMPATIBILITY.md) for the current scope.
 
 ## Features
 
@@ -55,16 +56,17 @@ of sustained hardware FPS. Star Fox EX is not fully supported.
 ## Download and installation
 
 <p>
-  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/download/v1.1.1/Starwing-3DS.cia"><img src="docs/images/download-cia.svg" alt="Download Starwing 3DS CIA" width="210" height="46"></a>
-  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/download/v1.1.1/Starwing-3DS.3dsx"><img src="docs/images/download-3dsx.svg" alt="Download Starwing 3DS for Homebrew Launcher" width="210" height="46"></a>
+  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/download/v1.1/Starwing-3DS.cia"><img src="docs/images/download-cia.svg" alt="Download Starwing 3DS CIA" width="210" height="46"></a>
+  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/download/v1.1/Starwing-3DS.3dsx"><img src="docs/images/download-3dsx.svg" alt="Download Starwing 3DS for Homebrew Launcher" width="210" height="46"></a>
 </p>
 
-**v1.1.1 requires New Nintendo 3DS / New 2DS XL for gameplay. Old 3DS / 2DS displays an automatic notice; future compatibility is planned.**
+**Supported systems: New Nintendo 3DS / New 2DS XL.**
+Old 3DS / 2DS displays a compatibility notice; future support is planned.
 
 The notice follows the console language: English, Spanish, Portuguese, Italian,
 German or French. Other languages fall back to English.
 
-[Release notes and FBI QR](https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.1.1) · [Project website](https://estebanpdn.github.io/star-fox.html)
+[Release notes and FBI QR](https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.1) · [Project website](https://estebanpdn.github.io/star-fox.html)
 
 1. Install `Starwing-3DS.cia` with FBI, or scan the release's QR in
    **Remote Install → Scan QR Code**.
@@ -136,7 +138,8 @@ for reproducible reports. Capture shortcuts and sharing precautions are in
   tools, and upstream work; individual credits are in [CREDITS.md](docs/legal/CREDITS.md).
 - Nintendo and Argonaut Software — the original Star Fox / Starwing.
 - devkitPro contributors — devkitARM, libctru, Citro3D, and Citro2D.
-- Esteban PDN — Nintendo 3DS adaptation and repository maintenance.
+- Esteban PDN — Nintendo 3DS adaptation and repository maintenance, with help from Codex.
+- Snipy44300 — ALttP Community Patches optimization reference.
 
 ## License and legal notice
 
