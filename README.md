@@ -31,8 +31,11 @@
 </p>
 
 A Nintendo 3DS adaptation of the SNES **Star Fox / Starwing**, based on
-KandoWontU's Starfox Enhanced, UltraStarFox, and Team SFEX's work. Made with
-help from Codex. **This is an early release.** The port is expected to be
+KandoWontU's Starfox Enhanced, UltraStarFox, and Team SFEX's work.
+
+This project was developed with the help of [OpenAI Codex](https://openai.com/codex/). Learn more about the development process [here](AI_DEVELOPMENT.md).
+
+**This is an early release.** The port is expected to be
 completable, but extensive playtesting is still pending. See
 [Compatibility](docs/COMPATIBILITY.md) for the current scope.
 
