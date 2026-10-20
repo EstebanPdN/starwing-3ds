@@ -4,6 +4,7 @@
     ".github",
     ".gitignore",
     ".gitmodules",
+    "AI_DEVELOPMENT.md",
     "CMakeLists.txt",
     "README.md",
     "assets",
@@ -18,11 +19,13 @@
   ],
   "current_documents": [
     "README.md",
+    "AI_DEVELOPMENT.md",
     "docs/REPOSITORY.md",
     "docs/CONTRIBUTING.md"
   ],
   "required_paths": [
     "README.md",
+    "AI_DEVELOPMENT.md",
     "docs/REPOSITORY.md",
     "scripts/check-repository.py",
     "CMakeLists.txt",
