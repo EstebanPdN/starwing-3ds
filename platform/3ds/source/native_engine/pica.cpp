@@ -105,7 +105,9 @@ bool Pica::draw(const Scene& scene,const render::Palette256& colours) {
     C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
     if (stats_.vertices) { C3D_DrawArrays(GPU_TRIANGLES,0,stats_.vertices); stats_.draws=1; }
     C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
-    C3D_TexBind(1,nullptr);C3D_TexBind(2,nullptr);
+    // Citro3D 1.7.1 dereferences tex for units 1/2, even when unbinding.
+    // Keep these owned textures bound: C2D_Prepare restores the combiners,
+    // and Citro2D samples only unit 0. The next native pass rebinds all units.
     C2D_Prepare();
     return true;
 }

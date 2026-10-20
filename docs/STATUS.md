@@ -1,6 +1,6 @@
 # Verification status
 
-Current development version: **1.1**; CIA internal title version: **87**.
+Current development version: **1.2-E1**; CIA internal title version: **88**.
 Stable 1.1 includes the renderer/audio implementation tested in development.
 Old 3DS / 2DS now displays a Python-rasterized, game-style compatibility notice
 before ROMFS, SD, audio, or gameplay initialization. New models continue normally.
@@ -26,7 +26,23 @@ removes the explicit software limiter; source scheduling and the physical
 60 Hz display still bound visible output. Option buttons are 3 px shorter
 and the group is 3 px higher; touch bounds follow the rendered controls.
 
-## Current 1.1 checks
+## 1.2-E1 crash correction
+
+A user-reported New 2DS XL data abort matches the 1.1 ELF: PC 0x002b43bc,
+LR 0x00150c3c, R0=1, R1=0, and fault address 0x0000000c. The 96 captured
+instruction bytes match the published build. The caller passes a null texture
+to Citro3D 1.7.1 unit 1, whose type check dereferences it.
+
+Remove the null binds for units 1/2. Owned palette/checker textures remain live;
+Citro2D resets its combiner modes before drawing and does not sample these units.
+No geometry, palette, timing, shader, or gameplay changes are included.
+
+The ARM handoff regression executes the linked instructions with page zero
+unmapped: 1.1 faults at address 12; the candidate reaches C2D_Prepare without
+an invalid access. This CPU replay does not simulate GPU output or establish
+physical New 2DS XL acceptance. User confirmation on hardware is still pending.
+
+## Inherited 1.1 checks
 
 - All 12 console language identifiers, every unknown byte value, and failed
   language reads: supported selection or English fallback as appropriate.

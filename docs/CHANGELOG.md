@@ -2,6 +2,10 @@
 
 Published releases are listed first; earlier entries describe development candidates.
 
+## 1.2-E1 — 2026-10-19 (experimental)
+
+- Fix a null texture pointer crash when handing native PICA rendering back to Citro2D.
+
 ## 1.1 — 2026-10-19
 
 - Improve PICA rendering, audio processing and memory use.

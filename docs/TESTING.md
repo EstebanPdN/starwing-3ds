@@ -98,3 +98,15 @@ Its production PICA renderer is read back as RGBA8 and compared with the
 expected indexed composition. Results go to `sdmc:/native-gpu-results.json`.
 Never publish the scene fixtures. See [Status](STATUS.md) for measured coverage
 and the remaining physical-console acceptance boundaries.
+
+## PICA handoff crash regression
+
+With `unicorn` and `pyelftools` installed, run:
+
+```sh
+python3 platform/3ds/tools/test-pica-handoff-arm.py path/to/1.1.elf path/to/1.2-E1.elf
+```
+
+The test executes the actual ARM handoff and linked Citro3D with page zero
+unmapped. It requires the baseline to fault at address 12 and the candidate
+to reach Citro2D. It does not simulate the GPU or replace console validation.

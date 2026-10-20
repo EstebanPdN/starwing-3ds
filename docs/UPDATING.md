@@ -102,3 +102,9 @@ preserved. Keep your SD data when upgrading.
 If you installed the briefly published 1.1.1 package, install the current 1.1
 CIA manually with FBI, or replace the 3DSX manually. The updater does not offer
 lower semantic versions. The higher internal CIA version permits replacement.
+
+## Experimental 1.2-E1
+
+Select Experimental to install `v1.2-E1` (internal CIA version 88), which fixes
+a PICA-to-Citro2D null-pointer crash. Stable remains `v1.1`. Preserve the SD
+data folder and saved settings. Hardware confirmation of this fix is pending.
