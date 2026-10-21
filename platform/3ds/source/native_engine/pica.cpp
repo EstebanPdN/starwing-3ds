@@ -78,7 +78,10 @@ bool Pica::draw(const Scene& scene,const render::Palette256& colours) {
     C3D_TexFlush(&palette_);
     if (stats_.vertices && R_FAILED(GSPGPU_FlushDataCache(vertices_,stats_.vertices*sizeof(Vertex)))) return false;
     stats_.flush_us=elapsed(begin);
+    // Queue the pending Citro2D draws, and flush their command list, before
+    // the world target's fill so every GPU operation keeps program order.
     C2D_Flush();
+    C3D_FrameSplit(GX_CMDLIST_FLUSH);
     C3D_RenderTargetClear(target_,C3D_CLEAR_COLOR,0,0);
     C3D_FrameDrawOn(target_);
     C3D_BindProgram(&program_);

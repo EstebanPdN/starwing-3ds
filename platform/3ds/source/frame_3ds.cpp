@@ -600,6 +600,8 @@ void Frame3ds::set_stereo_strength(std::uint8_t strength) noexcept {
     }
 }
 
+
+
 const render::Framebuffer& Frame3ds::draw(
     const simulation::GameSimulation& game, bool gpu_bg2,
     double interpolation_alpha, const simulation::SnesPpuState* prepared_background) {
@@ -626,6 +628,13 @@ const render::Framebuffer& Frame3ds::draw(
     const auto& map = game.map();
     const auto& ppu = prepared_background ? *prepared_background
         : presentation_ppu(game, interpolation_alpha);
+    // Both priority passes of every layer in this frame read this one
+    // immutable PPU snapshot; let them share decoded characters.
+    backgrounds_.begin_frame(ppu);
+    struct EndBackgroundFrame {
+        render::BackgroundRenderer& renderer;
+        ~EndBackgroundFrame() { renderer.end_frame(); }
+    } end_background_frame{backgrounds_};
     const auto read_ram = [&](const char *name) {
         return map.read_native_word(ram_symbol(name));
     };

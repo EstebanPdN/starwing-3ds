@@ -4,11 +4,18 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <limits>
 #include <vector>
 
 namespace starfox::render {
 namespace {
+
+// Tiles are 8 or 16 pixels. ARM11 has no integer divider, so unsigned
+// coordinates are shifted rather than divided by the runtime tile edge.
+constexpr std::uint32_t tile_shift(std::uint32_t edge) noexcept {
+    return edge == 16U ? 4U : 3U;
+}
 
 std::uint16_t vram_word(
     const simulation::SnesPpuState& ppu, std::uint32_t word_address) noexcept {
@@ -90,6 +97,21 @@ TileSample tile_sample(std::uint16_t tile, std::int32_t source_x,
         x & 7U, y & 7U};
 }
 
+// Bit b of a planar byte -> bit 0 of byte lane (7 - b): the leftmost pixel
+// (bit 7) lands in lane 0, matching little-endian pixel order in memory.
+constexpr auto plane_spread = [] {
+    std::array<std::uint64_t, 256U> table{};
+    for (std::uint32_t value = 0U; value < 256U; ++value)
+        for (std::uint32_t x = 0U; x < 8U; ++x)
+            if ((value & (0x80U >> x)) != 0U) table[value] |= std::uint64_t{1} << (8U * x);
+    return table;
+}();
+
+struct DecodedCharacters {
+    std::array<std::uint8_t, 1024U * 64U> pixels;
+    std::array<std::uint8_t, 1024U> valid;
+};
+
 // VRAM is immutable throughout one draw call. Decode only characters actually
 // touched by that pass, then reuse their 8x8 pixels across tilemap entries,
 // scanlines, priority passes, and mosaic samples. In particular, Mode 3 BG1
@@ -98,45 +120,30 @@ struct CharacterCache {
     const simulation::SnesPpuState& ppu;
     std::uint16_t character_base;
     std::uint32_t plane_pairs;
-    std::array<std::uint8_t, 1024U * 64U> pixels;
-    std::array<std::uint8_t, 1024U> valid{};
-
-    CharacterCache(const simulation::SnesPpuState& source,
-        std::uint16_t base, std::uint32_t pairs) noexcept
-        : ppu(source), character_base(base), plane_pairs(pairs) {}
+    DecodedCharacters& decoded;
 
     const std::uint8_t* row(const TileSample& sample) noexcept {
         const auto character = static_cast<std::size_t>(sample.tile & 0x03ffU);
         const auto offset = character * 64U;
-        if (valid[character] == 0U) {
+        if (decoded.valid[character] == 0U) {
             const auto base = (static_cast<std::uint32_t>(character_base) * 2U
                 + static_cast<std::uint32_t>(character) * plane_pairs * 16U)
                 & 0xffffU;
             for (std::uint32_t y = 0U; y < 8U; ++y) {
-                std::array<std::uint8_t, 4U> low{};
-                std::array<std::uint8_t, 4U> high{};
+                std::uint64_t pixels = 0U;
                 for (std::uint32_t pair = 0U; pair < plane_pairs; ++pair) {
-                    const auto pair_base = (base + pair * 16U + y * 2U)
-                        & 0xffffU;
-                    low[pair] = ppu.vram[pair_base];
-                    high[pair] = ppu.vram[(pair_base + 1U) & 0xffffU];
+                    const auto pair_base = (base + pair * 16U + y * 2U) & 0xffffU;
+                    pixels |= plane_spread[ppu.vram[pair_base]] << (pair * 2U);
+                    pixels |= plane_spread[ppu.vram[(pair_base + 1U) & 0xffffU]]
+                        << (pair * 2U + 1U);
                 }
-                for (std::uint32_t x = 0U; x < 8U; ++x) {
-                    const auto mask = static_cast<std::uint8_t>(0x80U >> x);
-                    auto colour = std::uint8_t{};
-                    for (std::uint32_t pair = 0U; pair < plane_pairs; ++pair) {
-                        colour = static_cast<std::uint8_t>(colour
-                            | ((low[pair] & mask) != 0U ? 1U << (pair * 2U) : 0U)
-                            | ((high[pair] & mask) != 0U ? 2U << (pair * 2U) : 0U));
-                    }
-                    pixels[offset + y * 8U + x] = colour;
-                }
+                std::memcpy(decoded.pixels.data() + offset + y * 8U, &pixels, sizeof(pixels));
             }
-            valid[character] = 1U;
+            decoded.valid[character] = 1U;
         }
         auto y = sample.y;
         if ((sample.tile & 0x8000U) != 0U) y = 7U - y;
-        return pixels.data() + offset + y * 8U;
+        return decoded.pixels.data() + offset + y * 8U;
     }
 
     std::uint8_t pixel(const TileSample& sample) noexcept {
@@ -145,6 +152,29 @@ struct CharacterCache {
         return row(sample)[x];
     }
 };
+
+// Merge `count` pixels of one decoded character row, starting at character
+// column `first`, into `out`. Zero is transparent; other pixels gain
+// `palette` (no carry: 4bpp colours stay below 16 and 8bpp uses offset 0).
+// The caller guarantees eight addressable bytes at `out`; bytes outside the
+// run are rewritten unchanged.
+inline void merge_character_run(std::uint8_t* out, const std::uint8_t* character_row,
+    std::uint32_t first, std::uint32_t count, bool flipped, std::uint8_t palette) noexcept {
+    std::uint64_t pixels;
+    std::memcpy(&pixels, character_row, sizeof(pixels));
+    if (flipped) pixels = __builtin_bswap64(pixels);
+    pixels >>= first * 8U;
+    constexpr auto low7 = 0x7f7f7f7f7f7f7f7fULL;
+    const auto nonzero = (((pixels & low7) + low7) | pixels) >> 7U & 0x0101010101010101ULL;
+    auto mask = nonzero * 0xffU;
+    if (count < 8U) mask &= (std::uint64_t{1} << (count * 8U)) - 1U;
+    if (mask == 0U) return;
+    const auto coloured = pixels + std::uint64_t{palette} * 0x0101010101010101ULL;
+    std::uint64_t destination;
+    std::memcpy(&destination, out, sizeof(destination));
+    destination = (destination & ~mask) | (coloured & mask);
+    std::memcpy(out, &destination, sizeof(destination));
+}
 
 std::int32_t mosaic_coordinate(
     std::int32_t coordinate,
@@ -202,7 +232,7 @@ bool draw_split_native(const simulation::SnesPpuState& ppu,
             ? static_cast<std::int32_t>(ppu.bg2_scanline_scroll_y[row_index])
             : scroll_y;
         const auto source_y = static_cast<std::uint32_t>(logical_y + row_y) & y_mask;
-        const auto tile_y = source_y / tile_edge;
+        const auto tile_y = source_y >> tile_shift(tile_edge);
         for (std::uint32_t x = 0U; x < low.width();) {
             const auto logical_x = static_cast<std::int32_t>(x) - horizontal_origin;
             auto remaining = low.width() - x;
@@ -226,7 +256,7 @@ bool draw_split_native(const simulation::SnesPpuState& ppu,
                 if (unwrapped < 0)
                     remaining = std::min(remaining, static_cast<std::uint32_t>(-unwrapped));
             }
-            const auto tile_x = source_x / tile_edge;
+            const auto tile_x = source_x >> tile_shift(tile_edge);
             const auto page = (tile_x >> 5U) + (tile_y >> 5U) * pages_wide;
             const auto entry = page * 0x400U
                 + (tile_y & 31U) * 32U + (tile_x & 31U);
@@ -260,7 +290,8 @@ bool draw_split_native(const simulation::SnesPpuState& ppu,
 }
 
 bool draw_bg1_native(const simulation::SnesPpuState& ppu,
-    Framebuffer& target, TilePriorityPass priority) noexcept {
+    Framebuffer& target, TilePriorityPass priority,
+    CharacterCache& characters) noexcept {
     if (target.width() != 256U || target.height() != 224U
         || target.draw_scale() != 1U || target.command_buffer() != nullptr
         || target.layer_tags_enabled() || target.tracks_write_coverage()
@@ -272,17 +303,15 @@ bool draw_bg1_native(const simulation::SnesPpuState& ppu,
     const auto x_mask = width_tiles * tile_edge - 1U;
     const auto y_mask = height_tiles * tile_edge - 1U;
     const auto eight_bpp = ppu.background_mode == 3U;
-    CharacterCache characters{ppu, ppu.bg1_character_base,
-        eight_bpp ? 4U : 2U};
     auto* pixels = target.pixels().data();
     for (std::uint32_t y = 0U; y < 224U; ++y) {
         const auto source_y = static_cast<std::uint32_t>(
             y + ppu.bg1_scroll_y) & y_mask;
-        const auto tile_y = source_y / tile_edge;
+        const auto tile_y = source_y >> tile_shift(tile_edge);
         for (std::uint32_t x = 0U; x < 256U;) {
             const auto source_x = static_cast<std::uint32_t>(
                 x + ppu.bg1_scroll_x) & x_mask;
-            const auto tile_x = source_x / tile_edge;
+            const auto tile_x = source_x >> tile_shift(tile_edge);
             const auto page = (tile_x >> 5U) + (tile_y >> 5U) * pages_wide;
             const auto entry = page * 0x400U
                 + (tile_y & 31U) * 32U + (tile_x & 31U);
@@ -300,7 +329,10 @@ bool draw_bg1_native(const simulation::SnesPpuState& ppu,
                     : ((tile >> 10U) & 7U) * 16U;
                 const bool flip_x = (tile & 0x4000U) != 0U;
                 const auto offset = y * 256U + x;
-                for (std::uint32_t i = 0U; i < count; ++i) {
+                if (offset + 8U <= 256U * 224U) {
+                    merge_character_run(pixels + offset, row, source_x & 7U, count,
+                        flip_x, static_cast<std::uint8_t>(palette));
+                } else for (std::uint32_t i = 0U; i < count; ++i) {
                     const auto character_x = (source_x + i) & 7U;
                     const auto colour = row[
                         flip_x ? 7U - character_x : character_x];
@@ -316,6 +348,63 @@ bool draw_bg1_native(const simulation::SnesPpuState& ppu,
 }
 
 } // namespace
+
+struct BackgroundRenderer::FrameCharacters {
+    struct Slot {
+        std::uint16_t character_base{};
+        std::uint32_t plane_pairs{};
+        bool used{};
+        DecodedCharacters decoded;
+    };
+    const simulation::SnesPpuState* ppu{};
+    std::array<Slot, 3U> slots;
+    std::size_t next{};
+
+    // A pass's character store: shared within the frame for the frame's PPU,
+    // otherwise the caller's own (cleared) local store.
+    DecodedCharacters& acquire(const simulation::SnesPpuState& source,
+        std::uint16_t base, std::uint32_t pairs, DecodedCharacters& local) noexcept {
+        if (&source == ppu) {
+            for (auto& slot : slots)
+                if (slot.used && slot.character_base == base && slot.plane_pairs == pairs)
+                    return slot.decoded;
+            auto& slot = slots[next];
+            next = (next + 1U) % slots.size();
+            slot.used = true;
+            slot.character_base = base;
+            slot.plane_pairs = pairs;
+            slot.decoded.valid.fill(0U);
+            return slot.decoded;
+        }
+        local.valid.fill(0U);
+        return local;
+    }
+};
+
+namespace {
+DecodedCharacters& acquire_characters(
+    BackgroundRenderer::FrameCharacters* frame, const simulation::SnesPpuState& ppu,
+    std::uint16_t base, std::uint32_t pairs, DecodedCharacters& local) noexcept {
+    if (frame != nullptr) return frame->acquire(ppu, base, pairs, local);
+    local.valid.fill(0U);
+    return local;
+}
+} // namespace
+
+BackgroundRenderer::BackgroundRenderer() noexcept = default;
+BackgroundRenderer::~BackgroundRenderer() = default;
+BackgroundRenderer::BackgroundRenderer(BackgroundRenderer&&) noexcept = default;
+BackgroundRenderer& BackgroundRenderer::operator=(BackgroundRenderer&&) noexcept = default;
+
+void BackgroundRenderer::begin_frame(const simulation::SnesPpuState& ppu) {
+    if (!frame_characters_) frame_characters_ = std::make_unique<FrameCharacters>();
+    frame_characters_->ppu = &ppu;
+    for (auto& slot : frame_characters_->slots) slot.used = false;
+}
+
+void BackgroundRenderer::end_frame() noexcept {
+    if (frame_characters_) frame_characters_->ppu = nullptr;
+}
 
 std::uint8_t tunnel_wall_index(const simulation::SnesPpuState& ppu) noexcept {
     constexpr unsigned row=112;
@@ -353,9 +442,15 @@ void BackgroundRenderer::draw_bg1(
     if ((ppu.main_screen & 0x01U) == 0U
         || (ppu.background_mode != 1U && ppu.background_mode != 2U
             && ppu.background_mode != 3U)) return;
+    // One character store serves both the tile-run and the general path.
+    const auto bg1_pairs = ppu.background_mode == 3U ? 4U : 2U;
+    DecodedCharacters local_characters;
+    CharacterCache characters{ppu, ppu.bg1_character_base, bg1_pairs,
+        acquire_characters(frame_characters_.get(), ppu, ppu.bg1_character_base,
+            bg1_pairs, local_characters)};
     if (horizontal_origin == 0 && horizontal_inset == 0U
         && !transparent_cgram_black
-        && draw_bg1_native(ppu, target, priority)) return;
+        && draw_bg1_native(ppu, target, priority, characters)) return;
     const auto width_tiles = (ppu.bg1_screen_size & 1U) != 0U ? 64U : 32U;
     const auto height_tiles = (ppu.bg1_screen_size & 2U) != 0U ? 64U : 32U;
     const auto pages_wide = width_tiles / 32U;
@@ -366,8 +461,6 @@ void BackgroundRenderer::draw_bg1(
         value %= modulus;
         return value < 0 ? value + modulus : value;
     };
-    CharacterCache characters{ppu, ppu.bg1_character_base,
-        ppu.background_mode == 3U ? 4U : 2U};
     std::array<std::uint16_t, 4096U> tilemap{};
     std::array<std::uint8_t, 4096U> tilemap_valid{};
     if (target.width() == 256U && target.height() == 224U
@@ -379,7 +472,7 @@ void BackgroundRenderer::draw_bg1(
                 static_cast<std::int32_t>(screen_y), ppu.mosaic, 0x01U);
             const auto source_y = static_cast<std::uint32_t>(
                 sample_y + ppu.bg1_scroll_y) & y_mask;
-            const auto tile_y = source_y / tile_edge;
+            const auto tile_y = source_y >> tile_shift(tile_edge);
             auto previous_entry = std::numeric_limits<std::uint32_t>::max();
             auto tile = std::uint16_t{};
             for (std::uint32_t screen_x = 0U; screen_x < 256U; ++screen_x) {
@@ -387,7 +480,7 @@ void BackgroundRenderer::draw_bg1(
                     static_cast<std::int32_t>(screen_x), ppu.mosaic, 0x01U);
                 const auto source_x = static_cast<std::uint32_t>(
                     sample_x + ppu.bg1_scroll_x) & x_mask;
-                const auto tile_x = source_x / tile_edge;
+                const auto tile_x = source_x >> tile_shift(tile_edge);
                 const auto page = (tile_x >> 5U) + (tile_y >> 5U) * pages_wide;
                 const auto entry = page * 0x400U
                     + (tile_y & 31U) * 32U + (tile_x & 31U);
@@ -419,7 +512,7 @@ void BackgroundRenderer::draw_bg1(
             static_cast<std::int32_t>(screen_y), ppu.mosaic, 0x01U);
         const auto source_y = wrap(sample_y
             + ppu.bg1_scroll_y, height_pixels);
-        const auto tile_y = static_cast<std::uint32_t>(source_y) / tile_edge;
+        const auto tile_y = static_cast<std::uint32_t>(source_y) >> tile_shift(tile_edge);
         const auto inset = static_cast<std::int32_t>(
             std::min<std::uint32_t>(horizontal_inset, 128U));
         const auto first_x = extend_horizontal ? 0U
@@ -435,7 +528,7 @@ void BackgroundRenderer::draw_bg1(
                 logical_x, ppu.mosaic, 0x01U);
             const auto source_x = wrap(sample_x
                 + ppu.bg1_scroll_x, width_pixels);
-            const auto tile_x = static_cast<std::uint32_t>(source_x) / tile_edge;
+            const auto tile_x = static_cast<std::uint32_t>(source_x) >> tile_shift(tile_edge);
             const auto page = (tile_x >> 5U) + (tile_y >> 5U) * pages_wide;
             const auto entry = page * 0x400U
                 + (tile_y & 31U) * 32U + (tile_x & 31U);
@@ -673,7 +766,9 @@ void BackgroundRenderer::draw_bg2(
     // the same nibble for every output pixel—well over 170,000 times per
     // 32:9 frame. Animated VRAM remains exact because this cache lives only
     // for the duration of the current PPU snapshot.
-    CharacterCache characters{ppu, ppu.bg2_character_base, 2U};
+    DecodedCharacters local_characters;
+    CharacterCache characters{ppu, ppu.bg2_character_base, 2U,
+        acquire_characters(frame_characters_.get(), ppu, ppu.bg2_character_base, 2U, local_characters)};
     std::array<std::uint16_t, 4096U> decoded_tilemap;
     std::array<std::uint8_t, 4096U> decoded_tilemap_valid{};
     const auto cached_tilemap_word = [&ppu, &decoded_tilemap,
@@ -712,6 +807,7 @@ void BackgroundRenderer::draw_bg2(
                 ? no_column_scroll
                 : column_scroll_y[static_cast<std::size_t>(sampled_x[x])];
         }
+        const bool mosaic = (ppu.mosaic & 0x02U) != 0U;
         for (std::uint32_t screen_y = 0U; screen_y < 224U; ++screen_y) {
             const auto sample_y = mosaic_coordinate(
                 static_cast<std::int32_t>(screen_y), ppu.mosaic, 0x02U);
@@ -721,6 +817,61 @@ void BackgroundRenderer::draw_bg2(
             const auto register_scroll_y = ppu.bg2_scanline_scroll_enabled
                 ? static_cast<std::int32_t>(ppu.bg2_scanline_scroll_y[sample_y])
                 : scroll_y;
+            if (!mosaic) {
+                // Without mosaic, every pixel up to the next character edge
+                // or per-column offset change shares one tilemap entry and
+                // character row. Resolve those once per run; the pixel
+                // mapping below is the per-pixel path's, unchanged.
+                for (std::uint32_t screen_x = 0U; screen_x < 256U;) {
+                    const auto tile_scroll_y = sampled_column_scroll_y[screen_x];
+                    const auto current_scroll_y = tile_scroll_y != no_column_scroll
+                        ? tile_scroll_y : register_scroll_y;
+                    const auto source_x = static_cast<std::uint32_t>(
+                        static_cast<std::int32_t>(screen_x) + row_scroll_x) & x_mask;
+                    const auto source_y = static_cast<std::uint32_t>(
+                        sample_y + current_scroll_y) & y_mask;
+                    auto count = std::min<std::uint32_t>(8U - (source_x & 7U), 256U - screen_x);
+                    for (std::uint32_t n = 1U; n < count; ++n) {
+                        if (sampled_column_scroll_y[screen_x + n] != tile_scroll_y) {
+                            count = n;
+                            break;
+                        }
+                    }
+                    const auto tile_x = source_x >> tile_shift(tile_edge);
+                    const auto tile_y = source_y >> tile_shift(tile_edge);
+                    const auto page = (tile_x >> 5U) + (tile_y >> 5U) * pages_wide;
+                    const auto entry = page * 0x400U
+                        + (tile_y & 31U) * 32U + (tile_x & 31U);
+                    const auto tile = cached_tilemap_word(entry);
+                    if (selected_priority(tile, priority)) {
+                        const auto sample = tile_sample(tile,
+                            static_cast<std::int32_t>(source_x),
+                            static_cast<std::int32_t>(source_y),
+                            ppu.bg2_tile_size_16);
+                        const auto* run_pixels = characters.row(sample);
+                        const bool flipped = (tile & 0x4000U) != 0U;
+                        const auto palette = static_cast<std::uint8_t>(((tile >> 10U) & 7U) * 16U);
+                        const auto offset = screen_y * 256U + screen_x;
+                        if (direct_pixels != nullptr && offset + 8U <= 256U * 224U) {
+                            merge_character_run(direct_pixels + offset, run_pixels,
+                                source_x & 7U, count, flipped, palette);
+                        } else for (std::uint32_t i = 0U; i < count; ++i) {
+                            const auto x = (source_x + i) & 7U;
+                            const auto colour = run_pixels[flipped ? 7U - x : x];
+                            if (colour == 0U) continue;
+                            const auto indexed_colour = static_cast<std::uint8_t>(palette + colour);
+                            if (direct_pixels != nullptr) {
+                                direct_pixels[offset + i] = indexed_colour;
+                            } else {
+                                target.set(static_cast<std::int32_t>(screen_x + i),
+                                    static_cast<std::int32_t>(screen_y), indexed_colour);
+                            }
+                        }
+                    }
+                    screen_x += count;
+                }
+                continue;
+            }
             auto previous_entry = std::numeric_limits<std::uint32_t>::max();
             auto tile = std::uint16_t{};
             auto previous_sample_tile = std::numeric_limits<std::uint16_t>::max();
@@ -736,8 +887,8 @@ void BackgroundRenderer::draw_bg2(
                     sample_x + row_scroll_x) & x_mask;
                 const auto source_y = static_cast<std::uint32_t>(
                     sample_y + current_scroll_y) & y_mask;
-                const auto tile_x = source_x / tile_edge;
-                const auto tile_y = source_y / tile_edge;
+                const auto tile_x = source_x >> tile_shift(tile_edge);
+                const auto tile_y = source_y >> tile_shift(tile_edge);
                 const auto page = (tile_x >> 5U) + (tile_y >> 5U) * pages_wide;
                 const auto entry = page * 0x400U
                     + (tile_y & 31U) * 32U + (tile_x & 31U);
@@ -839,7 +990,7 @@ void BackgroundRenderer::draw_bg2(
                     continue;
                 }
             }
-            const auto tile_y = static_cast<std::uint32_t>(source_y) / tile_edge;
+            const auto tile_y = static_cast<std::uint32_t>(source_y) >> tile_shift(tile_edge);
             const auto unwrapped_source_x = sample_x + row_scroll_x;
             // Scanline scrolling also drives open water (Titania). It is not
             // evidence of a closed tunnel. Actual tunnel margins were handled
@@ -884,7 +1035,7 @@ void BackgroundRenderer::draw_bg2(
                 const auto water_x = wrap(128 + row_scroll_x, width_pixels) + sample_x - 128;
                 source_x = std::clamp<std::int32_t>(water_x, 0, width_pixels - 1);
             }
-            const auto tile_x = static_cast<std::uint32_t>(source_x) / tile_edge;
+            const auto tile_x = static_cast<std::uint32_t>(source_x) >> tile_shift(tile_edge);
             const auto page = (tile_x >> 5U) + (tile_y >> 5U) * pages_wide;
             const auto entry = page * 0x400U
                 + (tile_y & 31U) * 32U + (tile_x & 31U);
@@ -963,7 +1114,9 @@ void BackgroundRenderer::draw_bg2_mode1_split(
     }
     // Both paths use the same scratch storage. Reserving a second 65 KiB
     // cache in the nested native helper can overflow the 3DS main stack.
-    CharacterCache characters{ppu, ppu.bg2_character_base, 2U};
+    DecodedCharacters local_characters;
+    CharacterCache characters{ppu, ppu.bg2_character_base, 2U,
+        acquire_characters(frame_characters_.get(), ppu, ppu.bg2_character_base, 2U, local_characters)};
     if (draw_split_native(ppu, low, high,
             characters, ppu.bg2_screen_base,
             ppu.bg2_screen_size, ppu.bg2_tile_size_16,
@@ -991,7 +1144,7 @@ void BackgroundRenderer::draw_bg2_mode1_split(
             : scroll_y;
         const auto source_y = static_cast<std::uint32_t>(
             sample_y + register_scroll_y) & y_mask;
-        const auto tile_y = source_y / tile_edge;
+        const auto tile_y = source_y >> tile_shift(tile_edge);
         auto previous_entry = std::numeric_limits<std::uint32_t>::max();
         auto tile = std::uint16_t{};
         Framebuffer* destination = &low;
@@ -1010,7 +1163,7 @@ void BackgroundRenderer::draw_bg2_mode1_split(
                     unwrapped, 0, static_cast<std::int32_t>(x_mask)));
                 outside = unwrapped < 0 || unwrapped > static_cast<std::int32_t>(x_mask);
             }
-            const auto tile_x = source_x / tile_edge;
+            const auto tile_x = source_x >> tile_shift(tile_edge);
             const auto page = (tile_x >> 5U) + (tile_y >> 5U) * pages_wide;
             const auto entry = page * 0x400U
                 + (tile_y & 31U) * 32U + (tile_x & 31U);
@@ -1057,7 +1210,9 @@ void BackgroundRenderer::draw_bg3(
 
     if (target.width() == 256U && target.height() == 224U
         && horizontal_origin == 0) {
-        CharacterCache characters{ppu, ppu.bg3_character_base, 1U};
+        DecodedCharacters local_characters;
+    CharacterCache characters{ppu, ppu.bg3_character_base, 1U,
+        acquire_characters(frame_characters_.get(), ppu, ppu.bg3_character_base, 1U, local_characters)};
         const auto x_mask = static_cast<std::uint32_t>(width_pixels - 1);
         const auto y_mask = static_cast<std::uint32_t>(height_pixels - 1);
         for (std::uint32_t screen_y = 0U; screen_y < 224U; ++screen_y) {
@@ -1065,7 +1220,7 @@ void BackgroundRenderer::draw_bg3(
                 static_cast<std::int32_t>(screen_y), ppu.mosaic, 0x04U);
             const auto source_y = static_cast<std::uint32_t>(
                 sample_y + ppu.bg3_scroll_y) & y_mask;
-            const auto tile_y = source_y / tile_edge;
+            const auto tile_y = source_y >> tile_shift(tile_edge);
             auto previous_entry = std::numeric_limits<std::uint32_t>::max();
             auto tile = std::uint16_t{};
             for (std::uint32_t screen_x = 0U; screen_x < 256U; ++screen_x) {
@@ -1073,7 +1228,7 @@ void BackgroundRenderer::draw_bg3(
                     static_cast<std::int32_t>(screen_x), ppu.mosaic, 0x04U);
                 const auto source_x = static_cast<std::uint32_t>(
                     sample_x + ppu.bg3_scroll_x) & x_mask;
-                const auto tile_x = source_x / tile_edge;
+                const auto tile_x = source_x >> tile_shift(tile_edge);
                 const auto page = (tile_x >> 5U) + (tile_y >> 5U) * pages_wide;
                 const auto entry = page * 0x400U
                     + (tile_y & 31U) * 32U + (tile_x & 31U);
@@ -1103,7 +1258,7 @@ void BackgroundRenderer::draw_bg3(
             static_cast<std::int32_t>(screen_y), ppu.mosaic, 0x04U);
         const auto source_y = wrap(sample_y
             + ppu.bg3_scroll_y, height_pixels);
-        const auto tile_y = static_cast<std::uint32_t>(source_y) / tile_edge;
+        const auto tile_y = static_cast<std::uint32_t>(source_y) >> tile_shift(tile_edge);
         const auto first_x = extend_horizontal ? 0U
             : static_cast<std::uint32_t>(std::max<std::int32_t>(horizontal_origin, 0));
         const auto final_x = extend_horizontal ? target.width()
@@ -1116,7 +1271,7 @@ void BackgroundRenderer::draw_bg3(
                 logical_x, ppu.mosaic, 0x04U);
             const auto source_x = wrap(sample_x
                 + ppu.bg3_scroll_x, width_pixels);
-            const auto tile_x = static_cast<std::uint32_t>(source_x) / tile_edge;
+            const auto tile_x = static_cast<std::uint32_t>(source_x) >> tile_shift(tile_edge);
             const auto page = (tile_x >> 5U) + (tile_y >> 5U) * pages_wide;
             const auto entry = page * 0x400U
                 + (tile_y & 31U) * 32U + (tile_x & 31U);
@@ -1147,7 +1302,9 @@ void BackgroundRenderer::draw_bg3_split(
         draw_bg3(ppu, high, TilePriorityPass::high);
         return;
     }
-    CharacterCache characters{ppu, ppu.bg3_character_base, 1U};
+    DecodedCharacters local_characters;
+    CharacterCache characters{ppu, ppu.bg3_character_base, 1U,
+        acquire_characters(frame_characters_.get(), ppu, ppu.bg3_character_base, 1U, local_characters)};
     if (draw_split_native(ppu, low, high,
             characters, ppu.bg3_screen_base,
             ppu.bg3_screen_size, ppu.bg3_tile_size_16,
@@ -1168,7 +1325,7 @@ void BackgroundRenderer::draw_bg3_split(
             static_cast<std::int32_t>(screen_y), ppu.mosaic, 0x04U);
         const auto source_y = static_cast<std::uint32_t>(
             sample_y + ppu.bg3_scroll_y) & y_mask;
-        const auto tile_y = source_y / tile_edge;
+        const auto tile_y = source_y >> tile_shift(tile_edge);
         auto previous_entry = std::numeric_limits<std::uint32_t>::max();
         auto tile = std::uint16_t{};
         Framebuffer* destination = &low;
@@ -1177,7 +1334,7 @@ void BackgroundRenderer::draw_bg3_split(
                 static_cast<std::int32_t>(screen_x), ppu.mosaic, 0x04U);
             const auto source_x = static_cast<std::uint32_t>(
                 sample_x + ppu.bg3_scroll_x) & x_mask;
-            const auto tile_x = source_x / tile_edge;
+            const auto tile_x = source_x >> tile_shift(tile_edge);
             const auto page = (tile_x >> 5U) + (tile_y >> 5U) * pages_wide;
             const auto entry = page * 0x400U
                 + (tile_y & 31U) * 32U + (tile_x & 31U);

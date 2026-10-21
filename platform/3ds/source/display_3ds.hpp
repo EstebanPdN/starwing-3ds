@@ -58,7 +58,7 @@ public:
     // direct-framebuffer fallback is unavailable).
     [[nodiscard]] bool present(const render::Framebuffer& indexed,
         const render::Palette256& palette, bool reuse_source = false,
-        const render::Framebuffer* right = nullptr);
+        const render::Framebuffer* right = nullptr, bool wait_for_gpu = false);
     [[nodiscard]] bool present_black();
     // BG2 tile geometry and palette expansion run on PICA200. The foreground
     // framebuffer must contain only the world, HUD and text; write coverage
@@ -93,6 +93,13 @@ public:
     bool open_native_engine() { return native_engine_.open(); }
     const native_engine::GpuStats& native_engine_stats() const noexcept { return native_engine_.stats(); }
     [[nodiscard]] bool gpu_active() const noexcept { return gpu_active_; }
+    // Bounded replacement for C3D_FrameBegin(0): a wedged GX queue must not
+    // block the game loop, a capture or shutdown. The caller ends the frame.
+    [[nodiscard]] bool acquire_gpu_frame(std::uint32_t timeout_ms) noexcept;
+    // Stop submitting PICA work and present both screens through the CPU
+    // framebuffers. Used when the GPU queue stops completing frames.
+    void use_cpu_presentation() noexcept;
+    [[nodiscard]] bool cpu_presentation() const noexcept { return cpu_fallback_; }
     void set_wide(bool value) noexcept { wide_ = value; }
     [[nodiscard]] std::size_t bg2_fragment_count() const noexcept {
         return tile_quads_.size();
@@ -252,6 +259,7 @@ private:
     bool c3d_ready_{};
     bool c2d_ready_{};
     bool gpu_active_{};
+    bool cpu_fallback_{};
     bool wide_{true};
     DisplayFrameTiming frame_timing_{};
     const u8* last_top_framebuffer_{};

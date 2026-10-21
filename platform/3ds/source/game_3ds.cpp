@@ -18,6 +18,9 @@
 #include "updater_3ds.hpp"
 #include "options_menu_3ds.hpp"
 #include "rom_probe.h"
+#ifdef STARWING_AUTOPILOT
+#include "autopilot_3ds.hpp"
+#endif
 
 #include "starfox/assets/rom.hpp"
 #include "starfox/assets/bps.hpp"
@@ -254,6 +257,46 @@ void show_error(const char *message) {
 
 struct RunRequest {std::string rom_path; bool ex{};};
 
+// CSND keeps looping its PCM ring while the application is suspended by the
+// HOME Menu or sleep. Stop it before the system takes over; the next source
+// tick after resuming starts a fresh ring.
+class AptAudioPause {
+public:
+    explicit AptAudioPause(starfox::platform_3ds::Audio3ds& audio) : audio_{&audio} {
+        aptHook(&cookie_, &AptAudioPause::on_event, this);
+    }
+    ~AptAudioPause() { aptUnhook(&cookie_); }
+    AptAudioPause(const AptAudioPause&) = delete;
+    AptAudioPause& operator=(const AptAudioPause&) = delete;
+    [[nodiscard]] bool take_resumed() noexcept {
+        const bool value = resumed_;
+        resumed_ = false;
+        return value;
+    }
+private:
+    static void on_event(APT_HookType type, void* param) {
+        auto& self = *static_cast<AptAudioPause*>(param);
+        if (type == APTHOOK_ONSUSPEND || type == APTHOOK_ONSLEEP)
+            self.audio_->stop_playback();
+        else if (type == APTHOOK_ONRESTORE || type == APTHOOK_ONWAKEUP)
+            self.resumed_ = true;
+    }
+    starfox::platform_3ds::Audio3ds* audio_;
+    aptHookCookie cookie_{};
+    bool resumed_{};
+};
+
+// One line per presentation recovery, kept for player bug reports.
+void write_gpu_recovery(const char* stage, const char* flow,
+    unsigned begin_failures, unsigned fallbacks) {
+    if (FILE* log = std::fopen("sdmc:/3ds/Starwing/gpu-recovery.txt", "ab")) {
+        std::fprintf(log, "build=%s stage=%s flow=%s session_ms=%llu begin_failures=%u fallbacks=%u\n",
+            build_version, stage, flow, static_cast<unsigned long long>(osGetTime()),
+            begin_failures, fallbacks);
+        std::fclose(log);
+    }
+}
+
 std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
     bool choose_on_start=false, const char* launch_path="") {
     bool new_3ds = false;
@@ -318,6 +361,7 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
     auto owned_audio = std::make_unique<starfox::platform_3ds::Audio3ds>();
     auto& audio = *owned_audio;
     static_cast<void>(audio.open());
+    AptAudioPause apt_audio_pause{audio};
     static_cast<void>(audio.prime_upload_sequence(
         game.map().take_apu_port_writes()));
     game.synchronize_apu_output_ports(audio.output_ports());
@@ -379,6 +423,10 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
     starfox::platform_3ds::Diagnostics3ds diagnostics;
     auto owned_performance = std::make_unique<PerformanceHistory>();
     auto& performance = *owned_performance;
+#ifdef STARWING_AUTOPILOT
+    starfox::platform_3ds::Autopilot3ds autopilot{app_dir};
+    autopilot.header(performance.csv().c_str());
+#endif
     auto presentation_metrics = std::make_unique<starfox::platform_3ds::PresentationMetrics>();
     starfox::platform_3ds::PresentationMetrics::Interval presentation_interval{};
     starfox::platform_3ds::DiagnosticSnapshot snapshot{};
@@ -522,9 +570,26 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
     unsigned update_notes_revision=~0U;
     starfox::platform_3ds::PresentationLimit presentation_limit(SYSCLOCK_ARM11);
     bool render_changed=true;
+    // Continuous top-screen presentation failure since this time (0 = none).
+    std::uint64_t top_failing_since_ms = 0U;
+    bool gpu_world_disabled = false;
     bool options_presented=false;
     starfox::platform_3ds::UpdateStatus last_options_update;
     while (aptMainLoop()) {
+#ifdef STARWING_AUTOPILOT
+        if (autopilot.finished()) { autopilot.event("end"); break; }
+#endif
+        if (apt_audio_pause.take_resumed()) {
+            // Returning from HOME/sleep: no catch-up burst, full redraw.
+            previous_ticks = svcGetSystemTick();
+            pacing.reset(); presentation_metrics->reset_epoch();
+            render_changed = true;
+            bottom_presentation = BottomPresentation::unknown;
+            last_bottom_hud = false;
+            last_overlay_metrics.reset();
+            display.note_top_framebuffer(display.top_framebuffer());
+            top_failing_since_ms = 0U;
+        }
         const auto update = updater.status();
         menu->set_update_status(update);
         if(update_notes_revision!=update.notes_revision) {
@@ -639,7 +704,8 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
             ? starfox::simulation::TimingMode::original_speed
             : starfox::simulation::TimingMode::unlocked_20_fps);
         renderer.set_top_hud_visible(menu->top_hud());
-        renderer.set_native_engine(profile.pica_world && menu->wide() && display.native_engine_ready());
+        renderer.set_native_engine(profile.pica_world && menu->wide() && !gpu_world_disabled
+            && display.gpu_active() && display.native_engine_ready());
         if(main_menu_transition==MainMenuTransition::black_hold) {
             if(osGetTime()<black_until_ms) {
                 menu->draw_black();
@@ -755,6 +821,9 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                     game.synchronize_apu_output_ports(audio.output_ports());
                 }
                 auto controls = input.consume_game_tick();
+#ifdef STARWING_AUTOPILOT
+                autopilot.apply(controls, flow_label(game.flow_state()));
+#endif
                 if(resume_from_options&&game.paused()) {
                     controls.held|=starfox::input::start;
                     controls.pressed|=starfox::input::start;
@@ -796,6 +865,14 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                     result.audio_port_writes.begin(),
                     result.audio_port_writes.end());
                 const auto flow = game.flow_state();
+#ifdef STARWING_AUTOPILOT
+                if (flow != previous_flow) {
+                    char text[64]{};
+                    std::snprintf(text, sizeof(text), "flow %s -> %s",
+                        flow_label(previous_flow), flow_label(flow));
+                    autopilot.event(text);
+                }
+#endif
                 if (flow != previous_flow
                     && (flow == starfox::simulation::GameFlowState::gameplay
                         || flow == starfox::simulation::GameFlowState::training)) {
@@ -847,15 +924,21 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
         }
         render_changed=render_changed||presentation_changed;
         const auto render_now = svcGetSystemTick();
-        const bool render_due = video_phases!=0U
+        // While the simulation is behind real time, an interpolated image
+        // between two source ticks only delays the next tick and audio
+        // packet. Present source ticks first; in-between images resume as
+        // soon as the loop keeps up again.
+        const bool catching_up = pacing.ready() && !logic_advanced;
+        const bool render_due = video_phases!=0U && !catching_up
             && presentation_limit.accept(render_now,menu->fps_limit());
         if (render_due) {
             dashboard_coalesced_phases += video_phases - 1U;
             const auto dashboard_render_tick = svcGetSystemTick();
             const auto dashboard_draw_start = osGetTime();
             const auto flow = game.flow_state();
-            const bool gpu_bg2 = (flow == starfox::simulation::GameFlowState::gameplay
-                || flow == starfox::simulation::GameFlowState::training)
+            const bool gpu_bg2 = !gpu_world_disabled
+                && (flow == starfox::simulation::GameFlowState::gameplay
+                    || flow == starfox::simulation::GameFlowState::training)
                 && menu->wide()
                 && display.eligible_mode2(game.map().ppu_state());
             last_gpu_bg2 = gpu_bg2;
@@ -1029,10 +1112,14 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                     ++dashboard_display_reuse_hits;
                 record_display_timing();
             }
+#ifdef STARWING_AUTOPILOT
+            if (autopilot.force_gpu_failure() && display.gpu_active()) presented = false;
+#endif
             if ((gpu_bg2 || renderer.native_scene()) && !presented) {
                 // A tile-atlas limit or temporary PICA failure must not
-                // strand a foreground-only frame on the top screen.
-                C3D_FrameSync();
+                // strand a foreground-only frame on the top screen. The
+                // failed path may have submitted work: the replacement waits
+                // for it (bounded), since VBlank is not a GPU fence.
                 ++dashboard_fallback;
                 last_gpu_bg2 = false;
                 const auto fallback_draw_start = osGetTime();
@@ -1043,7 +1130,10 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                 dashboard_draw_ms += fallback_draw_ms;
                 add_draw_breakdown();
                 presented = display.present(fallback_frame, palette, false,
-                    renderer.stereo_active() ? &renderer.right_frame() : nullptr);
+                    renderer.stereo_active() ? &renderer.right_frame() : nullptr, true);
+#ifdef STARWING_AUTOPILOT
+                if (autopilot.force_gpu_failure() && display.gpu_active()) presented = false;
+#endif
                 record_display_timing();
             }
             dashboard_presentation_work_us += ticks_to_microseconds(
@@ -1074,6 +1164,10 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                     ++dashboard_gpu;
                     dashboard_bg2_fragments += display.bg2_fragment_count();
                 }
+            } else ++dashboard_missed;
+            {
+                // The bottom screen is CPU-presented. Keep it current even
+                // when the top screen's GPU submission did not complete.
                 const auto bottom_begin=osGetTime();
                 const auto bottom_begin_tick=svcGetSystemTick();
                 if(overlay_visible) {
@@ -1202,7 +1296,32 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                 dashboard_bottom_work_us+=ticks_to_microseconds(
                     svcGetSystemTick()-bottom_begin_tick);
             }
-            else ++dashboard_missed;
+            // A PICA path that keeps failing must not leave the top screen
+            // unchanged while the game and audio continue. After 0.5 s use
+            // the reference renderer; after another 0.5 s stop submitting to
+            // the GPU and present through the CPU framebuffer.
+            const auto watchdog_now = osGetTime();
+            if (presented) top_failing_since_ms = 0U;
+            else if (top_failing_since_ms == 0U) top_failing_since_ms = watchdog_now;
+            else if (watchdog_now - top_failing_since_ms >= 500U) {
+                if (!gpu_world_disabled) {
+                    gpu_world_disabled = true;
+                    renderer.set_native_engine(false);
+                    write_gpu_recovery("reference_renderer", flow_label(flow),
+                        dashboard_gpu_begin_failures, dashboard_fallback);
+#ifdef STARWING_AUTOPILOT
+                    autopilot.event("gpu recovery: reference renderer");
+#endif
+                } else if (display.gpu_active()) {
+                    display.use_cpu_presentation();
+                    write_gpu_recovery("cpu_framebuffer", flow_label(flow),
+                        dashboard_gpu_begin_failures, dashboard_fallback);
+#ifdef STARWING_AUTOPILOT
+                    autopilot.event("gpu recovery: cpu framebuffer");
+#endif
+                }
+                top_failing_since_ms = 0U;
+            }
             render_changed=false;
         }
         // Do not block a 60 Hz video frame while the independent SPC core is
@@ -1434,6 +1553,10 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                     presentation_interval.over_25_ms, presentation_interval.over_50_ms,
                     presentation_interval.held_or, presentation_interval.moving_frames);
             performance.append(row);
+#ifdef STARWING_AUTOPILOT
+            autopilot.row(row, starfox::platform_3ds::Autopilot3ds::lit_samples(display.top_framebuffer()),
+                game.map().ppu_state().background_mode);
+#endif
             last_world_cache_hits = renderer.world_cache_hits();
             last_world_cache_misses = renderer.world_cache_misses();
             last_background_cache_hits = renderer.background_cache_hits();
@@ -1518,7 +1641,7 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
             audio.stop_playback();
             // FrameBegin(0) fences the prior command queue. FrameSync alone
             // waits for VBlank and is not a GPU completion fence.
-            const bool capture_frame = display.gpu_active() && C3D_FrameBegin(0);
+            const bool capture_frame = display.gpu_active() && display.acquire_gpu_frame(500U);
             // Snapshot before CSV/string serialization and full-dump screen
             // copies allocate. Older captures' freed arena space may remain.
             const auto capture_heap = mallinfo();
@@ -1881,11 +2004,15 @@ int main(int argc, char** argv) {
     gfxSet3D(false);
     bool new_3ds=false;
     const auto model_result=APT_CheckNew3DS(&new_3ds);
+#ifndef STARWING_AUTOPILOT
     if (R_FAILED(model_result) || !new_3ds) {
         starfox::platform_3ds::show_old_3ds_notice();
         gfxExit();
         return 0;
     }
+#else
+    static_cast<void>(model_result);
+#endif
     osSetSpeedupEnable(true);
     speedup_init_result = ptmSysmInit();
     if (R_SUCCEEDED(speedup_init_result)) {

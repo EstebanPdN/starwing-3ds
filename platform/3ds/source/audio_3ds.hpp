@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <initializer_list>
 #include <span>
 #include <vector>
 
@@ -96,8 +97,8 @@ public:
         std::span<const simulation::ApuPortWrite> writes);
 
     // Copy the completed 20 Hz tick's port writes. New 3DS normally computes
-    // audio on core 2 while video is built; Old 3DS computes it synchronously
-    // on the application core to avoid its quota-limited core 1. A failed
+    // audio on core 2 while video is built; Old 3DS uses core 1 when APT
+    // grants at least a 50% slice, else the application core. A failed
     // New 3DS core-2 launch may use core 1. finish_update() must be called
     // before reading output_ports() or starting the next game tick.
     void begin_update(std::span<const simulation::ApuPortWrite> writes);
@@ -122,6 +123,8 @@ public:
 
 private:
     static void worker_main(void* argument);
+    // Try each APT slice in order and start the worker on core 1.
+    void start_core1_worker(std::initializer_list<u32> quotas);
     static constexpr int left_channel_ = 8;
     static constexpr int right_channel_ = 9;
     static constexpr std::size_t packet_frames_ =
