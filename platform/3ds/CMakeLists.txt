@@ -117,6 +117,10 @@ target_compile_definitions(starwing-3ds-game PRIVATE
     STARWING_CIA_VERSION=${STARWING_CIA_VERSION}
     STARWING_BUILD_FINGERPRINT="${STARWING_BUILD_FINGERPRINT}")
 target_compile_features(starwing-3ds-game PRIVATE c_std_11 cxx_std_20)
+option(STARWING_AUTOPILOT "Emulator regression build: SD-scripted input and timing log" OFF)
+if(STARWING_AUTOPILOT)
+    target_compile_definitions(starwing-3ds-game PRIVATE STARWING_AUTOPILOT=1)
+endif()
 target_compile_options(starwing-3ds-game PRIVATE
     -O3 -Wall -Wextra -ffunction-sections -fdata-sections)
 target_link_libraries(starwing-3ds-game PRIVATE

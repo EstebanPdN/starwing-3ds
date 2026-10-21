@@ -4,6 +4,7 @@
 #include "starfox/simulation/snes_ppu.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <span>
 
 namespace starfox::render {
@@ -28,6 +29,18 @@ struct BackgroundUniqueRegion {
 
 class BackgroundRenderer {
 public:
+    BackgroundRenderer() noexcept;
+    ~BackgroundRenderer();
+    BackgroundRenderer(BackgroundRenderer&&) noexcept;
+    BackgroundRenderer& operator=(BackgroundRenderer&&) noexcept;
+
+    // The low and high priority passes of one frame decode the same
+    // characters. Between begin_frame() and end_frame(), passes given this
+    // exact PPU object (which must not change meanwhile) share decoded
+    // characters; any other object, or a call outside a frame, decodes anew.
+    void begin_frame(const simulation::SnesPpuState& ppu);
+    void end_frame() noexcept;
+
     void draw_bg1(
         const simulation::SnesPpuState& ppu,
         Framebuffer& target,
@@ -79,6 +92,10 @@ public:
         std::int32_t horizontal_origin = 0,
         bool include_bg1_overlay = true,
         bool extend_bg2_unwrapped = false) const noexcept;
+
+    struct FrameCharacters;
+private:
+    std::unique_ptr<FrameCharacters> frame_characters_;
 };
 
 } // namespace starfox::render

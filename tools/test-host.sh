@@ -12,6 +12,17 @@ done
 "${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -I"${ROOT}/include" \
   "${ROOT}/tests/saturate_test.cpp" -o "${TEST_BUILD}/saturate_test"
 "${TEST_BUILD}/saturate_test"
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -I"${ROOT}/include" \
+  "${ROOT}/tests/texel_expand_test.cpp" -o "${TEST_BUILD}/texel_expand_test"
+"${TEST_BUILD}/texel_expand_test"
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -I"${ROOT}/include" \
+  "${ROOT}/tests/bg2_run_test.cpp" "${ROOT}/src/render/background_renderer.cpp" \
+  -o "${TEST_BUILD}/bg2_run_test"
+"${TEST_BUILD}/bg2_run_test"
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -I"${ROOT}/include" \
+  "${ROOT}/tests/character_cache_test.cpp" "${ROOT}/src/render/background_renderer.cpp" \
+  -o "${TEST_BUILD}/character_cache_test"
+"${TEST_BUILD}/character_cache_test"
 "${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra \
   -I"${ROOT}/include" -I"${ROOT}/platform/3ds/source" \
   "${ROOT}/tests/native_scene_test.cpp" \

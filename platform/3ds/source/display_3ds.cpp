@@ -1,5 +1,6 @@
 #include "display_3ds.hpp"
 #include "cache_3ds.h"
+#include "texel_expand.hpp"
 #include "stereo_3ds.hpp"
 
 #include <algorithm>
@@ -22,6 +23,14 @@ void queue_display_transfer(u32* source, u32 source_size, u32* destination,
 std::uint32_t ticks_to_microseconds(std::uint64_t ticks) noexcept {
     return static_cast<std::uint32_t>(ticks * 1'000'000ULL
         / SYSCLOCK_ARM11);
+}
+
+// Colour-only clear for targets without a depth buffer. Citro3D 1.7.1's
+// C3D_CLEAR_ALL would also submit a second fill for the absent buffer.
+void clear_colour_target(C3D_RenderTarget* target, u32 colour) {
+    C2D_Flush();
+    C3D_FrameSplit(GX_CMDLIST_FLUSH);
+    C3D_RenderTargetClear(target, C3D_CLEAR_COLOR, __builtin_bswap32(colour), 0);
 }
 
 std::uint16_t rgb565(const render::Rgba8& colour) noexcept {
@@ -106,6 +115,29 @@ constexpr DiagnosticGlyph diagnostic_font[]{
 } // namespace
 
 Display3ds::~Display3ds() { close(); }
+
+bool Display3ds::acquire_gpu_frame(std::uint32_t timeout_ms) noexcept {
+    if (!c3d_ready_ || cpu_fallback_) return false;
+    const auto deadline = svcGetSystemTick()
+        + std::uint64_t{timeout_ms} * (SYSCLOCK_ARM11 / 1000U);
+    for (;;) {
+        if (C3D_FrameBegin(C3D_FRAME_NONBLOCK)) return true;
+        if (svcGetSystemTick() >= deadline) return false;
+        svcSleepThread(500'000LL);
+    }
+}
+
+void Display3ds::use_cpu_presentation() noexcept {
+    if (cpu_fallback_ || !gpu_active_) return;
+    if (bg2_plan_pending_) wait_for_bg2_plan();
+    cpu_fallback_ = true;
+    gpu_active_ = false;
+    frame_texture_valid_ = cpu_frame_valid_ = false;
+    overlay_texture_valid_ = tile_cache_valid_ = false;
+    right_texture_valid_ = right_overlay_valid_ = false;
+    // The screens may still be in stereo mode for the PICA path.
+    gfxSet3D(false);
+}
 
 void Display3ds::bg2_plan_worker_main(void* argument) {
     auto& self = *static_cast<Display3ds*>(argument);
@@ -297,7 +329,20 @@ bool Display3ds::open() {
 }
 
 void Display3ds::close() noexcept {
-    if (c3d_ready_ && gpu_active_ && C3D_FrameBegin(0)) C3D_FrameEnd(0);
+    if (cpu_fallback_) {
+        // Deleting targets and textures waits for the queue that stopped
+        // completing. Leave them to process teardown instead of hanging.
+        if (bg2_plan_worker_ != nullptr) {
+            stop_bg2_plan_worker_.store(true, std::memory_order_release);
+            LightEvent_Signal(&bg2_plan_requested_);
+            static_cast<void>(threadJoin(bg2_plan_worker_, U64_MAX));
+            threadFree(bg2_plan_worker_);
+            bg2_plan_worker_ = nullptr;
+        }
+        return;
+    }
+    if (c3d_ready_ && gpu_active_ && acquire_gpu_frame(250U))
+        C3D_FrameEnd(GX_CMDLIST_FLUSH);
     native_engine_.close();
     if (bg2_plan_pending_) wait_for_bg2_plan();
     if (bg2_plan_worker_ != nullptr) {
@@ -444,16 +489,12 @@ void Display3ds::upload_right(const render::Framebuffer& frame,
         colours[i] = foreground ? rgba5551(palette[i]) : rgb565(palette[i]);
     if (reuse_source && valid && cached == colours) return;
     auto begin = svcGetSystemTick();
-    const auto coverage = frame.write_coverage();
-    const bool covered = foreground && coverage.size() == frame.pixels().size();
-    for (unsigned y = 0U; y < frame.height(); ++y) {
-        for (unsigned x = 0U; x < frame.width(); ++x) {
-            const auto i = static_cast<std::size_t>(y) * frame.width() + x;
-            const bool opaque = !foreground || (covered
-                ? coverage[i] != 0U : frame.pixels()[i] != 0U);
+    if (frame.draw_scale() == 1U)
+        expand_frame(frame, colours, foreground, linear_right_, texture_width_);
+    else for (unsigned y = 0U; y < frame.height(); ++y) {
+        for (unsigned x = 0U; x < frame.width(); ++x)
             linear_right_[static_cast<std::size_t>(y) * texture_width_ + x]
-                = opaque ? colours[frame.pixels()[i]] : 0U;
-        }
+                = !foreground || frame.get(x, y) != 0U ? colours[frame.get(x, y)] : 0U;
     }
     frame_timing_.build_us += ticks_to_microseconds(svcGetSystemTick() - begin);
     begin = svcGetSystemTick();
@@ -476,7 +517,7 @@ void Display3ds::upload_right(const render::Framebuffer& frame,
 
 bool Display3ds::present(const render::Framebuffer& indexed,
     const render::Palette256& palette, bool reuse_source,
-    const render::Framebuffer* right) {
+    const render::Framebuffer* right, bool wait_for_gpu) {
     frame_timing_ = {};
     if (!gpu_active_) {
         return present_cpu(indexed, palette, reuse_source);
@@ -501,7 +542,10 @@ bool Display3ds::present(const render::Framebuffer& indexed,
         return true;
     }
     auto stage_begin = svcGetSystemTick();
-    const bool frame_acquired = C3D_FrameBegin(C3D_FRAME_NONBLOCK);
+    // A replacement frame follows a PICA submission that just failed; VBlank
+    // is not a GPU fence, so wait (bounded) for that work to retire.
+    const bool frame_acquired = wait_for_gpu ? acquire_gpu_frame(100U)
+        : C3D_FrameBegin(C3D_FRAME_NONBLOCK);
     frame_timing_.acquire_us = ticks_to_microseconds(
         svcGetSystemTick() - stage_begin);
     if (!frame_acquired) {
@@ -515,7 +559,11 @@ bool Display3ds::present(const render::Framebuffer& indexed,
         || indexed.draw_scale() != cached_frame_draw_scale_
         || colours != cached_frame_colours_) {
         stage_begin = svcGetSystemTick();
-        for (std::uint32_t y = 0U; y < height; ++y) {
+        if (indexed.draw_scale() == 1U && width == indexed.width())
+            for (std::uint32_t y = 0U; y < height; ++y)
+                expand_opaque_row(indexed.pixels().data() + std::size_t{y} * indexed.width(),
+                    colours, linear_pixels_ + y * texture_width_, width);
+        else for (std::uint32_t y = 0U; y < height; ++y) {
             auto *row = linear_pixels_ + y * texture_width_;
             for (std::uint32_t x = 0U; x < width; ++x)
                 row[x] = colours[indexed.get(x, y)];
@@ -583,7 +631,7 @@ bool Display3ds::present(const render::Framebuffer& indexed,
 
 bool Display3ds::present_black() {
     if (gpu_active_) {
-        if (!C3D_FrameBegin(0)) return false;
+        if (!acquire_gpu_frame(250U)) return false;
         C2D_TargetClear(top_, C2D_Color32(0, 0, 0, 255));
         C2D_SceneBegin(top_);
         last_top_framebuffer_ = gfxGetFramebuffer(
@@ -599,8 +647,9 @@ bool Display3ds::present_black() {
         return false;
     std::memset(screen, 0, 400U * 240U * sizeof(std::uint16_t));
     last_top_framebuffer_ = screen;
-    gfxFlushBuffers();
-    gfxSwapBuffers();
+    // Swap only the top screen; the bottom has its own presenter.
+    GSPGPU_FlushDataCache(screen, 400U * 240U * sizeof(std::uint16_t));
+    gfxScreenSwapBuffers(GFX_TOP, false);
     frame_texture_valid_ = false;
     cpu_frame_valid_ = false;
     return true;
@@ -888,12 +937,8 @@ bool Display3ds::present_native(const render::Framebuffer& background,
         back_colours[i]=rgb565(palette[i]);front_colours[i]=rgba5551(palette[i]);
     }
     begin=svcGetSystemTick();
-    const auto coverage=foreground.write_coverage();
-    for(unsigned y=0;y<240;++y) for(unsigned x=0;x<400;++x) {
-        const auto source=y*400+x;const auto target=y*texture_width_+x;
-        linear_pixels_[target]=back_colours[background.pixels()[source]];
-        linear_overlay_[target]=coverage[source]?front_colours[foreground.pixels()[source]]:0;
-    }
+    expand_frame(background,back_colours,false,linear_pixels_,texture_width_);
+    expand_frame(foreground,front_colours,true,linear_overlay_,texture_width_);
     frame_timing_.build_us=ticks_to_microseconds(svcGetSystemTick()-begin);
     const auto transfer=[&](std::uint16_t* source,C3D_Tex& target,bool alpha) {
         begin=svcGetSystemTick();
@@ -1045,18 +1090,7 @@ bool Display3ds::present_mode2(
     if (!reuse_source || !overlay_texture_valid_
         || colours != cached_overlay_colours_) {
         stage_begin = svcGetSystemTick();
-        const auto coverage = foreground.write_coverage();
-        const auto has_coverage = coverage.size() == foreground.pixels().size();
-        const auto& pixels = foreground.pixels();
-        for (std::uint32_t y = 0U; y < 240U; ++y) {
-            for (std::uint32_t x = 0U; x < 400U; ++x) {
-                const auto index = static_cast<std::size_t>(y) * 400U + x;
-                linear_overlay_[static_cast<std::size_t>(y)
-                    * texture_width_ + x] = has_coverage
-                    ? (coverage[index] != 0U ? colours[pixels[index]] : 0U)
-                    : (pixels[index] != 0U ? colours[pixels[index]] : 0U);
-            }
-        }
+        expand_frame(foreground, colours, true, linear_overlay_, texture_width_);
         frame_timing_.build_us += ticks_to_microseconds(
             svcGetSystemTick() - stage_begin);
         stage_begin = svcGetSystemTick();
@@ -1090,7 +1124,7 @@ bool Display3ds::present_mode2(
     frame_timing_.bg2_raster_cache_used = use_bg2_raster;
     frame_timing_.bg2_raster_cache_hit = use_bg2_raster && bg2_raster_valid_;
     if (use_bg2_raster && !bg2_raster_valid_) {
-        C2D_TargetClear(bg2_target_, C2D_Color32(
+        clear_colour_target(bg2_target_, C2D_Color32(
             palette[0].r, palette[0].g, palette[0].b, 255));
         C2D_SceneBegin(bg2_target_);
         if (!draw_bg2_quads(palette)) {
@@ -1190,8 +1224,8 @@ bool Display3ds::present_cpu(const render::Framebuffer& indexed,
         }
     }
     last_top_framebuffer_ = reinterpret_cast<const u8*>(screen);
-    gfxFlushBuffers();
-    gfxSwapBuffers();
+    GSPGPU_FlushDataCache(screen, 400U * 240U * sizeof(std::uint16_t));
+    gfxScreenSwapBuffers(GFX_TOP, false);
     cached_cpu_colours_ = colours;
     cached_cpu_width_ = static_cast<std::uint16_t>(source_width);
     cached_cpu_height_ = static_cast<std::uint16_t>(source_height);

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstring>
+#include <initializer_list>
 #include <stdexcept>
 
 namespace starfox::platform_3ds {
@@ -52,46 +53,50 @@ bool Audio3ds::open() {
     }
 
     if (R_FAILED(diagnostics_.model_result) || !diagnostics_.new_3ds) {
-        // Share the cartridge DSP voices and avoid quota-limited core 1.
+        // Share the cartridge DSP voices. Old 3DS has no core 2: compute the
+        // SPC beside the game on the system core when APT grants a large
+        // enough slice (the approach used by other Old 3DS ports), and fall
+        // back to the application core otherwise.
         spc_ = audio::Spc700Audio{audio::Spc700Audio::Routing::cartridge};
         spc_.set_parallel_stems_enabled(false);
-        diagnostics_.selected_core = 0;
+        start_core1_worker({80U, 70U, 50U});
+        if (worker_ == nullptr) diagnostics_.selected_core = 0;
     } else if (worker_ == nullptr) {
         // If New 3DS core 2 was unavailable (or model detection failed),
         // retain the verified core-1 fallback and restore the prior quota.
-        diagnostics_.quota_query_result =
-            APT_GetAppCpuTimeLimit(&diagnostics_.original_quota);
-        if (R_SUCCEEDED(diagnostics_.quota_query_result)) {
-            diagnostics_.effective_quota = diagnostics_.original_quota;
-            for (const u32 requested : {30U, 20U, 10U}) {
-                ++diagnostics_.core1_attempts;
-                diagnostics_.quota_set_result =
-                    APT_SetAppCpuTimeLimit(requested);
-                if (R_FAILED(diagnostics_.quota_set_result)) continue;
-                quota_changed_ = true;
-                u32 granted = 0;
-                diagnostics_.quota_verify_result =
-                    APT_GetAppCpuTimeLimit(&granted);
-                if (R_SUCCEEDED(diagnostics_.quota_verify_result)
-                    && granted == requested) {
-                    diagnostics_.effective_quota = granted;
-                    worker_ = threadCreate(&Audio3ds::worker_main, this,
-                        128U * 1024U, 0x30, 1, false);
-                    if (worker_ != nullptr) {
-                        diagnostics_.selected_core = 1;
-                        break;
-                    }
-                }
-                diagnostics_.quota_restore_result =
-                    APT_SetAppCpuTimeLimit(diagnostics_.original_quota);
-                if (R_FAILED(diagnostics_.quota_restore_result)) break;
-                quota_changed_ = false;
-                diagnostics_.effective_quota = diagnostics_.original_quota;
-            }
-        }
+        start_core1_worker({30U, 20U, 10U});
         if (worker_ == nullptr) diagnostics_.selected_core = 0;
     }
     return ready_;
+}
+
+void Audio3ds::start_core1_worker(std::initializer_list<u32> quotas) {
+    diagnostics_.quota_query_result =
+        APT_GetAppCpuTimeLimit(&diagnostics_.original_quota);
+    if (R_FAILED(diagnostics_.quota_query_result)) return;
+    diagnostics_.effective_quota = diagnostics_.original_quota;
+    for (const u32 requested : quotas) {
+        ++diagnostics_.core1_attempts;
+        diagnostics_.quota_set_result = APT_SetAppCpuTimeLimit(requested);
+        if (R_FAILED(diagnostics_.quota_set_result)) continue;
+        quota_changed_ = true;
+        u32 granted = 0;
+        diagnostics_.quota_verify_result = APT_GetAppCpuTimeLimit(&granted);
+        if (R_SUCCEEDED(diagnostics_.quota_verify_result) && granted == requested) {
+            diagnostics_.effective_quota = granted;
+            worker_ = threadCreate(&Audio3ds::worker_main, this,
+                128U * 1024U, 0x30, 1, false);
+            if (worker_ != nullptr) {
+                diagnostics_.selected_core = 1;
+                return;
+            }
+        }
+        diagnostics_.quota_restore_result =
+            APT_SetAppCpuTimeLimit(diagnostics_.original_quota);
+        if (R_FAILED(diagnostics_.quota_restore_result)) return;
+        quota_changed_ = false;
+        diagnostics_.effective_quota = diagnostics_.original_quota;
+    }
 }
 
 void Audio3ds::close() noexcept {

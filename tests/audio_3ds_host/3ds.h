@@ -23,6 +23,12 @@ inline bool new_3ds{};
 inline Result model_result{};
 inline unsigned quota_calls{};
 inline std::vector<int> requested_cores;
+// Opt-in APT slice and thread models; by default no slice is granted and no
+// worker thread starts.
+inline bool honour_quota{};
+inline bool thread_succeeds{};
+inline u32 cpu_quota{};
+inline std::vector<u32> quota_requests;
 inline std::int16_t* left{};
 inline std::int16_t* right{};
 inline std::size_t bytes{};
@@ -39,11 +45,22 @@ inline void LightEvent_Init(LightEvent*, int) {}
 inline void LightEvent_Wait(LightEvent*) {}
 inline void LightEvent_Signal(LightEvent*) {}
 inline Result APT_CheckNew3DS(bool* result) { *result = audio_test::new_3ds; return audio_test::model_result; }
-inline Thread threadCreate(void (*)(void*), void*, std::size_t, int, int core, bool) { audio_test::requested_cores.push_back(core); return nullptr; }
+inline Thread threadCreate(void (*)(void*), void*, std::size_t, int, int core, bool) {
+    audio_test::requested_cores.push_back(core);
+    return audio_test::thread_succeeds ? static_cast<Thread>(&audio_test::requested_cores) : nullptr;
+}
 inline Result threadJoin(Thread, u64) { return 0; }
 inline void threadFree(Thread) {}
-inline Result APT_GetAppCpuTimeLimit(u32* result) { *result = 0; return 0; }
-inline Result APT_SetAppCpuTimeLimit(u32) { ++audio_test::quota_calls; return 0; }
+inline Result APT_GetAppCpuTimeLimit(u32* result) {
+    *result = audio_test::honour_quota ? audio_test::cpu_quota : 0U;
+    return 0;
+}
+inline Result APT_SetAppCpuTimeLimit(u32 percent) {
+    ++audio_test::quota_calls;
+    audio_test::quota_requests.push_back(percent);
+    if (audio_test::honour_quota) audio_test::cpu_quota = percent;
+    return 0;
+}
 inline void CSND_SetPlayState(int, int) {}
 inline Result CSND_UpdateInfo(bool) { return 0; }
 inline Result GSPGPU_FlushDataCache(void* pointer, u32 bytes) {
