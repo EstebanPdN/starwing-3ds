@@ -1469,7 +1469,10 @@ const render::Framebuffer& Frame3ds::draw(
                 mode2_background_valid_ = true;
             }
         }
-        if (stereo && !gpu_bg2) right_frame_.copy_pixels_from(wide_frame_);
+        if (stereo && !gpu_bg2) {
+            stereo_background(mode2_background_cache_, wide_frame_, -int(stereo_strength_));
+            stereo_background(mode2_background_cache_, right_frame_, int(stereo_strength_));
+        }
         if (native_scene_active_) { wide_frame_.clear(); wide_frame_.begin_write_coverage(); }
         else if (gpu_bg2) wide_frame_.assign_transparent_layer(world_, true);
         else render::composite_transparent_layer(world_, wide_frame_, {});
@@ -1556,14 +1559,16 @@ const render::Framebuffer& Frame3ds::draw(
                 }
             return HudRect{left,top,right-left+1,bottom-top+1};
         };
-        const auto scaled=[](int n) { return (n*3+1)/2; };
+        const auto scaled=[&](int n) { return wide_view_ ? (n*3+1)/2 : n; };
+        const int hud_left=wide_view_?8:80, hud_right=wide_view_?392:320;
+        const int hud_top=wide_view_?8:16, hud_bottom=wide_view_?232:224;
         const auto blit=[&](const render::Framebuffer& source,
             HudRect crop,int x,int y) {
             for(int dy=0;dy<scaled(crop.h);++dy) {
                 auto row=top_hud_cache_.raster_row(y+dy);
                 for(int dx=0;dx<scaled(crop.w);++dx) {
                     const auto pixel=source.get(
-                        crop.x+dx*2/3,crop.y+dy*2/3);
+                        crop.x+(wide_view_?dx*2/3:dx),crop.y+(wide_view_?dy*2/3:dy));
                     if(pixel!=0U) row.set(x+dx,pixel);
                 }
             }
@@ -1578,7 +1583,7 @@ const render::Framebuffer& Frame3ds::draw(
             draw_sprites(element);
             const auto crop=bounds(corner_hud_,x,y,w,h);
             if(crop.w<=0||crop.h<=0) return;
-            blit(corner_hud_,crop,right?392-scaled(crop.w):8,8);
+            blit(corner_hud_,crop,right?hud_right-scaled(crop.w):hud_left,hud_top);
         };
         const auto blit_stack=[&](render::HudElement element,int x,
             bool right) {
@@ -1587,17 +1592,21 @@ const render::Framebuffer& Frame3ds::draw(
             const auto bar=bounds(meter_hud_,x,160,112,64);
             if(upper.w<=0||upper.h<=0) {
                 if(bar.w>0&&bar.h>0)
-                    blit(meter_hud_,bar,right?392-scaled(bar.w):8,
-                        232-scaled(bar.h));
+                    blit(meter_hud_,bar,right?hud_right-scaled(bar.w):hud_left,
+                        hud_bottom-scaled(bar.h));
                 return;
             }
             if(bar.w<=0||bar.h<=0) {
-                blit(corner_hud_,upper,right?392-scaled(upper.w):8,
-                    232-scaled(upper.h));
+                blit(corner_hud_,upper,right?hud_right-scaled(upper.w):hud_left,
+                    hud_bottom-scaled(upper.h));
                 return;
             }
-            const auto layout=stack_hud(scaled(upper.w),scaled(upper.h),
-                scaled(bar.w),scaled(bar.h),right);
+            auto layout=stack_hud(scaled(upper.w),scaled(upper.h),
+                scaled(bar.w),scaled(bar.h),right,wide_view_?400:256,wide_view_?240:224);
+            if (!wide_view_) {
+                layout.upper.x+=72; layout.bar.x+=72;
+                layout.upper.y+=8; layout.bar.y+=8;
+            }
             blit(corner_hud_,upper,layout.upper.x,layout.upper.y);
             blit(meter_hud_,bar,layout.bar.x,layout.bar.y);
         };
@@ -1612,7 +1621,7 @@ const render::Framebuffer& Frame3ds::draw(
             }
             const auto crop=bounds(corner_hud_,96,0,160,40);
             if(crop.w>0&&crop.h>0)
-                blit(corner_hud_,crop,392-scaled(crop.w),8);
+                blit(corner_hud_,crop,hud_right-scaled(crop.w),hud_top);
         }
         blit_stack(render::HudElement::shield,0,false);
         blit_stack(render::HudElement::bombs_boost,144,true);

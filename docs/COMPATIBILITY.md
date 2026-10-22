@@ -1,16 +1,20 @@
 # Compatibility
 
-Version **1.1** enables gameplay on New Nintendo 3DS / New 2DS XL.
-Old 3DS / 2DS shows a launch notice: future compatibility is planned.
+> ⚠️ **Experimental release — known HOME Menu freeze**
+>
+> Pressing HOME during a game can freeze the console: the bottom screen turns black and the top screen remains frozen. A forced shutdown by holding POWER may be required. I am aware of this problem and am working on a fix. HOME/sleep/resume reliability has not been established; use this build only if you accept this known issue.
+
+Version **1.2-E2** enables gameplay on New Nintendo 3DS / New 2DS XL and,
+experimentally, on Old Nintendo 3DS / 2DS.
 A release number does not establish universal compatibility.
 
 | Area | Scope |
 | --- | --- |
-| New 3DS | Primary development target; current physical acceptance remains pending. |
-| Old 3DS | Gameplay blocked before ROM/SD initialization; compatibility notice only. |
+| New 3DS | Gameplay reported working, but HOME can freeze the console. Release acceptance failed. |
+| Old 3DS | Experimental gameplay; busy scenes present fewer frames than New models. Physical results pending. |
 | Original Star Fox / Starwing | Primary tested experience during development. |
-| Star Fox EX | Selectable, experimental, and not fully supported. |
-| Stereo | Experimental in eligible wide Mode 2 gameplay/training; other scenes remain flat. |
+| Star Fox EX | Selectable, experimental, and not fully supported. On Old 3DS it runs below full speed with audio gaps. |
+| Stereo | Experimental in eligible wide Mode 2 gameplay/training on New 3DS; other scenes remain flat. |
 | Presentation | Native 400×240 world and separate 320×240 UI. |
 | Performance | Original speed, interpolation ON, 60 FPS cap by default; sustained physical 60 FPS is not established. |
 

@@ -49,6 +49,20 @@ class Display3ds {
 public:
     Display3ds() = default;
     ~Display3ds();
+#ifdef STARWING_AUTOPILOT
+    const u8* right_framebuffer() const noexcept { return capture_right_; }
+    C3D_Tex* capture_texture(unsigned layer) noexcept {
+        if(layer>=3) {
+            auto* target=layer==3 ? top_ : top_right_;
+            if (!target) return nullptr;
+            capture_target_={};capture_target_.width=target->frameBuf.width;
+            capture_target_.height=target->frameBuf.height;capture_target_.fmt=GPU_RGBA8;
+            capture_target_.data=target->frameBuf.colorBuf;
+            return &capture_target_;
+        }
+        return layer==0 ? &bg2_texture_ : layer==1 ? native_engine_.texture() : &overlay_texture_;
+    }
+#endif
     Display3ds(const Display3ds&) = delete;
     Display3ds& operator=(const Display3ds&) = delete;
 
@@ -69,7 +83,7 @@ public:
         const render::Framebuffer& foreground,
         const render::Palette256& palette, bool reuse_source = false,
         const render::Framebuffer* right = nullptr,
-        const native_engine::Scene* scene = nullptr);
+        const native_engine::Scene* scene = nullptr, std::uint8_t stereo_strength = 0U);
     // Start the New 3DS geometry job before software rendering. The caller
     // must not advance the PPU until present_mode2() has consumed the job.
     // Pass false while higher-priority audio is still computing on core 2:
@@ -99,6 +113,9 @@ public:
     // Stop submitting PICA work and present both screens through the CPU
     // framebuffers. Used when the GPU queue stops completing frames.
     void use_cpu_presentation() noexcept;
+    // Before HOME/POWER: let the last submitted frame finish while the
+    // application still owns the GPU. Emits no new GPU work.
+    [[nodiscard]] bool wait_gpu_idle(std::uint32_t timeout_ms) noexcept;
     [[nodiscard]] bool cpu_presentation() const noexcept { return cpu_fallback_; }
     void set_wide(bool value) noexcept { wide_ = value; }
     [[nodiscard]] std::size_t bg2_fragment_count() const noexcept {
@@ -259,6 +276,10 @@ private:
     bool c3d_ready_{};
     bool c2d_ready_{};
     bool gpu_active_{};
+#ifdef STARWING_AUTOPILOT
+    const u8* capture_right_{};
+    C3D_Tex capture_target_{};
+#endif
     bool cpu_fallback_{};
     bool wide_{true};
     DisplayFrameTiming frame_timing_{};

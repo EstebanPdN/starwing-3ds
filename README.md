@@ -1,3 +1,7 @@
+> ⚠️ **Experimental release — known HOME Menu freeze**
+>
+> Pressing HOME during a game can freeze the console: the bottom screen turns black and the top screen remains frozen. A forced shutdown by holding POWER may be required. I am aware of this problem and am working on a fix. HOME/sleep/resume reliability has not been established; use this build only if you accept this known issue.
+
 <h1 align="center">Starwing 3DS</h1>
 
 <p align="center">
@@ -15,7 +19,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.1"><img src="docs/badges/version.svg?v=3" alt="Release: v1.1" height="22"></a>
+  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.2-E2"><img src="docs/badges/version.svg?v=5" alt="Experimental release: v1.2-E2" height="22"></a>
   <a href="docs/COMPATIBILITY.md"><img src="docs/badges/platform.svg?v=2" alt="Nintendo 3DS" height="22"></a>
   <a href="docs/UPDATING.md"><img src="docs/badges/updater.svg" alt="Updates: built in" height="22"></a>
   <a href="docs/legal/THIRD_PARTY_NOTICES.md"><img src="docs/badges/license.svg?v=2" alt="Component-specific licenses" height="22"></a>
@@ -59,17 +63,15 @@ of sustained hardware FPS. Star Fox EX is not fully supported.
 ## Download and installation
 
 <p>
-  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/download/v1.1/Starwing-3DS.cia"><img src="docs/images/download-cia.svg" alt="Download Starwing 3DS CIA" width="210" height="46"></a>
-  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/download/v1.1/Starwing-3DS.3dsx"><img src="docs/images/download-3dsx.svg" alt="Download Starwing 3DS for Homebrew Launcher" width="210" height="46"></a>
+  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/download/v1.2-E2/Starwing-3DS.cia"><img src="docs/images/download-cia.svg" alt="Download Starwing 3DS CIA" width="210" height="46"></a>
+  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/download/v1.2-E2/Starwing-3DS.3dsx"><img src="docs/images/download-3dsx.svg" alt="Download Starwing 3DS for Homebrew Launcher" width="210" height="46"></a>
 </p>
 
-**Supported systems: New Nintendo 3DS / New 2DS XL.**
-Old 3DS / 2DS displays a compatibility notice; future support is planned.
+**Supported systems: New Nintendo 3DS / New 2DS XL and Old Nintendo 3DS / 2DS.**
+Old 3DS / 2DS support is new in 1.2 and experimental: busy scenes can show
+fewer frames than on New models. See [Compatibility](docs/COMPATIBILITY.md).
 
-The notice follows the console language: English, Spanish, Portuguese, Italian,
-German or French. Other languages fall back to English.
-
-[Release notes and FBI QR](https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.1) · [Project website](https://estebanpdn.github.io/star-fox.html)
+[Release notes and FBI QR](https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.2-E2) · [Project website](https://estebanpdn.github.io/star-fox.html)
 
 1. Install `Starwing-3DS.cia` with FBI, or scan the release's QR in
    **Remote Install → Scan QR Code**.

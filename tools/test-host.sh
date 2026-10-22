@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_BUILD="${STARWING_HOST_TEST_BUILD_DIR:-${ROOT}/build/host-tests}"
 mkdir -p "${TEST_BUILD}"
-for TEST in notice_language presentation_limit frame_pacing launch_selection screen_transfer presentation_metrics performance_history diagnostic_sha256 update_notes; do
+for TEST in top_viewport presentation_limit frame_pacing launch_selection screen_transfer presentation_metrics performance_history diagnostic_sha256 update_notes; do
   "${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra \
     "${ROOT}/tests/${TEST}_test.cpp" -o "${TEST_BUILD}/${TEST}_test"
   "${TEST_BUILD}/${TEST}_test"
@@ -34,6 +34,17 @@ done
   "${ROOT}/tests/hardware_profile_test.cpp" \
   "${ROOT}/platform/3ds/source/audio_3ds.cpp" -o "${TEST_BUILD}/hardware_profile_test"
 "${TEST_BUILD}/hardware_profile_test"
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -pthread \
+  -I"${ROOT}/tests/audio_3ds_host" -I"${ROOT}/platform/3ds/source" \
+  "${ROOT}/tests/audio_suspend_test.cpp" \
+  "${ROOT}/platform/3ds/source/audio_3ds.cpp" -o "${TEST_BUILD}/audio_suspend_test"
+"${TEST_BUILD}/audio_suspend_test"
+"${CC:-cc}" -std=c11 -O2 -Wall -Wextra -I"${ROOT}/tests/gpu_3ds_host" \
+  -c "${ROOT}/platform/3ds/source/gpu_lifetime_3ds.c" -o "${TEST_BUILD}/gpu_lifetime.o"
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -pthread -I"${ROOT}/tests/gpu_3ds_host" \
+  "${ROOT}/tests/gpu_lifetime_test.cpp" "${TEST_BUILD}/gpu_lifetime.o" -o "${TEST_BUILD}/gpu_lifetime_test"
+"${TEST_BUILD}/gpu_lifetime_test"
+"${TEST_BUILD}/gpu_lifetime_test" callback-race
 python3 "${ROOT}/platform/3ds/tools/test_analyze_hardware_dump.py"
 
 if [[ -n "${STARWING_JANSSON_PREFIX:-}" ]]; then

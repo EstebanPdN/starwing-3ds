@@ -94,6 +94,7 @@ add_executable(starwing-3ds-game
     source/asset_stage.cpp
     source/audio_3ds.cpp
     source/display_3ds.cpp
+    source/gpu_lifetime_3ds.c
     source/frame_3ds.cpp
     source/native_canvas.cpp
     source/input_3ds.cpp
@@ -139,3 +140,9 @@ ctr_create_3dsx(starwing-game-3dsx
     OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/Starwing-3DS-Game.3dsx"
     SMDH "${STARWING_GAME_SMDH}"
     ROMFS "${STARWING_ROMFS}")
+
+# Citro3D 1.7.1 blocks indefinitely in its APT hook when a GX IRQ is lost.
+# Bound that fence without claiming that the hardware finished its commands.
+target_link_options(starwing-3ds-game PRIVATE
+    -Wl,--wrap=GX_BindQueue -Wl,--wrap=C3Di_RenderQueueWaitDone
+    -Wl,--wrap=gxCmdQueueRun -Wl,--wrap=gxCmdQueueWait)

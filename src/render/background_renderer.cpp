@@ -176,6 +176,14 @@ inline void merge_character_run(std::uint8_t* out, const std::uint8_t* character
     std::memcpy(out, &destination, sizeof(destination));
 }
 
+// Tilemaps are 256, 512 or 1024 pixels on each axis. For these powers of
+// two, masking equals the non-negative modulo, negative values included.
+// ARM11 has no integer divider, so `%` was a library call for every pixel
+// of the wide and expanded background paths.
+constexpr std::int32_t wrap(std::int32_t value, std::int32_t modulus) noexcept {
+    return value & (modulus - 1);
+}
+
 std::int32_t mosaic_coordinate(
     std::int32_t coordinate,
     std::uint8_t mosaic,
@@ -457,10 +465,6 @@ void BackgroundRenderer::draw_bg1(
     const auto tile_edge = ppu.bg1_tile_size_16 ? 16U : 8U;
     const auto width_pixels = static_cast<std::int32_t>(width_tiles * tile_edge);
     const auto height_pixels = static_cast<std::int32_t>(height_tiles * tile_edge);
-    const auto wrap = [](std::int32_t value, std::int32_t modulus) {
-        value %= modulus;
-        return value < 0 ? value + modulus : value;
-    };
     std::array<std::uint16_t, 4096U> tilemap{};
     std::array<std::uint8_t, 4096U> tilemap_valid{};
     if (target.width() == 256U && target.height() == 224U
@@ -577,10 +581,6 @@ void BackgroundRenderer::draw_bg2(
     const auto tile_edge = ppu.bg2_tile_size_16 ? 16U : 8U;
     const auto width_pixels = static_cast<std::int32_t>(width_tiles * tile_edge);
     const auto height_pixels = static_cast<std::int32_t>(height_tiles * tile_edge);
-    const auto wrap = [](std::int32_t value, std::int32_t modulus) {
-        value %= modulus;
-        return value < 0 ? value + modulus : value;
-    };
     auto black_colour = std::uint8_t{};
     auto darkest = std::numeric_limits<unsigned>::max();
     for (std::size_t index = 0U; index < ppu.cgram.size(); ++index) {
@@ -924,6 +924,111 @@ void BackgroundRenderer::draw_bg2(
         }
         return;
     }
+    auto* wide_pixels = target.draw_scale() == 1U
+            && target.command_buffer() == nullptr
+            && !target.layer_tags_enabled()
+        ? target.pixels().data() : nullptr;
+    if (wide_pixels != nullptr && extend_horizontal && wrap_horizontal
+        && !transparent_cgram_black && single_occurrence_top_rows == 0U
+        && unique_regions.empty() && (ppu.mosaic & 0x02U) == 0U
+        && !ppu.tunnel_scene
+        && !(ppu.background_mode == 1U && ppu.bg2_scanline_scroll_enabled)) {
+        // Wide and 4:3 gameplay draw BG2 here whenever the PICA path is off.
+        // Without mosaic, tunnel walls, water edges or one-occurrence art,
+        // pixels up to the next character edge or column-offset change share
+        // one source row, tilemap entry and character row. Resolve them once
+        // per run; the ground continuation stays per column, as below.
+        const auto x_mask = static_cast<std::uint32_t>(width_pixels - 1);
+        const auto y_mask = static_cast<std::uint32_t>(height_pixels - 1);
+        const auto width = target.width();
+        const bool ground = !previous_ground_source_y.empty();
+        for (std::uint32_t screen_y = 0U; screen_y < target.height(); ++screen_y) {
+            const auto logical_y = static_cast<std::int32_t>(screen_y)
+                - vertical_origin;
+            const auto row_scroll_x = ppu.bg2_horizontal_offsets_enabled
+                && logical_y >= 0
+                && static_cast<std::size_t>(logical_y)
+                    < ppu.bg2_horizontal_offsets.size()
+                ? static_cast<std::int32_t>(ppu.bg2_horizontal_offsets[
+                    static_cast<std::size_t>(logical_y)])
+                : scroll_x;
+            const auto register_scroll_y = ppu.bg2_scanline_scroll_enabled
+                ? ppu.bg2_scanline_scroll_y[std::clamp<std::int32_t>(logical_y, 0, 223)]
+                : scroll_y;
+            const bool ground_row = ground && logical_y >= 144;
+            const auto row_offset = static_cast<std::size_t>(screen_y)
+                * target.stored_width();
+            auto* row = wide_pixels + row_offset;
+            const auto write = [&](std::uint32_t column, std::uint8_t colour) {
+                row[column] = colour;
+                target.mark_written(row_offset + column);
+            };
+            for (std::uint32_t screen_x = 0U; screen_x < width;) {
+                const auto tile_scroll_y = column_scroll_y.empty()
+                    ? no_column_scroll : column_scroll_y[screen_x];
+                const auto current_scroll_y = tile_scroll_y != no_column_scroll
+                    ? tile_scroll_y : register_scroll_y;
+                const auto source_y = static_cast<std::int32_t>(
+                    static_cast<std::uint32_t>(logical_y + current_scroll_y) & y_mask);
+                const auto source_x = static_cast<std::uint32_t>(
+                    static_cast<std::int32_t>(screen_x) - horizontal_origin
+                        + row_scroll_x) & x_mask;
+                auto count = std::min<std::uint32_t>(8U - (source_x & 7U), width - screen_x);
+                if (!column_scroll_y.empty()) {
+                    for (std::uint32_t n = 1U; n < count; ++n) {
+                        if (column_scroll_y[screen_x + n] != tile_scroll_y) {
+                            count = n;
+                            break;
+                        }
+                    }
+                }
+                const auto tile_x = source_x >> tile_shift(tile_edge);
+                const auto tile_y = static_cast<std::uint32_t>(source_y) >> tile_shift(tile_edge);
+                const auto page = (tile_x >> 5U) + (tile_y >> 5U) * pages_wide;
+                const auto entry = page * 0x400U
+                    + (tile_y & 31U) * 32U + (tile_x & 31U);
+                const auto tile = cached_tilemap_word(entry);
+                const bool visible = selected_priority(tile, priority);
+                const std::uint8_t* run_pixels = nullptr;
+                if (visible) {
+                    run_pixels = characters.row(tile_sample(tile,
+                        static_cast<std::int32_t>(source_x), source_y,
+                        ppu.bg2_tile_size_16));
+                }
+                const bool flipped = (tile & 0x4000U) != 0U;
+                const auto palette = static_cast<std::uint8_t>(((tile >> 10U) & 7U) * 16U);
+                for (std::uint32_t i = 0U; i < count; ++i) {
+                    const auto column = screen_x + i;
+                    if (ground) {
+                        const auto previous_source_y = previous_ground_source_y[column];
+                        if (logical_y >= 144 && previous_source_y >= 0
+                            && source_y < previous_source_y
+                            && previous_source_y - source_y > height_pixels / 2) {
+                            ground_source_wrapped[column] = true;
+                        }
+                        previous_ground_source_y[column] = source_y;
+                        if (ground_source_wrapped[column]) {
+                            if (last_opaque_ground[column] != 0U)
+                                write(column, last_opaque_ground[column]);
+                            continue;
+                        }
+                    }
+                    const auto x = (source_x + i) & 7U;
+                    const auto colour = visible ? run_pixels[flipped ? 7U - x : x] : 0U;
+                    if (colour == 0U) {
+                        if (ground_row && last_opaque_ground[column] != 0U)
+                            write(column, last_opaque_ground[column]);
+                        continue;
+                    }
+                    const auto indexed_colour = static_cast<std::uint8_t>(palette + colour);
+                    if (ground) last_opaque_ground[column] = indexed_colour;
+                    write(column, indexed_colour);
+                }
+                screen_x += count;
+            }
+        }
+        return;
+    }
     for (std::uint32_t screen_y = 0; screen_y < target.height(); ++screen_y) {
         const auto logical_y = static_cast<std::int32_t>(screen_y)
             - vertical_origin;
@@ -1203,10 +1308,6 @@ void BackgroundRenderer::draw_bg3(
     const auto tile_edge = ppu.bg3_tile_size_16 ? 16U : 8U;
     const auto width_pixels = static_cast<std::int32_t>(width_tiles * tile_edge);
     const auto height_pixels = static_cast<std::int32_t>(height_tiles * tile_edge);
-    const auto wrap = [](std::int32_t value, std::int32_t modulus) {
-        value %= modulus;
-        return value < 0 ? value + modulus : value;
-    };
 
     if (target.width() == 256U && target.height() == 224U
         && horizontal_origin == 0) {

@@ -351,11 +351,13 @@ if(STARFOX_BUILD_TESTS)
     target_compile_features(starfox_diagnostic_sha256_tests PRIVATE cxx_std_20)
     add_test(NAME starfox_diagnostic_sha256_tests COMMAND starfox_diagnostic_sha256_tests)
     add_executable(starfox_3ds_frame_tests tests/frame_3ds_test.cpp
-        platform/3ds/source/frame_3ds.cpp platform/3ds/source/native_canvas.cpp)
+        platform/3ds/source/frame_3ds.cpp platform/3ds/source/native_canvas.cpp
+        platform/3ds/source/native_engine/scene.cpp)
     target_include_directories(starfox_3ds_frame_tests PRIVATE tests/3ds_host)
     target_link_libraries(starfox_3ds_frame_tests PRIVATE starfox_core)
     add_executable(starfox_3ds_stereo_tests tests/stereo_3ds_test.cpp
-        platform/3ds/source/frame_3ds.cpp platform/3ds/source/native_canvas.cpp)
+        platform/3ds/source/frame_3ds.cpp platform/3ds/source/native_canvas.cpp
+        platform/3ds/source/native_engine/scene.cpp)
     target_include_directories(starfox_3ds_stereo_tests PRIVATE tests/3ds_host)
     target_link_libraries(starfox_3ds_stereo_tests PRIVATE starfox_core)
     add_test(NAME starfox_3ds_stereo_tests COMMAND starfox_3ds_stereo_tests)
