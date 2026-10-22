@@ -33,21 +33,6 @@ Missing inputs must stop configuration; do not substitute another version's
 ROM data or publish private inputs to make a source-only check succeed.
 See [credits](legal/CREDITS.md) and [third-party notices](legal/THIRD_PARTY_NOTICES.md).
 
-The Old-model launch screen is generated with Python and Pillow on the game's
-native pixel grid. Supply your own ROM and matching symbol map:
-
-```sh
-python3 platform/3ds/tools/make-old-3ds-notice.py \
-  --rom /path/to/original.sfc --symbols /path/to/original-symbols.txt \
-  --output /path/to/private-ui --version 1.1
-```
-
-Place `old_3ds_notice_art_data.hpp` alongside the other generated UI headers
-in `STARWING_UI_INCLUDE_DIR`. The generator produces all six languages and checks text bounds and exact
-pixel encoding. This screen needs no user ROM or SD data at
-runtime. The generator source is public; its ROM-derived output follows the
-same private-input boundary as the other game artwork.
-
 ## Native verification
 
 ```sh

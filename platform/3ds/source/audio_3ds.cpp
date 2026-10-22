@@ -136,10 +136,14 @@ void Audio3ds::close() noexcept {
 }
 
 void Audio3ds::stop_playback() noexcept {
+    stop_playback(true);
+}
+
+void Audio3ds::stop_playback(bool wait_done) noexcept {
     if (playing_) {
         CSND_SetPlayState(left_channel_, 0);
         CSND_SetPlayState(right_channel_, 0);
-        static_cast<void>(CSND_UpdateInfo(true));
+        static_cast<void>(CSND_UpdateInfo(wait_done));
     }
     playing_ = false;
     playback_started_ms_ = 0;

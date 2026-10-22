@@ -2,6 +2,8 @@
 #include "cache_3ds.h"
 #include "texel_expand.hpp"
 #include "stereo_3ds.hpp"
+#include "gpu_lifetime_3ds.h"
+#include "top_viewport.hpp"
 
 #include <algorithm>
 #include <array>
@@ -18,6 +20,25 @@ void queue_display_transfer(u32* source, u32 source_size, u32* destination,
     u32 destination_size, u32 flags) {
     C3D_FrameSplit(GX_CMDLIST_FLUSH);
     GX_DisplayTransfer(source, source_size, destination, destination_size, flags);
+}
+
+// Apply the same source crop to every layer, including direct BG2 quads.
+void begin_top_scene(C3D_RenderTarget* target, unsigned width, unsigned height, bool wide) {
+    C2D_SceneBegin(target);
+    C2D_ViewReset();
+    const auto view = top_viewport(width, height, wide);
+    const float sx = float(view.width) / view.source_width;
+    const float sy = float(view.height) / view.source_height;
+    // At rational scaling ratios a pixel centre can land exactly on a texel
+    // boundary. Bias by 1/32 screen pixel so float24 rounding selects the same
+    // texel as the integer CPU presenter instead of the preceding row/column.
+    const float sampling_bias=wide ? 0.0F : 1.0F/32.0F;
+    C2D_ViewTranslate(float(view.x) - view.source_x*sx - sampling_bias,
+        float(view.y) - view.source_y*sy - sampling_bias);
+    C2D_ViewScale(sx, sy);
+    // PICA's top target is rotated: horizontal screen bounds are GPU Y.
+    C3D_SetScissor(GPU_SCISSOR_NORMAL, view.y, view.x,
+        view.y + view.height, view.x + view.width);
 }
 
 std::uint32_t ticks_to_microseconds(std::uint64_t ticks) noexcept {
@@ -117,7 +138,7 @@ constexpr DiagnosticGlyph diagnostic_font[]{
 Display3ds::~Display3ds() { close(); }
 
 bool Display3ds::acquire_gpu_frame(std::uint32_t timeout_ms) noexcept {
-    if (!c3d_ready_ || cpu_fallback_) return false;
+    if (!c3d_ready_ || cpu_fallback_ || starwing_gpu_abandoned()) return false;
     const auto deadline = svcGetSystemTick()
         + std::uint64_t{timeout_ms} * (SYSCLOCK_ARM11 / 1000U);
     for (;;) {
@@ -127,9 +148,21 @@ bool Display3ds::acquire_gpu_frame(std::uint32_t timeout_ms) noexcept {
     }
 }
 
+bool Display3ds::wait_gpu_idle(std::uint32_t timeout_ms) noexcept {
+    if (!gpu_active_) return true;
+    if (bg2_plan_pending_) wait_for_bg2_plan();
+    if (!acquire_gpu_frame(timeout_ms)) return false;
+    C3D_FrameEnd(GX_CMDLIST_FLUSH);
+    return true;
+}
+
 void Display3ds::use_cpu_presentation() noexcept {
     if (cpu_fallback_ || !gpu_active_) return;
     if (bg2_plan_pending_) wait_for_bg2_plan();
+    // Never report an unfinished command as complete. Stop submission and
+    // retain every resource that the GPU may still be reading or writing.
+    starwing_abandon_gpu();
+    native_engine_.abandon();
     cpu_fallback_ = true;
     gpu_active_ = false;
     frame_texture_valid_ = cpu_frame_valid_ = false;
@@ -220,12 +253,27 @@ void Display3ds::prepare_mode2_plan(
 
 bool Display3ds::open() {
     close();
+    const bool recovery_ready=starwing_prepare_cpu_top();
     gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);
     // Bottom telemetry is written directly at native 320x240 pixel positions.
     gfxSetScreenFormat(GFX_BOTTOM, GSP_RGBA8_OES);
+    // consoleInit at bootstrap disables the top screen's double buffering.
+    // Restore it before transferring GPU frames to a displayed scanout buffer.
+    gfxSetDoubleBuffering(GFX_TOP, true);
     bool new_3ds=false;
     if (R_FAILED(APT_CheckNew3DS(&new_3ds))) new_3ds=false;
     gfxSet3D(new_3ds);
+    // A failed optional reserve must still leave both CPU screen formats
+    // valid. Do not start GPU work if safe recovery cannot be guaranteed.
+    if (!recovery_ready) {
+        gfxSet3D(false);
+        return false;
+    }
+    if (starwing_gpu_abandoned()) {
+        cpu_fallback_ = true;
+        gfxSet3D(false);
+        return true;
+    }
     if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) return false;
     c3d_ready_ = true;
     // Per-line HDMA on the 400x240 native raster can approach 16k fragments.
@@ -329,6 +377,10 @@ bool Display3ds::open() {
 }
 
 void Display3ds::close() noexcept {
+    if (starwing_gpu_abandoned()) {
+        cpu_fallback_ = true;
+        native_engine_.abandon();
+    }
     if (cpu_fallback_) {
         // Deleting targets and textures waits for the queue that stopped
         // completing. Leave them to process teardown instead of hanging.
@@ -341,8 +393,15 @@ void Display3ds::close() noexcept {
         }
         return;
     }
-    if (c3d_ready_ && gpu_active_ && acquire_gpu_frame(250U))
+    if (c3d_ready_ && gpu_active_) {
+        if (!acquire_gpu_frame(250U)) {
+            use_cpu_presentation();
+            close();
+            return;
+        }
+        // The acquired empty frame emits no new work.
         C3D_FrameEnd(GX_CMDLIST_FLUSH);
+    }
     native_engine_.close();
     if (bg2_plan_pending_) wait_for_bg2_plan();
     if (bg2_plan_worker_ != nullptr) {
@@ -595,26 +654,26 @@ bool Display3ds::present(const render::Framebuffer& indexed,
     if (right != nullptr) upload_right(*right, palette, false, reuse_source);
     stage_begin = svcGetSystemTick();
     C2D_TargetClear(top_, C2D_Color32(0, 0, 0, 255));
-    C2D_SceneBegin(top_);
+    begin_top_scene(top_, width, height, wide_);
     const Tex3DS_SubTexture subtexture{
         static_cast<u16>(width), static_cast<u16>(height),
         0.0F, 1.0F, static_cast<float>(width) / texture_width_,
         1.0F - static_cast<float>(height) / texture_height_};
     const C2D_Image image{&texture_, &subtexture};
-    const auto output_width = wide_ ? static_cast<float>(width) : 274.0F;
-    const auto left = (400.0F - output_width) / 2.0F;
-    const auto top = static_cast<float>((240U - height) / 2U);
     const C2D_DrawParams params{
-        {left, top, output_width, static_cast<float>(height)},
+        {0.0F, 0.0F, float(width), float(height)},
         {0.0F, 0.0F}, 0.0F, 0.0F};
     C2D_DrawImage(image, &params, nullptr);
     if (right != nullptr) {
         C2D_TargetClear(top_right_, C2D_Color32(0, 0, 0, 255));
-        C2D_SceneBegin(top_right_);
+        begin_top_scene(top_right_, width, height, wide_);
         const C2D_Image right_image{&right_texture_, &subtexture};
         C2D_DrawImage(right_image, &params, nullptr);
     }
     last_top_framebuffer_ = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, nullptr, nullptr);
+#ifdef STARWING_AUTOPILOT
+    capture_right_ = right ? gfxGetFramebuffer(GFX_TOP,GFX_RIGHT,nullptr,nullptr) : nullptr;
+#endif
     // Our pinned Citro2D hook flushes the complete used vertex/index ranges.
     // Every split also flushes its command list before PICA consumes it.
     C3D_FrameEnd(GX_CMDLIST_FLUSH);
@@ -634,6 +693,7 @@ bool Display3ds::present_black() {
         if (!acquire_gpu_frame(250U)) return false;
         C2D_TargetClear(top_, C2D_Color32(0, 0, 0, 255));
         C2D_SceneBegin(top_);
+        C2D_ViewReset();
         last_top_framebuffer_ = gfxGetFramebuffer(
             GFX_TOP, GFX_LEFT, nullptr, nullptr);
         C3D_FrameEnd(GX_CMDLIST_FLUSH);
@@ -642,14 +702,14 @@ bool Display3ds::present_black() {
         return true;
     }
     u16 width{}, height{};
-    auto* screen = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &width, &height);
+    auto* screen = starwing_cpu_top_framebuffer(&width, &height);
     if (screen == nullptr || width != 240U || height != 400U)
         return false;
     std::memset(screen, 0, 400U * 240U * sizeof(std::uint16_t));
     last_top_framebuffer_ = screen;
     // Swap only the top screen; the bottom has its own presenter.
     GSPGPU_FlushDataCache(screen, 400U * 240U * sizeof(std::uint16_t));
-    gfxScreenSwapBuffers(GFX_TOP, false);
+    starwing_swap_cpu_top();
     frame_texture_valid_ = false;
     cpu_frame_valid_ = false;
     return true;
@@ -957,7 +1017,7 @@ bool Display3ds::present_native(const render::Framebuffer& background,
     begin=svcGetSystemTick();
     bool drawn=native_engine_.draw(scene,palette);
     if(drawn) {
-        C2D_TargetClear(top_,C2D_Color32(0,0,0,255));C2D_SceneBegin(top_);
+        C2D_TargetClear(top_,C2D_Color32(0,0,0,255));begin_top_scene(top_,400,240,wide_);
         const Tex3DS_SubTexture sub{400,240,0,1,400.0f/512,1.0f-240.0f/256};
         const C2D_DrawParams params{{0,0,400,240},{0,0},0,0};
         for(auto* texture:{&texture_,native_engine_.texture(),&overlay_texture_}) {
@@ -977,9 +1037,9 @@ bool Display3ds::present_mode2(
     std::int32_t scroll_x, std::int32_t scroll_y,
     const render::Framebuffer& foreground,
     const render::Palette256& palette, bool reuse_source,
-    const render::Framebuffer* right, const native_engine::Scene* scene) {
+    const render::Framebuffer* right, const native_engine::Scene* scene, std::uint8_t stereo_strength) {
     frame_timing_ = {};
-    if ((right && !top_right_) || !eligible_mode2(ppu) || foreground.width() != 400U
+    if ((right && (!top_right_ || !bg2_target_)) || !eligible_mode2(ppu) || foreground.width() != 400U
         || foreground.height() != 240U || foreground.draw_scale() != 1U) {
         wait_for_bg2_plan();
         return false;
@@ -1127,7 +1187,15 @@ bool Display3ds::present_mode2(
         clear_colour_target(bg2_target_, C2D_Color32(
             palette[0].r, palette[0].g, palette[0].b, 255));
         C2D_SceneBegin(bg2_target_);
-        if (!draw_bg2_quads(palette)) {
+        C2D_ViewReset();
+        // This colour-only target has no depth attachment. Citro2D's default
+        // GEQUAL test would read address zero; every BG2 quad uses painter order.
+        C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+        const bool background_drawn=draw_bg2_quads(palette);
+        // Restore even when a capacity failure sends this frame to fallback.
+        C2D_Flush();
+        C3D_DepthTest(true, GPU_GEQUAL, GPU_WRITE_ALL);
+        if (!background_drawn) {
             C3D_FrameEnd(GX_CMDLIST_FLUSH);
             frame_timing_.gpu_submitted = true;
             return false;
@@ -1142,10 +1210,11 @@ bool Display3ds::present_mode2(
         frame_timing_.gpu_submitted=true;
         return false;
     }
-    const auto draw_eye = [&](C3D_RenderTarget* target, C3D_Tex* overlay) {
-    C2D_TargetClear(target, C2D_Color32(
-        palette[0].r, palette[0].g, palette[0].b, 255));
-    C2D_SceneBegin(target);
+    const auto draw_eye = [&](C3D_RenderTarget* target, C3D_Tex* overlay, int eye) {
+    C2D_TargetClear(target, C2D_Color32(0, 0, 0, 255));
+    begin_top_scene(target,400,240,wide_);
+    C2D_DrawRectSolid(0,0,0,400,240,C2D_Color32(
+        palette[0].r,palette[0].g,palette[0].b,255));
     stage_begin = svcGetSystemTick();
     if (use_bg2_raster) {
         const Tex3DS_SubTexture background_subtexture{
@@ -1154,10 +1223,20 @@ bool Display3ds::present_mode2(
             1.0F - 240.0F / static_cast<float>(texture_height_)};
         const C2D_Image background_image{&bg2_texture_, &background_subtexture};
         const C2D_DrawParams background_params{
-            {0.0F, 0.0F, 400.0F, 240.0F}, {0.0F, 0.0F}, 0.0F, 0.0F};
+            {float(eye), 0.0F, 400.0F, 240.0F}, {0.0F, 0.0F}, 0.0F, 0.0F};
         if (!C2D_DrawImage(background_image, &background_params, nullptr))
             return false;
         ++frame_timing_.bg2_emitted_quads;
+        if (eye != 0) {
+            const unsigned source_x=eye>0?0U:399U;
+            const Tex3DS_SubTexture edge_sub{1U,240U,float(source_x)/512.0F,1.0F,
+                float(source_x+1U)/512.0F,1.0F-240.0F/256.0F};
+            const C2D_Image edge_image{&bg2_texture_,&edge_sub};
+            const C2D_DrawParams edge_params{{eye>0?0.0F:float(400+eye),0.0F,
+                float(std::abs(eye)),240.0F},{0.0F,0.0F},0.0F,0.0F};
+            if (!C2D_DrawImage(edge_image,&edge_params,nullptr)) return false;
+            ++frame_timing_.bg2_emitted_quads;
+        }
     } else if (!draw_bg2_quads(palette)) return false;
     if (scene) {
         const Tex3DS_SubTexture sub{400U,240U,0.0f,1.0f,400.0f/512.0f,1.0f-240.0f/256.0f};
@@ -1178,9 +1257,13 @@ bool Display3ds::present_mode2(
         foreground_image, &foreground_params, nullptr);
     return drawn;
     };
-    const bool drawn = draw_eye(top_, &overlay_texture_)
-        && (right == nullptr || draw_eye(top_right_, &right_overlay_texture_));
+    const int strength=right?std::min<unsigned>(stereo_strength,8U):0;
+    const bool drawn = draw_eye(top_, &overlay_texture_, -strength)
+        && (right == nullptr || draw_eye(top_right_, &right_overlay_texture_, strength));
     last_top_framebuffer_ = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, nullptr, nullptr);
+#ifdef STARWING_AUTOPILOT
+    capture_right_ = right ? gfxGetFramebuffer(GFX_TOP,GFX_RIGHT,nullptr,nullptr) : nullptr;
+#endif
     C3D_FrameEnd(GX_CMDLIST_FLUSH);
     frame_timing_.gpu_submitted = true;
     frame_timing_.submit_us += ticks_to_microseconds(
@@ -1193,11 +1276,11 @@ bool Display3ds::present_cpu(const render::Framebuffer& indexed,
     const render::Palette256& palette, bool reuse_source) {
     u16 width{}, height{};
     auto *screen = reinterpret_cast<std::uint16_t*>(
-        gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &width, &height));
+        starwing_cpu_top_framebuffer(&width, &height));
     if (screen == nullptr || width != 240U || height != 400U) return false;
     const auto source_width = std::min<std::uint32_t>(indexed.width(), 400U);
     const auto source_height = std::min<std::uint32_t>(indexed.height(), 240U);
-    const auto output_width = wide_ ? source_width : 274U;
+    const auto view = top_viewport(source_width, source_height, wide_);
     std::array<std::uint16_t, 256U> colours{};
     for (std::uint32_t index = 0U; index < 256U; ++index)
         colours[index] = rgb565(palette[index]);
@@ -1212,20 +1295,23 @@ bool Display3ds::present_cpu(const render::Framebuffer& indexed,
         frame_timing_.reuse_hit = true;
         return true;
     }
-    const auto left = (400U - output_width) / 2U;
-    const auto top = (240U - source_height) / 2U;
+    std::array<unsigned,240> source_rows{};
+    for (unsigned y=view.y; y<view.y+view.height; ++y) source_rows[y]=view.sample_y(y);
     for (std::uint32_t x = 0U; x < 400U; ++x) {
+        auto* column = screen + x * 240U;
+        if (x < view.x || x >= view.x + view.width) {
+            std::fill_n(column, 240U, std::uint16_t{0});
+            continue;
+        }
+        const auto source_x = view.sample_x(x);
         for (std::uint32_t y = 0U; y < 240U; ++y) {
-            const auto target = x * 240U + (239U - y);
-            screen[target] = x >= left && x < left + output_width
-                && y >= top && y < top + source_height
-                ? colours[indexed.get((x-left)*source_width/output_width,
-                    y-top)] : colours[0];
+            column[239U - y] = y >= view.y && y < view.y + view.height
+                ? colours[indexed.get(source_x, source_rows[y])] : 0U;
         }
     }
     last_top_framebuffer_ = reinterpret_cast<const u8*>(screen);
     GSPGPU_FlushDataCache(screen, 400U * 240U * sizeof(std::uint16_t));
-    gfxScreenSwapBuffers(GFX_TOP, false);
+    starwing_swap_cpu_top();
     cached_cpu_colours_ = colours;
     cached_cpu_width_ = static_cast<std::uint16_t>(source_width);
     cached_cpu_height_ = static_cast<std::uint16_t>(source_height);

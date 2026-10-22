@@ -28,7 +28,9 @@ Mode 1 native composition can be enabled explicitly by a development harness
 with `set_native_engine(true, true)`. It is not selected by the product profile:
 a 900-frame host preparation experiment cost 87.07 ms versus 79.24 ms for the
 reference. That test proved image equivalence, not a performance benefit.
-Unsupported scenes, narrow presentation and stereo retain the reference.
+Unsupported scenes and stereo world rendering retain the reference. The 1.2
+candidate also supports native spans in 4:3 via a shared final crop/scale;
+stereo can use the GPU BG2 compositor. See [the 1.2 investigation](PERFORMANCE-1.2.md).
 
 This backend replaces world pixel filling and world composition in eligible
 scenes. Simulation, asset decoding, projection, clipping and span generation

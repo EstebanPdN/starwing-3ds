@@ -1,9 +1,10 @@
-#include "old_3ds_notice.hpp"
 #include "asset_stage.h"
 #include "asset_stage.hpp"
 #include "audio_3ds.hpp"
+#include "apt_audio_3ds.hpp"
 #include "controls_3ds_art.hpp"
 #include "display_3ds.hpp"
+#include "gpu_lifetime_3ds.h"
 #include "diagnostics_3ds.hpp"
 #include "frame_3ds.hpp"
 #include "stereo_3ds.hpp"
@@ -95,8 +96,9 @@ bool present_menu_pixels(const std::vector<std::uint32_t>& pixels,
     gfxScreen_t screen, starfox::platform_3ds::Display3ds& display,
     std::uint8_t brightness=15U) {
     u16 physical_width{},physical_height{};
-    auto* output=gfxGetFramebuffer(screen,GFX_LEFT,
-        &physical_width,&physical_height);
+    auto* output=screen==GFX_TOP
+        ? starwing_cpu_top_framebuffer(&physical_width,&physical_height)
+        : gfxGetFramebuffer(screen,GFX_LEFT,&physical_width,&physical_height);
     const int logical_width=screen==GFX_TOP?400:320;
     if(!output||physical_width!=240U||physical_height!=logical_width) return false;
     brightness=std::min<std::uint8_t>(brightness,15U);
@@ -113,7 +115,8 @@ bool present_menu_pixels(const std::vector<std::uint32_t>& pixels,
         GSPGPU_FlushDataCache(output,320U*240U*4U);
         display.note_bottom_framebuffer(output);
     }
-    gfxScreenSwapBuffers(screen,false);
+    if (screen==GFX_TOP) starwing_swap_cpu_top();
+    else gfxScreenSwapBuffers(screen,false);
     return true;
 }
 
@@ -121,13 +124,13 @@ void present_frozen_top(std::span<const u8> pixels,
     starfox::platform_3ds::Display3ds& display) {
     constexpr std::size_t top_bytes=400U*240U*2U;
     u16 width{},height{};
-    auto* output=gfxGetFramebuffer(GFX_TOP,GFX_LEFT,&width,&height);
+    auto* output=starwing_cpu_top_framebuffer(&width,&height);
     if(output==nullptr||width!=240U||height!=400U
         ||pixels.size()!=top_bytes) return;
     std::memcpy(output,pixels.data(),top_bytes);
     GSPGPU_FlushDataCache(output,top_bytes);
     display.note_top_framebuffer(output);
-    gfxScreenSwapBuffers(GFX_TOP,false);
+    starwing_swap_cpu_top();
 }
 Result speedup_init_result = -1;
 Result speedup_config_result = -1;
@@ -257,34 +260,6 @@ void show_error(const char *message) {
 
 struct RunRequest {std::string rom_path; bool ex{};};
 
-// CSND keeps looping its PCM ring while the application is suspended by the
-// HOME Menu or sleep. Stop it before the system takes over; the next source
-// tick after resuming starts a fresh ring.
-class AptAudioPause {
-public:
-    explicit AptAudioPause(starfox::platform_3ds::Audio3ds& audio) : audio_{&audio} {
-        aptHook(&cookie_, &AptAudioPause::on_event, this);
-    }
-    ~AptAudioPause() { aptUnhook(&cookie_); }
-    AptAudioPause(const AptAudioPause&) = delete;
-    AptAudioPause& operator=(const AptAudioPause&) = delete;
-    [[nodiscard]] bool take_resumed() noexcept {
-        const bool value = resumed_;
-        resumed_ = false;
-        return value;
-    }
-private:
-    static void on_event(APT_HookType type, void* param) {
-        auto& self = *static_cast<AptAudioPause*>(param);
-        if (type == APTHOOK_ONSUSPEND || type == APTHOOK_ONSLEEP)
-            self.audio_->stop_playback();
-        else if (type == APTHOOK_ONRESTORE || type == APTHOOK_ONWAKEUP)
-            self.resumed_ = true;
-    }
-    starfox::platform_3ds::Audio3ds* audio_;
-    aptHookCookie cookie_{};
-    bool resumed_{};
-};
 
 // One line per presentation recovery, kept for player bug reports.
 void write_gpu_recovery(const char* stage, const char* flow,
@@ -361,7 +336,7 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
     auto owned_audio = std::make_unique<starfox::platform_3ds::Audio3ds>();
     auto& audio = *owned_audio;
     static_cast<void>(audio.open());
-    AptAudioPause apt_audio_pause{audio};
+    starfox::platform_3ds::AptAudioPause apt_audio_pause{audio};
     static_cast<void>(audio.prime_upload_sequence(
         game.map().take_apu_port_writes()));
     game.synchronize_apu_output_ports(audio.output_ports());
@@ -425,6 +400,9 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
     auto& performance = *owned_performance;
 #ifdef STARWING_AUTOPILOT
     starfox::platform_3ds::Autopilot3ds autopilot{app_dir};
+    std::uint64_t autopilot_instructions = 0U, autopilot_strategy_instructions = 0U;
+    std::uint64_t autopilot_objects = 0U, autopilot_tick_us = 0U;
+    std::uint64_t autopilot_total_instructions = 0U, autopilot_total_tick_us = 0U;
     autopilot.header(performance.csv().c_str());
 #endif
     auto presentation_metrics = std::make_unique<starfox::platform_3ds::PresentationMetrics>();
@@ -573,14 +551,30 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
     // Continuous top-screen presentation failure since this time (0 = none).
     std::uint64_t top_failing_since_ms = 0U;
     bool gpu_world_disabled = false;
+    unsigned gpu_world_retries = 0U;
     bool options_presented=false;
     starfox::platform_3ds::UpdateStatus last_options_update;
-    while (aptMainLoop()) {
+    while (apt_audio_pause.main_loop([&] { return display.wait_gpu_idle(500U); })) {
+        if (starwing_gpu_abandoned() && display.gpu_active()) {
+            display.use_cpu_presentation();
+            write_gpu_recovery("suspend_queue_timeout", flow_label(game.flow_state()),
+                dashboard_gpu_begin_failures, dashboard_fallback);
+        }
 #ifdef STARWING_AUTOPILOT
         if (autopilot.finished()) { autopilot.event("end"); break; }
+        if (autopilot.take_home_due()) {
+            // Same preparation and libctru call as a real HOME press.
+            autopilot.event("home jump");
+            audio.stop_playback();
+            static_cast<void>(display.wait_gpu_idle(500U));
+            aptJumpToHomeMenu();
+            autopilot.event("home returned");
+        }
 #endif
         if (apt_audio_pause.take_resumed()) {
             // Returning from HOME/sleep: no catch-up burst, full redraw.
+            // Sleep leaves the old ring looping; restart it from silence.
+            audio.stop_playback();
             previous_ticks = svcGetSystemTick();
             pacing.reset(); presentation_metrics->reset_epoch();
             render_changed = true;
@@ -698,13 +692,17 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
             }
             break;
         }
-        display.set_wide(menu->wide());
+        const bool wide_view = menu->wide()
+            || (game.flow_state()!=starfox::simulation::GameFlowState::gameplay
+                && game.flow_state()!=starfox::simulation::GameFlowState::training);
+        display.set_wide(wide_view);
+        renderer.set_wide_view(wide_view);
         audio.set_master_volume(menu->volume());
         game.set_timing_mode(menu->original_speed()
             ? starfox::simulation::TimingMode::original_speed
             : starfox::simulation::TimingMode::unlocked_20_fps);
         renderer.set_top_hud_visible(menu->top_hud());
-        renderer.set_native_engine(profile.pica_world && menu->wide() && !gpu_world_disabled
+        renderer.set_native_engine(profile.pica_world && !gpu_world_disabled
             && display.gpu_active() && display.native_engine_ready());
         if(main_menu_transition==MainMenuTransition::black_hold) {
             if(osGetTime()<black_until_ms) {
@@ -853,6 +851,22 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                 game.map().clear_messages();
                 for (unsigned n=0;n<dashboard_tick_phases.size();++n)
                     dashboard_tick_phases[n] += game.tick_phase_ms()[n];
+#ifdef STARWING_AUTOPILOT
+                autopilot_instructions += result.prelude_instructions;
+                autopilot_strategy_instructions += result.strategies.instructions;
+                autopilot_objects += result.strategies.objects_run;
+                autopilot_tick_us += ticks_to_microseconds(svcGetSystemTick() - dashboard_tick_start_tick);
+                autopilot_total_instructions += result.prelude_instructions + result.strategies.instructions;
+                autopilot_total_tick_us += ticks_to_microseconds(svcGetSystemTick() - dashboard_tick_start_tick);
+                if (autopilot.tick() == 600U || autopilot.tick() == 900U || autopilot.tick() == 1200U) {
+                    // Cumulative, tick-aligned totals: comparable across builds.
+                    char text[160]{};
+                    std::snprintf(text, sizeof(text), "checkpoint instructions=%llu tick_us=%llu",
+                        static_cast<unsigned long long>(autopilot_total_instructions),
+                        static_cast<unsigned long long>(autopilot_total_tick_us));
+                    autopilot.event(text);
+                }
+#endif
                 renderer.capture_after_tick(game);
                 dashboard_game_ms += osGetTime() - dashboard_tick_start;
                 dashboard_tick_work_us += ticks_to_microseconds(
@@ -873,6 +887,16 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                     autopilot.event(text);
                 }
 #endif
+                if (flow != previous_flow && gpu_world_disabled
+                    && display.gpu_active() && gpu_world_retries < 3U) {
+                    // A failure can belong to one scene. Retry the PICA world
+                    // in the next one; the watchdog disables it again after
+                    // another 0.5 s without a presented frame.
+                    gpu_world_disabled = false;
+                    ++gpu_world_retries;
+                    write_gpu_recovery("retry_gpu_world", flow_label(flow),
+                        dashboard_gpu_begin_failures, dashboard_fallback);
+                }
                 if (flow != previous_flow
                     && (flow == starfox::simulation::GameFlowState::gameplay
                         || flow == starfox::simulation::GameFlowState::training)) {
@@ -939,7 +963,6 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
             const bool gpu_bg2 = !gpu_world_disabled
                 && (flow == starfox::simulation::GameFlowState::gameplay
                     || flow == starfox::simulation::GameFlowState::training)
-                && menu->wide()
                 && display.eligible_mode2(game.map().ppu_state());
             last_gpu_bg2 = gpu_bg2;
             const bool stereo_scene = !profile.old_3ds && menu->wide() && display.gpu_active()
@@ -948,6 +971,10 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                     || flow == starfox::simulation::GameFlowState::training);
             renderer.set_stereo_strength(stereo_scene
                 ? starfox::platform_3ds::stereo_slider_strength(osGet3DSliderState()) : 0U);
+#ifdef STARWING_AUTOPILOT
+            if (stereo_scene && autopilot.stereo_override() >= 0)
+                renderer.set_stereo_strength(autopilot.stereo_override());
+#endif
             const bool reusable_flow = flow == starfox::simulation::GameFlowState::title
                 || flow == starfox::simulation::GameFlowState::intro
                 || flow == starfox::simulation::GameFlowState::controls_type
@@ -1103,7 +1130,7 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                         game.map().ppu_vram_revision(), scroll_x, scroll_y,
                         indexed, palette, reuse,
                         renderer.stereo_active() ? &renderer.right_frame() : nullptr,
-                        renderer.native_scene())
+                        renderer.native_scene(),renderer.stereo_strength())
                     : display.present(*presented_frame, palette,
                         reuse&&!controls_art,
                         renderer.stereo_active() ? &renderer.right_frame() : nullptr);
@@ -1138,6 +1165,27 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
             }
             dashboard_presentation_work_us += ticks_to_microseconds(
                 svcGetSystemTick() - dashboard_presentation_tick);
+#ifdef STARWING_AUTOPILOT
+            if (presented && autopilot.capture_due()) {
+                bool captured = !display.gpu_active();
+                if (display.gpu_active() && display.acquire_gpu_frame(250U)) {
+                    C3D_FrameEnd(GX_CMDLIST_FLUSH);
+                    captured = true;
+                }
+                if (captured) {
+                    autopilot.capture(display.top_framebuffer(),display.right_framebuffer());
+                    if (display.gpu_active())
+                        for(unsigned layer=0;layer<5;++layer)
+                            if (const auto* texture=display.capture_texture(layer))
+                                autopilot.capture_texture(layer,*texture);
+                    renderer.set_native_engine(false);
+                    const auto& reference=renderer.draw(game,false,interpolation_alpha,&presentation_ppu);
+                    autopilot.capture_software(reference,palette,wide_view);
+                    if (renderer.stereo_active())
+                        autopilot.capture_software(renderer.right_frame(),palette,wide_view,true);
+                }
+            }
+#endif
             dashboard_upload_ms += osGetTime() - dashboard_upload_start
                 - fallback_draw_ms;
             if (presented) {
@@ -1556,6 +1604,17 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
 #ifdef STARWING_AUTOPILOT
             autopilot.row(row, starfox::platform_3ds::Autopilot3ds::lit_samples(display.top_framebuffer()),
                 game.map().ppu_state().background_mode);
+            {
+                char text[200]{};
+                std::snprintf(text, sizeof(text), "cpu65816 prelude=%llu strategy=%llu objects=%llu tick_us=%llu flow=%s",
+                    static_cast<unsigned long long>(autopilot_instructions),
+                    static_cast<unsigned long long>(autopilot_strategy_instructions),
+                    static_cast<unsigned long long>(autopilot_objects),
+                    static_cast<unsigned long long>(autopilot_tick_us), flow_label(game.flow_state()));
+                autopilot.event(text);
+                autopilot_instructions = autopilot_strategy_instructions = 0U;
+                autopilot_objects = autopilot_tick_us = 0U;
+            }
 #endif
             last_world_cache_hits = renderer.world_cache_hits();
             last_world_cache_misses = renderer.world_cache_misses();
@@ -2002,22 +2061,16 @@ int main(int argc, char** argv) {
     std::set_new_handler(capture_allocation_failure);
     gfxInitDefault();
     gfxSet3D(false);
+    // Old and New models both run the game; each selects its own profile.
     bool new_3ds=false;
-    const auto model_result=APT_CheckNew3DS(&new_3ds);
-#ifndef STARWING_AUTOPILOT
-    if (R_FAILED(model_result) || !new_3ds) {
-        starfox::platform_3ds::show_old_3ds_notice();
-        gfxExit();
-        return 0;
-    }
-#else
-    static_cast<void>(model_result);
-#endif
+    if (R_FAILED(APT_CheckNew3DS(&new_3ds))) new_3ds=false;
     osSetSpeedupEnable(true);
-    speedup_init_result = ptmSysmInit();
-    if (R_SUCCEEDED(speedup_init_result)) {
-        speedup_config_result = PTMSYSM_ConfigureNew3DSCPU(3);
-        ptmSysmExit();
+    if (new_3ds) {
+        speedup_init_result = ptmSysmInit();
+        if (R_SUCCEEDED(speedup_init_result)) {
+            speedup_config_result = PTMSYSM_ConfigureNew3DSCPU(3);
+            ptmSysmExit();
+        }
     }
     consoleInit(GFX_TOP, nullptr);
     const bool romfs_ready = R_SUCCEEDED(romfsInit());

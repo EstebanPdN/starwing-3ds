@@ -7,10 +7,17 @@
 //                                    FLOW limits the step to one flow label
 //   end <tick>                 leave the game loop at that tick
 //   gpufail <first> <last>     treat top-screen GPU presentation as failed
+//   capture <tick>             save PICA and software images of the same state
+//   stereo <strength>          override the slider (0..8)
+//   home <tick>                jump to the HOME Menu, as the HOME button does
 // Timing rows and events are appended to autopilot.csv / autopilot-events.txt.
 #include "starfox/input/buttons.hpp"
+#include "starfox/render/framebuffer.hpp"
+#include "starfox/render/palette.hpp"
+#include "top_viewport.hpp"
 
 #include <3ds.h>
+#include <citro3d.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -22,6 +29,7 @@ namespace starfox::platform_3ds {
 class Autopilot3ds {
 public:
     explicit Autopilot3ds(const char* directory) {
+        std::snprintf(directory_,sizeof(directory_),"%s",directory);
         char path[160]{};
         std::snprintf(path, sizeof(path), "%s/autopilot.txt", directory);
         FILE* script = std::fopen(path, "rb");
@@ -37,6 +45,15 @@ public:
             if (std::sscanf(line, "gpufail %u %u", &first, &last) == 2) {
                 gpu_failures_.push_back({first, last, 0U, {}});
                 continue;
+            }
+            if (std::sscanf(line, "capture %u", &first) == 1) {
+                captures_.push_back(first); continue;
+            }
+            if (std::sscanf(line, "home %u", &first) == 1) {
+                home_tick_ = first; continue;
+            }
+            if (std::sscanf(line, "stereo %u", &first) == 1) {
+                stereo_ = static_cast<int>(first > 8U ? 8U : first); continue;
             }
             const int fields = std::sscanf(line, "%u %u %63s %31s", &first, &last, keys, flow);
             if (fields < 3) continue;
@@ -67,6 +84,82 @@ public:
         for (const auto& range : gpu_failures_)
             if (tick_ >= range.first && tick_ <= range.last) return true;
         return false;
+    }
+
+    int stereo_override() const noexcept { return stereo_; }
+    // True once, at the scripted tick.
+    bool take_home_due() noexcept {
+        if (home_tick_ == 0U || tick_ < home_tick_) return false;
+        home_tick_ = 0U;
+        return true;
+    }
+    bool capture_due() const noexcept {
+        return capture_index_ < captures_.size() && tick_ >= captures_[capture_index_];
+    }
+    void capture(const u8* left, const u8* right) {
+        if (!capture_due()) return;
+        const auto requested=captures_[capture_index_++];
+        for (unsigned side=0;side<2;++side) {
+            const auto* pixels=side?right:left;
+            if (!pixels) continue;
+            GSPGPU_InvalidateDataCache(pixels,400U*240U*2U);
+            char path[256]{};
+            std::snprintf(path,sizeof(path),"%s/capture-%u-%s.rgb565",directory_,requested,side?"right":"left");
+            if (auto* file=std::fopen(path,"wb")) {
+                std::fwrite(pixels,2U,400U*240U,file); std::fclose(file);
+            }
+        }
+        event("capture");
+    }
+
+    // Explicit readback also resolves the emulator's cached VRAM surfaces.
+    void capture_texture(unsigned layer, const C3D_Tex& texture) {
+        if (!capture_index_ || !texture.data) return;
+        const u32 size=texture.width*texture.height*4U;
+        auto* pixels=static_cast<u32*>(linearAlloc(size));
+        if(!pixels) return;
+        C3D_SyncDisplayTransfer(static_cast<u32*>(texture.data),
+            GX_BUFFER_DIM(texture.width,texture.height),pixels,
+            GX_BUFFER_DIM(texture.width,texture.height),
+            GX_TRANSFER_IN_FORMAT(texture.fmt==GPU_RGBA5551 ? GX_TRANSFER_FMT_RGB5A1 : GX_TRANSFER_FMT_RGBA8)
+                |GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8));
+        GSPGPU_InvalidateDataCache(pixels,size);
+        char path[256]{};
+        std::snprintf(path,sizeof(path),"%s/capture-%u-layer-%u.linear",
+            directory_,captures_[capture_index_-1U],layer);
+        if(auto* f=std::fopen(path,"wb")) {
+            const u32 header[]{texture.width,texture.height,0,size};
+            std::fwrite(header,sizeof(header),1,f);
+            std::fwrite(pixels,size,1,f);std::fclose(f);
+        }
+        linearFree(pixels);
+    }
+
+    // Re-render without PICA from the same simulation/PPU/interpolation state.
+    // Store rotated RGB565 just like the real framebuffer; no GPU upload or
+    // transfer participates in this reference. Capture runs are not benchmarks.
+    void capture_software(const render::Framebuffer& frame,
+        const render::Palette256& palette, bool wide, bool right = false) {
+        if (!capture_index_) return;
+        char path[256]{};
+        std::snprintf(path,sizeof(path),"%s/capture-%u-software-%s.rgb565",
+            directory_,captures_[capture_index_-1U],right?"right":"left");
+        FILE* file=std::fopen(path,"wb");
+        if (!file) return;
+        const auto view=top_viewport(frame.width(),frame.height(),wide);
+        std::uint16_t column[240]{};
+        for (unsigned x=0;x<400;++x) {
+            for (unsigned y=0;y<240;++y) {
+                std::uint16_t value{};
+                if (x>=view.x && x<view.x+view.width && y>=view.y && y<view.y+view.height) {
+                    const auto c=palette[frame.get(view.sample_x(x),view.sample_y(y))];
+                    value=((c.r>>3U)<<11U)|((c.g>>2U)<<5U)|(c.b>>3U);
+                }
+                column[239U-y]=value;
+            }
+            std::fwrite(column,sizeof(column),1U,file);
+        }
+        std::fclose(file);
     }
 
     // Called once per source tick, before the simulation consumes input.
@@ -143,6 +236,11 @@ private:
         }
         return mask;
     }
+    char directory_[160]{};
+    std::vector<unsigned> captures_;
+    std::size_t capture_index_{};
+    int stereo_{-1};
+    unsigned home_tick_{};
     std::vector<Step> steps_;
     std::vector<Step> gpu_failures_;
     unsigned tick_{}, end_tick_{};

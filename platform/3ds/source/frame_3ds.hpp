@@ -41,6 +41,8 @@ public:
 
     Frame3ds(const assets::RomImage& rom, const assets::SymbolMap& symbols);
     void set_native_engine(bool enabled, bool mode1=false) noexcept {
+        if (native_engine_enabled_ != enabled || native_mode1_enabled_ != mode1)
+            last_draw_valid_ = false;
         native_engine_enabled_=enabled; native_mode1_enabled_=mode1;
     }
     const render::Framebuffer& native_background() const noexcept { return native_background_; }
@@ -50,6 +52,12 @@ public:
     [[nodiscard]] std::uint8_t stereo_strength() const noexcept { return stereo_strength_; }
     [[nodiscard]] const render::Framebuffer& right_frame() const noexcept {
         return last_draw_stereo_ ? right_frame_ : last_frame();
+    }
+    void set_wide_view(bool wide) noexcept {
+        if (wide_view_ != wide) {
+            wide_view_ = wide;
+            top_hud_cache_valid_ = last_draw_valid_ = false;
+        }
     }
     void set_top_hud_visible(bool visible) noexcept {
         if(show_top_hud_!=visible) {
@@ -284,6 +292,7 @@ private:
     render::ParticleRenderer particles_;
     render::ScaledTextRenderer text_;
     bool show_top_hud_{true};
+    bool wide_view_{true};
     render::DustRenderer dust_;
     struct CachedShape {
         assets::Shape shape;

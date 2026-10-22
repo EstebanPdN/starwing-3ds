@@ -11,7 +11,8 @@ public:
     ~Pica() { close(); }
     bool open();
     void close() noexcept;
-    bool ready() const noexcept { return vertices_ != nullptr; }
+    void abandon() noexcept { abandoned_ = true; }
+    bool ready() const noexcept { return !abandoned_ && vertices_ != nullptr; }
     // The caller fences vertex reuse and owns FrameBegin/FrameEnd.
     bool draw(const Scene&, const render::Palette256&);
     C3D_Tex* texture() noexcept { return &world_; }
@@ -27,5 +28,6 @@ private:
     C3D_Mtx projection_{};
     int projection_uniform_{};
     GpuStats stats_{};
+    bool abandoned_{};
 };
 } // namespace starfox::platform_3ds::native_engine

@@ -1,20 +1,27 @@
 # Verification status
 
-Current development version: **1.2-E1**; CIA internal title version: **88**.
-Stable 1.1 includes the renderer/audio implementation tested in development.
-Old 3DS / 2DS now displays a Python-rasterized, game-style compatibility notice
-before ROMFS, SD, audio, or gameplay initialization. New models continue normally.
+Current development version: **1.2-E2**; CIA internal title version: **90**.
+
+> ⚠️ **Experimental release — known HOME Menu freeze**
+>
+> Pressing HOME during a game can freeze the console: the bottom screen turns black and the top screen remains frozen. A forced shutdown by holding POWER may be required. I am aware of this problem and am working on a fix. HOME/sleep/resume reliability has not been established; use this build only if you accept this known issue.
+Version 1.2 enables gameplay on Old 3DS / 2DS and removes the launch notice.
+It includes the 1.2-E1 crash correction, black-screen recovery, HOME/sleep
+audio handling and Old 3DS performance work described below.
 The application and HOME Menu title remain **Starwing 3DS**.
 
 ## Behavior
 
-Both model profiles select ordered PICA spans for compatible wide 2D Mode 2
+Both model profiles select ordered PICA spans for compatible panoramic and 4:3 2D Mode 2
 world scenes. Geometry, exact special-span sampling and foreground layers
 remain shared with the reference. Stereo, Mode 1 and unsupported scenes retain
-the reference renderer; bounded capacity or GPU failures request a complete
-reference frame. This is a new backend, not a complete engine rewrite.
+the reference world renderer; stereo can still use GPU BG2 composition.
+Bounded capacity or GPU failures request a complete reference frame.
+An abandoned GPU keeps all in-flight resources and switches to reserved CPU
+scanout buffers. It cannot be reused until a new process starts.
 
-Old/unknown models select a single cartridge SPC with no extra worker/quota.
+Old/unknown models select a single cartridge SPC on a core 1 worker with an
+80, 70 or 50 percent time limit, or synchronous audio if no worker starts.
 New retains split stems, its worker policy and stereo resources. Exact native
 SPC blocks and ARM saturation apply to both audio routes. Configuration and
 checkpoints stay isolated by model; cartridge SRAM paths are unchanged.
@@ -41,6 +48,66 @@ The ARM handoff regression executes the linked instructions with page zero
 unmapped: 1.1 faults at address 12; the candidate reaches C2D_Prepare without
 an invalid access. This CPU replay does not simulate GPU output or establish
 physical New 2DS XL acceptance. User confirmation on hardware is still pending.
+
+## Current renderer investigation
+
+### Physical HOME failure remains unresolved
+
+The owner reproduced a full console freeze after entering gameplay and pressing
+HOME, including after both attempted HOME corrections. The bottom screen turns
+black, the top screen retains the game image, and controls stop responding.
+A forced shutdown is required. This is a failed physical acceptance case;
+**1.2-E2 does not fix the HOME Menu freeze**.
+
+The current candidate stops audio and drains pending GPU work in ordinary
+application context before a pending HOME transition. Its APT audio hook only
+updates memory flags. The host regression verifies this limited contract under
+both model profiles; it does not establish successful APT/GSP/system-menu
+handoff on hardware. Earlier removal of a CSND completion wait did not resolve
+the reported physical freeze. HOME/sleep/resume acceptance remains open.
+
+The owner requested publication as an explicitly experimental prerelease,
+with the known failure disclosed at the start of the release notes. E2 replaces
+the E1 prerelease; the stable 1.1 release remains available separately.
+
+### Renderer evidence
+
+The [1.2 renderer investigation](PERFORMANCE-1.2.md) compares the actual MKW-3DS
+and Epic MK64 shader, geometry, state/cache, queue and quality implementations
+with this port. It records the adaptations and validation limits.
+
+Current checks include the callback/swap race, a callback already entered when
+recovery starts, system-tick wait units, a bounded suspend timeout, and late
+GPU completion/writes that must not alter the independent recovery scanout.
+The bootstrap console's single-buffer mode is explicitly reset before GPU use.
+Recovery reserves 375 KiB of linear memory for the process lifetime.
+
+Azahar Software is used only as an emulator diagnostic; the release keeps PICA.
+The final sixteen-case ROM-free composition/recovery test matches all 1,536,000
+pixels per backend under both Software and Vulkan, including checker scales
+1 through 4. Integrated Software 4:3 captures match 288,000 reference pixels;
+New-profile Wide stereo final targets match 384,000 pixels across two paired
+states. The post-benchmark Old Wide target matches 96,000 pixels. Vulkan's
+direct cached framebuffer-memory readback showed stripes while the explicit
+render-target readback and its visible window were correct; that raw memory
+dump is not treated as evidence of a visible rendering defect.
+
+An injected presentation failure switches to the reference renderer and then
+independent CPU scanout; two later recovery frames match all 192,000 pixels.
+The run continues to its scripted end. Host tests additionally check an actual
+concurrent callback and a simulated late write to a former GPU destination.
+
+The retained Wide Mode comparison under Azahar's Old profile measures median
+presentation FPS of 23.715 for 1.2-E1 and 31.000 for the candidate. Source logic
+is about 15 Hz in both runs. This is one sequential pair of emulator runs, not
+physical Old 3DS FPS or proof of full source speed. All further performance
+tests use Wide Mode; 4:3 remains in visual regression coverage only. Exact
+windows, hashes and costs are in the investigation linked above.
+
+The final Release CIA/3DSX are built with autopilot disabled. The final presenter
+test includes the last failure-only initialization cleanup; integrated game
+captures and timings precede that cleanup. These checks do not establish
+physical-console black-screen or HOME acceptance.
 
 ## Inherited 1.1 checks
 

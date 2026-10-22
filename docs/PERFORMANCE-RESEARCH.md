@@ -1,5 +1,9 @@
 # Performance research for 1.1
 
+The follow-up [1.2 investigation](PERFORMANCE-1.2.md) studies NP49, the full
+relevant MKW shader/renderer/worker paths and Epic's MK64 renderer, then records
+the Starwing-specific lifetime, 4:3, stereo and CPU adaptations.
+
 Read the Nintendo 3DS optimization cases and selected architecture/audit sections of [Code Atlas](https://code-atlas.estebanpdn.chatgpt.site/nintendo-3ds-manual.html). The applied principles are independent model budgets, a measured critical path, explicit GPU ownership, bounded buffers, exact cache identity and differential rendering/audio checks. This is selected chapter/source review, not a claim to have read every chapter or benchmarked every port.
 
 ## Primary implementation review

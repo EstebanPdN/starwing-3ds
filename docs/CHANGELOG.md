@@ -2,6 +2,33 @@
 
 Published releases are listed first; earlier entries describe development candidates.
 
+## 1.2-E2 — 2026-10-21 (experimental)
+
+> ⚠️ **Experimental release — known HOME Menu freeze**
+>
+> Pressing HOME during a game can freeze the console: the bottom screen turns black and the top screen remains frozen. A forced shutdown by holding POWER may be required. I am aware of this problem and am working on a fix. HOME/sleep/resume reliability has not been established; use this build only if you accept this known issue.
+
+- Enable gameplay on Old Nintendo 3DS / 2DS (experimental) and remove the
+  launch notice.
+- Address the black-screen failure path with bounded frame waits, a GPU
+  completion/swap fence and automatic recovery. A lost GPU context retains
+  its resources and uses separate CPU scanout buffers, so late GPU work cannot
+  overwrite recovery. Recoveries are logged to `gpu-recovery.txt`; physical
+  console acceptance remains pending.
+- Attempt to stop audio and drain GPU work before HOME, and reset timing on
+  return. **The console freeze on HOME remains reproducible on hardware.**
+  Host checks cover the callback contract only; this release is not a HOME fix.
+- Old 3DS: run SPC audio on the second CPU core and reduce background,
+  presentation and per-instruction CPU work.
+- Keep eligible PICA world/BG2 rendering active in 4:3; apply one consistent
+  crop and scale to all layers and keep the HUD within the visible image.
+- Speed up the CPU background used by reference rendering and recovery.
+- Place stereo BG2 scenery behind the world rather than at the HUD plane,
+  with matching GPU/CPU eye shifts and clamped edge coverage.
+- Retry recoverable world-renderer failures on a later scene; a permanently
+  abandoned GPU context stays on CPU presentation until the application exits.
+- Include the 1.2-E1 crash fix.
+
 ## 1.2-E1 — 2026-10-19 (experimental)
 
 - Fix a null texture pointer crash when handing native PICA rendering back to Citro2D.

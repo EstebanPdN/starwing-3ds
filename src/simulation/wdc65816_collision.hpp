@@ -137,7 +137,7 @@ struct CollisionDispatch {
             && cpu.cpu_state.regs.d.u16 == 0U
             && cpu.cpu_state.data_segment_base == 0x7e0000U
             && !cpu.has_breakpoints && cpu.tracing.addrs.empty()
-            && cpu.cpu_state.pending_interrupts.load(std::memory_order_acquire) == 0U
+            && cpu.cpu_state.pending_interrupts.load(std::memory_order_relaxed) == 0U
             && (cpu.cpu_state.other_flags & 8U) == 0U;
     }
     using Word = std::uint16_t;

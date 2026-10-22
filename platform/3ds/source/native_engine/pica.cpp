@@ -45,6 +45,7 @@ bool Pica::open() {
     return true;
 }
 void Pica::close() noexcept {
+    if (abandoned_) return;
     if (target_) C3D_RenderTargetDelete(target_);
     target_=nullptr;
     if (world_.data) C3D_TexDelete(&world_);

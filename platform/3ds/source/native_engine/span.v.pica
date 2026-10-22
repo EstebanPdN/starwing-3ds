@@ -1,5 +1,5 @@
 .fvec projection[4]
-.constf constants(0.0, 1.0, 0.0, 0.0)
+.constf constants(0.0, 1.0, 32.0, 0.0)
 .constf factors(0.0625, 0.03125, 0.125, 0.0)
 .out position position
 .out even_uv texcoord0
@@ -32,7 +32,9 @@
     rcp r3.x, scale.x
     mul r3.x, factors.z, r3.x
     mul r3.yz, point.xxyy, r3.xxxx
-    add r3.z, constants.y, -r3.z
+    ; An integer number of repeat periods keeps the same checker phase while
+    ; avoiding negative UV rounding in software PICA implementations.
+    add r3.z, constants.z, -r3.z
     mov checker_uv.xy, r3.yz
     mov color, constants.yyyy
     end

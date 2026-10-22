@@ -67,8 +67,10 @@ inline void step_cartridge_cpu(WDC65C816& cpu) {
     // when there are no breakpoints or interrupts to service.
     auto& state = cpu.cpu_state;
     state.ip &= state.ip_mask;
+    // Only this thread raises cartridge interrupts. An acquire load emitted
+    // an ARM11 CP15 data barrier for every interpreted instruction.
     const auto pending = state.pending_interrupts.load(
-        std::memory_order_acquire);
+        std::memory_order_relaxed);
     if (cpu.has_breakpoints || pending + state.interrupts >= 3U)
         cpu.SingleStep();
     else

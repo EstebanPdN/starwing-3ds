@@ -60,6 +60,21 @@ void check_projection() {
         else require(lx < mx && mx < rx);
     }
 }
+void check_background_depth() {
+    render::Framebuffer source(400,240), actual(400,240);
+    for(unsigned y=0;y<240;++y) for(unsigned x=0;x<400;++x)
+        source.set(x,y,static_cast<std::uint8_t>((x+3*y)%251+1));
+    for(int eye=-8;eye<=8;++eye) {
+        platform_3ds::stereo_background(source,actual,eye);
+        for(unsigned y=0;y<240;++y) for(unsigned x=0;x<400;++x)
+            require(actual.get(x,y)==source.get(std::clamp(int(x)-eye,0,399),y));
+        for(double z:{256.,512.,1024.,4096.,32767.}) {
+            const auto shift=render::inward_stereo_shift(eye,z);
+            require(std::abs(shift)<=std::abs(eye));
+            require(eye<0?shift>=eye:shift<=eye);
+        }
+    }
+}
 void check_spans() {
     std::mt19937 random(670066);
     // Reference uses the original public pixel writer, including black writes,
@@ -139,7 +154,7 @@ void check_frames(const char* rom_path, const char* symbols_path) {
 }
 }
 int main(int argc, char** argv) try {
-    check_spans(); check_projection();
+    check_spans(); check_projection(); check_background_depth();
     if (argc == 3) check_frames(argv[1],argv[2]);
     std::cout << "Inward stereo, slider/cache transitions and 12000 raster differentials passed\n";
     return 0;

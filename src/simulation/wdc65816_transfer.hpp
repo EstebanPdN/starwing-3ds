@@ -172,7 +172,7 @@ struct TransferDispatch {
             && (cpu.cpu_state.data_segment_base == 0U
                 || cpu.cpu_state.data_segment_base == 0x800000U)
             && !cpu.has_breakpoints && cpu.tracing.addrs.empty()
-            && cpu.cpu_state.pending_interrupts.load(std::memory_order_acquire) == 0U
+            && cpu.cpu_state.pending_interrupts.load(std::memory_order_relaxed) == 0U
             && (cpu.cpu_state.other_flags & 8U) == 0U;
     }
 
@@ -195,7 +195,7 @@ struct TransferDispatch {
             execute(bounded_record);
             if (cpu.program_address() != begin || remaining < block_limit
                 || cpu.cpu_state.pending_interrupts.load(
-                    std::memory_order_acquire) != 0U) break;
+                    std::memory_order_relaxed) != 0U) break;
         }
     }
 

@@ -103,8 +103,11 @@ all inventory rows and label the result total process memory.
 
 The main thread owns source ticks, input, UI, and graphics submission. On New
 3DS, the audio worker can use core 2. BG2 planning is scheduled around the audio
-worker rather than assuming exclusive access to that core. Old 3DS uses the
-adapter's fallback decisions; it requires independent device qualification.
+worker rather than assuming exclusive access to that core. Old 3DS runs the
+cartridge SPC worker on core 1, requesting an 80, 70 or 50 percent application
+time limit and restoring the previous limit on close; if no worker can start,
+audio runs synchronously on the main thread. Physical Old 3DS qualification
+remains pending.
 
 A dump settles pending audio, synchronizes APU output ports, and fences GPU
 work before reading state. A framebuffer queued for display is distinct from

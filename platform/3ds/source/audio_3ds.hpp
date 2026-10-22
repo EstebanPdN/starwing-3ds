@@ -65,6 +65,8 @@ public:
     // SPC state is retained; the next completed logic tick starts a fresh
     // playback ring after the operation returns.
     void stop_playback() noexcept;
+    // HOME/sleep must not wait for CSND's command-completion flag. Silence
+    // the retained rings first, submit the stop, then yield to the applet.
     [[nodiscard]] bool ready() const noexcept { return ready_; }
     [[nodiscard]] bool async_enabled() const noexcept {
         return worker_ != nullptr;
@@ -122,6 +124,7 @@ public:
     [[nodiscard]] const audio::Spc700Audio& spc() const noexcept { return spc_; }
 
 private:
+    void stop_playback(bool wait_done) noexcept;
     static void worker_main(void* argument);
     // Try each APT slice in order and start the worker on core 1.
     void start_core1_worker(std::initializer_list<u32> quotas);

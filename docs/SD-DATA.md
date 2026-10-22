@@ -24,6 +24,7 @@ supported revision. Filenames need `.sfc` or `.smc` for selection.
 | `starfox-ex-<CRC32>.srm` | Per-ROM 65,536-byte EX SRAM; legacy path is `starfox-ex.srm`. |
 | `autosave-original-<CRC32>.bin` / `autosave-ex-<CRC32>.bin` | Optional per-ROM checkpoint; legacy names omit the CRC suffix. |
 | `last-error.txt` | Most recent startup/runtime error; a successful new launch clears the previous record. |
+| `gpu-recovery.txt` | Appended line for each automatic top-screen recovery: build, stage, scene and failure counters. |
 | `dumps/` | Numbered diagnostics; full captures contain private process memory. |
 
 SRAM and checkpoints use temporary-file replacement. A failed or incomplete
