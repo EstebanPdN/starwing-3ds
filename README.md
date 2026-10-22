@@ -1,6 +1,7 @@
-> ⚠️ **Experimental release — known HOME Menu freeze**
+> [!WARNING]
+> This is an experimental release.
 >
-> Pressing HOME during a game can freeze the console: the bottom screen turns black and the top screen remains frozen. A forced shutdown by holding POWER may be required. I am aware of this problem and am working on a fix. HOME/sleep/resume reliability has not been established; use this build only if you accept this known issue.
+> HOME may freeze the console. I am aware and working on a fix.
 
 <h1 align="center">Starwing 3DS</h1>
 
