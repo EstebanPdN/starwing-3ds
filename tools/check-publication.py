@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import re
 import subprocess
 from pathlib import Path
@@ -15,6 +16,10 @@ FORBIDDEN = (
     '*title_logos.hpp', '*dialogue_catalog.hpp', '*_art_data.hpp',
     '*dialogue.json', '.env', '.env.*', 'AGENTS.md', '.DS_Store',
 )
+# Explicitly reviewed public preview; other binary payloads remain rejected.
+REVIEWED_MEDIA = {
+    'assets/store-media/starwing-corneria.fvid': (4105965, '7ffa65bbbd1c1b0df11073fa147590cc8aeb17286f8e43001316311cf42badd4'),
+}
 PRIVATE_COMPONENTS = {'private', 'dumps', 'roms', 'dist', '__pycache__', 'sdmc:'}
 SECRETS = re.compile(
     rb'gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{50,}'
@@ -52,6 +57,12 @@ def main() -> int:
             problems.append(f'Symlink needs a separate review: {name}')
             continue
         data = target.read_bytes()
+        reviewed_media = False
+        if name in REVIEWED_MEDIA:
+            size, digest = REVIEWED_MEDIA[name]
+            reviewed_media = len(data) == size and hashlib.sha256(data).hexdigest() == digest and data.startswith(b'FVID')
+            if not reviewed_media:
+                problems.append(f'Reviewed preview media changed: {name}')
         if SECRETS.search(data):
             problems.append(f'Possible secret; inspect locally: {name}')
         if b'/Users/' in data or b'/home/esteban/' in data:
@@ -60,7 +71,7 @@ def main() -> int:
                 problems.append(f'Personal absolute path: {name}')
         if len(data) > 5 * 1024 * 1024:
             problems.append(f'Unexpected large source file: {name}')
-        if b'\0' in data and name not in {'docs/images/original/showcase.png', 'docs/images/showcase-rounded.png', 'docs/images/showcase-rounded.webp'}:
+        if b'\0' in data and not reviewed_media and name not in {'docs/images/original/showcase.png', 'docs/images/showcase-rounded.png', 'docs/images/showcase-rounded.webp'}:
             problems.append(f'Unexpected binary payload: {name}')
     version = (ROOT / 'platform/3ds/version.txt').read_text().strip()
     cia = (ROOT / 'platform/3ds/cia-version.txt').read_text().strip()
