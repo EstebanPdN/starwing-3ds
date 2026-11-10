@@ -1,0 +1,11 @@
+{
+  "format": "FVID1",
+  "videos": [
+    {
+      "id": "starwing/corneria",
+      "file": "starwing-corneria.fvid",
+      "bytes": 4105965,
+      "sha256": "7ffa65bbbd1c1b0df11073fa147590cc8aeb17286f8e43001316311cf42badd4"
+    }
+  ]
+}
