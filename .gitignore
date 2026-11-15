@@ -41,10 +41,6 @@ AGENTS.md
 /upstream-retro-cpu/
 /upstream-snes-spc/
 /tmp/
-/platform/android/.gradle/
-/platform/android/app/.cxx/
-/platform/android/app/build/
-/platform/android/local.properties
 /include/starfox/localization/title_logos.hpp
 /include/starfox/localization/dialogue_catalog.hpp
 /include/starfox/localization/ex_dialogue_catalog.hpp
