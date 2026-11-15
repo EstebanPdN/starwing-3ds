@@ -6,7 +6,6 @@ project(starfox_enhanced VERSION 0.0.6.7 LANGUAGES CXX)
 # shared engine and optional native regression/data tools.
 option(STARFOX_BUILD_TESTS "Build deterministic host engine tests" ON)
 option(STARFOX_BUILD_TOOLS "Build host trace and data tools" ON)
-set(STARFOX_PACKAGE_MSU1_MUSIC OFF)
 
 set(STARFOX_ROM_FILE
     "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SF.SFC"
@@ -82,14 +81,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(snes_spc)
 
-FetchContent_Declare(
-    dr_libs
-    GIT_REPOSITORY https://github.com/mackron/dr_libs.git
-    GIT_TAG b55a0d9a30b91ad8901f89ecf05f76a33186c185
-    SOURCE_SUBDIR _starfox_no_upstream_project
-)
-FetchContent_MakeAvailable(dr_libs)
-
 include(tools/cmake/SpcState.cmake)
 add_library(snes_spc_core STATIC
     "${STARFOX_SPC_SOURCE}/spc.cpp"
@@ -130,8 +121,6 @@ if(MINGW)
 endif()
 
 add_library(starfox_core
-    src/audio/msu1_audio.cpp
-    src/audio/msu1_pack.cpp
     src/audio/spc700_audio.cpp
     src/assets/bps.cpp
     src/assets/decrunch.cpp
@@ -140,26 +129,7 @@ add_library(starfox_core
     src/assets/shape_decoder.cpp
     src/render/background_renderer.cpp
     src/render/dust_renderer.cpp
-    src/render/dxr_shadows.cpp
-    src/render/gpu_projection.cpp
-    src/render/gpu_clip.cpp
-    src/render/gpu_bsp.cpp
-    src/render/gpu_ray_geometry.cpp
-    src/render/gpu_background.cpp
-    src/render/gpu_colour_warp.cpp
-    src/render/packed_bsp.cpp
-    src/render/packed_projection.cpp
-    src/render/packed_faces.cpp
-    src/render/gpu_model.cpp
-    src/render/gpu_scene.cpp
-    src/render/gpu_effects.cpp
-    src/render/sdl_gpu_effects.cpp
-    src/render/portable_shadows.cpp
-    src/render/sdl_dxr_shadows.cpp
     src/render/gpu_raster.cpp
-    src/render/gpu_composite.cpp
-    src/render/gpu_temporal_inputs.cpp
-    src/render/gpu_scalefx.cpp
     src/render/scalefx.cpp
     src/render/framebuffer.cpp
     src/render/palette.cpp
@@ -196,7 +166,6 @@ set(STARFOX_PRIVATE_INCLUDE_DIR "" CACHE PATH
 if(STARFOX_PRIVATE_INCLUDE_DIR)
     target_include_directories(starfox_core BEFORE PRIVATE "${STARFOX_PRIVATE_INCLUDE_DIR}")
 endif()
-target_include_directories(starfox_core SYSTEM PRIVATE "${dr_libs_SOURCE_DIR}")
 target_compile_features(starfox_core PUBLIC cxx_std_20)
 find_package(Threads REQUIRED)
 target_link_libraries(starfox_core PRIVATE
@@ -214,9 +183,6 @@ if(STARFOX_BUILD_TOOLS)
 
     add_executable(starfox_shape_preview src/app/shape_preview.cpp)
     target_link_libraries(starfox_shape_preview PRIVATE starfox_core)
-
-    add_executable(starfox_shape_coverage src/app/shape_coverage.cpp)
-    target_link_libraries(starfox_shape_coverage PRIVATE starfox_core)
 
     add_executable(starfox_map_trace src/app/map_trace.cpp)
     target_link_libraries(starfox_map_trace PRIVATE starfox_core)
@@ -236,7 +202,6 @@ if(STARFOX_BUILD_TOOLS)
     add_executable(starfox_planet_probe src/app/planet_probe.cpp)
     target_link_libraries(starfox_planet_probe PRIVATE starfox_core)
 endif()
-
 
 if(STARFOX_BUILD_TESTS)
     if(STARFOX_PRIVATE_INCLUDE_DIR)
@@ -441,12 +406,6 @@ if(STARFOX_BUILD_TESTS)
         add_test(NAME starfox_strategy_batch_ex COMMAND starfox_strategy_batch_tests
             "${STARFOX_EX_ROM_FILE}" "${STARFOX_EX_SYMBOLS_FILE}")
     endif()
-    # Compile the unsupported backend independently, including on DXR hosts.
-    # Do not link starfox_core, whose private STARFOX_DXR definition selects DXR.
-    add_executable(starfox_dxr_stub_tests tools/check_dxr_stub.cpp src/render/dxr_shadows.cpp)
-    target_include_directories(starfox_dxr_stub_tests PRIVATE include)
-    target_compile_features(starfox_dxr_stub_tests PRIVATE cxx_std_20)
-    add_test(NAME starfox_dxr_stub_tests COMMAND starfox_dxr_stub_tests)
 
     add_executable(starfox_state_tests tests/state_tests.cpp)
     add_executable(starfox_title_logo_check tests/title_logo_tests.cpp)
@@ -464,12 +423,7 @@ if(STARFOX_BUILD_TESTS)
     target_link_libraries(starfox_shadow_geometry_tests PRIVATE starfox_core)
     add_test(NAME starfox_shadow_geometry_tests COMMAND starfox_shadow_geometry_tests)
     add_executable(starfox_raster_commands_tests tools/benchmark_gpu_raster.cpp)
-    add_executable(starfox_geometry_fp64_tests tests/geometry_fp64_tests.cpp)
-    target_compile_features(starfox_geometry_fp64_tests PRIVATE cxx_std_20)
-    add_test(NAME starfox_geometry_fp64_tests COMMAND starfox_geometry_fp64_tests)
     add_executable(starfox_face_material_tests tests/face_material_tests.cpp)
-    add_executable(starfox_packed_bsp_tests tests/packed_bsp_tests.cpp)
-    add_executable(starfox_packed_projection_tests tests/packed_projection_tests.cpp)
     add_executable(starfox_word_renderer_tests tests/word_renderer_tests.cpp)
     target_link_libraries(starfox_word_renderer_tests PRIVATE starfox_core)
     add_test(NAME starfox_word_renderer_tests COMMAND starfox_word_renderer_tests)
@@ -482,32 +436,12 @@ if(STARFOX_BUILD_TESTS)
     add_executable(starfox_bg3_atlas_cache_tests tests/bg3_atlas_cache_test.cpp)
     target_link_libraries(starfox_bg3_atlas_cache_tests PRIVATE starfox_core)
     add_test(NAME starfox_bg3_atlas_cache_tests COMMAND starfox_bg3_atlas_cache_tests)
-    add_executable(starfox_temporal_projection_tests tests/temporal_projection_tests.cpp)
-    target_include_directories(starfox_temporal_projection_tests PRIVATE include)
-    target_compile_features(starfox_temporal_projection_tests PRIVATE cxx_std_20)
-    add_test(NAME starfox_temporal_projection_tests COMMAND starfox_temporal_projection_tests)
-    add_executable(starfox_packed_faces_tests tests/packed_faces_tests.cpp)
-    target_link_libraries(starfox_packed_faces_tests PRIVATE starfox_core)
-    add_test(NAME starfox_packed_faces_tests COMMAND starfox_packed_faces_tests)
-    target_link_libraries(starfox_packed_projection_tests PRIVATE starfox_core)
-    add_test(NAME starfox_packed_projection_tests COMMAND starfox_packed_projection_tests)
-    target_link_libraries(starfox_packed_bsp_tests PRIVATE starfox_core)
-    add_test(NAME starfox_packed_bsp_tests COMMAND starfox_packed_bsp_tests)
     target_link_libraries(starfox_face_material_tests PRIVATE starfox_core)
     add_test(NAME starfox_face_material_tests COMMAND starfox_face_material_tests)
     target_link_libraries(starfox_raster_commands_tests PRIVATE starfox_core)
     add_test(NAME starfox_raster_commands_tests COMMAND starfox_raster_commands_tests)
     target_link_libraries(starfox_core_tests PRIVATE starfox_core)
     add_test(NAME starfox_core_tests COMMAND starfox_core_tests)
-
-    add_executable(starfox_msu1_pack_tests tests/msu1_pack_tests.cpp)
-    target_link_libraries(starfox_msu1_pack_tests PRIVATE starfox_core)
-    add_test(NAME starfox_msu1_pack_tests COMMAND starfox_msu1_pack_tests)
-
-    add_executable(starfox_msu1_audio_tests tests/msu1_audio_tests.cpp)
-    target_link_libraries(starfox_msu1_audio_tests PRIVATE starfox_core)
-    add_test(NAME starfox_msu1_audio_tests COMMAND starfox_msu1_audio_tests
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/msu-tone-320.flac")
 
     add_executable(starfox_shape_decoder_tests tests/shape_decoder_tests.cpp)
     target_link_libraries(starfox_shape_decoder_tests PRIVATE starfox_core)
@@ -549,23 +483,13 @@ if(STARFOX_BUILD_TESTS)
         target_link_options(starfox_intro_pacing_tests PRIVATE "/STACK:16777216")
     endif()
 
-    add_executable(starfox_stereo_output_tests tests/stereo_output_tests.cpp)
-    target_link_libraries(starfox_stereo_output_tests PRIVATE starfox_core)
-    add_test(NAME starfox_stereo_output_tests COMMAND starfox_stereo_output_tests)
     add_executable(starfox_hitlist_tests tests/hitlist_tests.cpp)
     add_executable(starfox_level_clear_tests tests/level_clear_tests.cpp)
     target_link_libraries(starfox_level_clear_tests PRIVATE starfox_core)
     target_link_libraries(starfox_hitlist_tests PRIVATE starfox_core)
 
-
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SF.SFC"
        AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SYMBOLS.TXT")
-        add_test(
-            NAME starfox_upstream_shape_coverage
-            COMMAND starfox_shape_coverage
-                    "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SF.SFC"
-                    "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SYMBOLS.TXT"
-        )
         add_test(
             NAME starfox_upstream_simulation_data
             COMMAND starfox_simulation_tests

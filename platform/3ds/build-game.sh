@@ -24,7 +24,7 @@ CORE_ARGS=(
   "-DSTARFOX_PRIVATE_INCLUDE_DIR=${STARFOX_PRIVATE_INCLUDE_DIR:-}"
   "-DCMAKE_CXX_FLAGS_RELEASE=${RELEASE_FLAGS}"
 )
-for DEP in retro_cpu snes_spc dr_libs; do
+for DEP in retro_cpu snes_spc; do
   if [[ -d "${HOST_DEPS}/${DEP}-src" ]]; then
     DEP_UPPER="$(printf '%s' "${DEP}" | tr '[:lower:]' '[:upper:]')"
     CORE_ARGS+=("-DFETCHCONTENT_SOURCE_DIR_${DEP_UPPER}=${HOST_DEPS}/${DEP}-src")
