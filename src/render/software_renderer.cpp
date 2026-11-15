@@ -3,7 +3,6 @@
 #include "starfox/render/face_material.hpp"
 #include "starfox/render/source_shading.hpp"
 #include "starfox/render/source_line_runs.hpp"
-#include "starfox/render/shadow_scene.hpp"
 #include "starfox/render/word_math.hpp"
 
 #include "starfox/simulation/math.hpp"
@@ -1855,23 +1854,18 @@ void apply_source_depth_tables(
 
 void SoftwareRenderer::draw(
     const assets::Shape& shape,const RenderPose& pose,Framebuffer& target,bool clear_target,
-    SurfaceBuffer* surfaces,shadows::Scene* shadow_scene,
+    SurfaceBuffer* surfaces,
     RenderDiagnostics* diagnostics,
     software_renderer_detail::Scratch* reusable_scratch) const {
-    draw_impl(shape,pose,target,clear_target,surfaces,shadow_scene,diagnostics,
-        false,reusable_scratch);
-}
-void SoftwareRenderer::collect_shadow_casters(const assets::Shape& shape,const RenderPose& pose,shadows::Scene& scene) const {
-    Framebuffer unused(1,1);
-    draw_impl(shape,pose,unused,false,nullptr,&scene,nullptr,true,nullptr);
+    draw_impl(shape,pose,target,clear_target,surfaces,diagnostics,reusable_scratch);
 }
 void SoftwareRenderer::draw_impl(
     const assets::Shape& shape,
     const RenderPose& pose,
     Framebuffer& target,
     bool clear_target,
-    SurfaceBuffer* surfaces, shadows::Scene* shadow_scene,
-    RenderDiagnostics* axis_diagnostics,bool shadow_only,
+    SurfaceBuffer* surfaces,
+    RenderDiagnostics* axis_diagnostics,
     software_renderer_detail::Scratch* reusable_scratch) const {
     if (axis_diagnostics) *axis_diagnostics = {};
     // Everything this renderer emits is the Super FX layer, whatever draw
@@ -1903,7 +1897,6 @@ void SoftwareRenderer::draw_impl(
     const auto raster_word_exact = pose.use_rotation_matrix
         && !raster_subpixel;
     if (pose.simple_scaled_sprite) {
-        if(shadow_only) return;
         const auto* texture = texture_for_colour(
             shape, pose.simple_sprite_colour, pose.colour_frame);
         if (texture != nullptr) {
@@ -1975,10 +1968,9 @@ void SoftwareRenderer::draw_impl(
     const auto vanish_y = word_projection ? rounded_word(pose.vanish_y) : std::int16_t{};
     // Cartridge face indices are bytes. Keep the common geometry in signed
     // words, expanding only the uncommon textured/near-plane face that needs
-    // the general clipper. Shadow/axis outputs retain their complete doubles.
+    // the general clipper. Axis outputs retain their complete doubles.
     std::array<WordProjection, 256> word_transformed;
-    const bool compact_geometry = word_projection && !shadow_only
-        && shadow_scene == nullptr && !pose.collapse_to_axis_line
+    const bool compact_geometry = word_projection && !pose.collapse_to_axis_line
         && vertices.size() <= word_transformed.size();
     if (!compact_geometry) {
         transformed_vertices.reserve(vertices.size());
@@ -2023,7 +2015,7 @@ void SoftwareRenderer::draw_impl(
         const auto& point = vertices[index];
         const auto word = index < word_coordinates.size() && word_coordinates[index];
         const auto factor = word ? 1.0 : shifted_factor;
-        // Rasterization, visibility, BSP ordering and shadow casters all use
+        // Rasterization, visibility and BSP ordering all use
         // the same selected geometry. The old source-exact second copy was
         // unused whenever continuous geometry selected the fractional copy.
         Vec3 transformed;
@@ -2043,40 +2035,19 @@ void SoftwareRenderer::draw_impl(
             if (compact_geometry)
                 word_transformed[index] = {output[0], output[1], output[2]};
             else transformed={double(output[0]),double(output[1]),double(output[2])};
-            if (word_projection && !shadow_only)
+            if (word_projection)
                 word_projected.push_back(project_word(output[0], output[1], output[2], vanish_x, vanish_y));
         } else transformed = rotate_with_factor(point, pose, factor, raster_subpixel);
         if (compact_geometry) continue;
         transformed_vertices.push_back(transformed);
-        if (!shadow_only && word_projection) {
+        if (word_projection) {
             const auto& p = word_projected.back();
             projected.push_back({double(p.x), double(p.y), double(p.z), p.z >= 0});
-        } else if(!shadow_only) projected.push_back(project_point(
+        } else projected.push_back(project_point(
             transformed, settings_.focal_length,
             raster_word_exact, pose.vanish_x, pose.vanish_y,
             raster_subpixel, pose.stereo_eye_offset));
     }
-    if (shadow_scene != nullptr) {
-        // Casters include faces hidden from the camera: they can still block
-        // the light. Use the actual animated/transformed mesh, not the native
-        // flattened shadow model or an interpolated object-slot history.
-        for (const auto& face : shape.faces) {
-            if (face.sprite || face.vertex_indices.size() < 3U) continue;
-            const auto offset = explosion_offset(face, pose);
-            const auto point = [&](std::size_t index) {
-                const auto& p = transformed_vertices[index];
-                return shadows::Vec3{p.x + offset.x, p.y + offset.y, p.z + offset.z};
-            };
-            const auto first = face.vertex_indices[0];
-            if (first >= transformed_vertices.size()) continue;
-            for (std::size_t vertex = 1; vertex + 1 < face.vertex_indices.size(); ++vertex) {
-                const auto b = face.vertex_indices[vertex], c = face.vertex_indices[vertex + 1];
-                if (b < transformed_vertices.size() && c < transformed_vertices.size())
-                    shadow_scene->add({point(first), point(b), point(c)});
-            }
-        }
-    }
-    if(shadow_only) return;
     const auto& raster_vertices = transformed_vertices;
     const auto& visibility_vertices = raster_vertices;
     const auto& visibility_projected = projected;

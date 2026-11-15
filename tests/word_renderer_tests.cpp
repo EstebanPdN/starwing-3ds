@@ -69,7 +69,7 @@ int main() try {
         batch.reset(frame.stored_width(),frame.stored_height());
         batch.accept_edge_runs(n % 2);
         if (n % 4 == 0) frame.record_to(&batch);
-        render::SoftwareRenderer{settings}.draw(shape,pose,frame,false,nullptr,nullptr,nullptr,&scratch);
+        render::SoftwareRenderer{settings}.draw(shape,pose,frame,false,nullptr,nullptr,&scratch);
         frame.record_to(nullptr);
         hash(frame.pixels()); hash(frame.layer_tags()); hash(frame.write_coverage());
         hash(batch.commands); hash(batch.texels);

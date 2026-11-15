@@ -2,7 +2,6 @@
 #include "starfox/assets/shape_decoder.hpp"
 #include "starfox/render/dust_renderer.hpp"
 #include "starfox/render/grid_projection.hpp"
-#include "starfox/render/shadow_scene.hpp"
 #include "starfox/render/framebuffer.hpp"
 #include "starfox/render/software_renderer.hpp"
 
@@ -317,23 +316,6 @@ int main() {
     starfox::render::SurfaceBuffer surfaces{224, 192};
     starfox::render::SoftwareRenderer renderer{{180.0, false, 0}};
     renderer.draw(shape, {}, framebuffer, true, &surfaces);
-    starfox::render::shadows::Scene shadow_scene;
-    starfox::render::Framebuffer caster_capture{224, 192};
-    renderer.draw(shape, {}, caster_capture, true, nullptr, &shadow_scene);
-    require(shadow_scene.triangle_count() > 0U,
-        "renderer did not export actual model faces for shadow occlusion");
-    starfox::render::shadows::Scene collected;
-    renderer.collect_shadow_casters(shape,{},collected);
-    require(collected.triangle_count()==shadow_scene.triangle_count(),
-        "standalone caster collection changed triangle count");
-    for(std::size_t i=0;i<collected.triangle_count();++i) {
-        const auto& a=collected.triangles()[i];const auto& b=shadow_scene.triangles()[i];
-        const auto same=[](auto x,auto y){return x.x==y.x && x.y==y.y && x.z==y.z;};
-        require(same(a.a,b.a) && same(a.b,b.b) && same(a.c,b.c),
-            "standalone caster collection changed triangle vertices/order");
-    }
-    require(caster_capture.pixels() == framebuffer.pixels(),
-        "shadow geometry collection changed the original raster");
     std::size_t coloured_pixels = 0;
     std::size_t surface_pixels = 0;
     for (std::uint32_t y = 0U; y < framebuffer.height(); ++y) {
@@ -355,7 +337,7 @@ int main() {
         starfox::render::RenderPose pose;
         pose.scale = multiplier;
         starfox::render::Framebuffer word_frame{224, 192};
-        renderer.draw(word_shape, pose, word_frame, true, nullptr, nullptr,
+        renderer.draw(word_shape, pose, word_frame, true, nullptr,
             nullptr, &reusable_model_scratch);
         require(std::equal(framebuffer.pixels().begin(), framebuffer.pixels().end(),
                     word_frame.pixels().begin()),
@@ -375,7 +357,7 @@ int main() {
     starfox::render::Framebuffer near_clip_reused{224, 192};
     renderer.draw(near_clip_shape, near_clip_pose, near_clip_reference);
     renderer.draw(near_clip_shape, near_clip_pose, near_clip_reused, true,
-        nullptr, nullptr, nullptr, &reusable_model_scratch);
+        nullptr, nullptr, &reusable_model_scratch);
     require(near_clip_reference.pixels() == near_clip_reused.pixels(),
         "reusable near-plane clipping changed model pixels");
     const auto near_clip_capacity =
@@ -383,7 +365,7 @@ int main() {
     require(near_clip_capacity > 0U,
         "near-plane clip did not populate reusable clipping scratch");
     renderer.draw(near_clip_shape, near_clip_pose, near_clip_reused, true,
-        nullptr, nullptr, nullptr, &reusable_model_scratch);
+        nullptr, nullptr, &reusable_model_scratch);
     require(reusable_model_scratch.camera_clipping_scratch.capacity()
                 == near_clip_capacity,
         "near-plane clip allocated again after scratch warmup");

@@ -40,7 +40,7 @@ int main() try {
         render::Framebuffer frame(224, 192);
         render::RenderDiagnostics trace;
         render::SoftwareRenderer().draw(shape, pose, frame, true,
-            nullptr, nullptr, &trace);
+            nullptr, &trace);
         if (trace.polygons.size() != 1
             || std::abs(trace.polygons[0].camera[0][2] - 380.0) > 3.0
             || std::abs(trace.polygons[0].camera[1][2] - 460.0) > 3.0)

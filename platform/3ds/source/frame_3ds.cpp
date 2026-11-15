@@ -1343,7 +1343,7 @@ const render::Framebuffer& Frame3ds::draw(
                     *base, pointer, colour, colour_count);
                 if (!shape) continue;
                 models_.draw(*shape, make_pose(item, true), eye_world,
-                    false, nullptr, nullptr, nullptr, &model_scratch_);
+                    false, nullptr, nullptr, &model_scratch_);
             }
         }
 
@@ -1389,7 +1389,7 @@ const render::Framebuffer& Frame3ds::draw(
                 pose.simple_sprite_world_size = diameter == 0 ? 1 : diameter;
             }
             models_.draw(*shape, pose, eye_world,
-                false, nullptr, nullptr, nullptr, &model_scratch_);
+                false, nullptr, nullptr, &model_scratch_);
         }
         eye_world.record_to(nullptr);
         } // Both eyes share decoded shapes, poses and source simulation.
@@ -1467,7 +1467,7 @@ const render::Framebuffer& Frame3ds::draw(
                 pose.animation_frame = native_model.animation_frame;
                 pose.colour_frame = native_model.colour_frame;
                 models_.draw(*shape, pose, frame_,
-                    false, nullptr, nullptr, nullptr, &model_scratch_);
+                    false, nullptr, nullptr, &model_scratch_);
             }
     }
     const auto stage_native_model_end = svcGetSystemTick();

@@ -13,7 +13,6 @@
 #include <optional>
 
 namespace starfox::render {
-namespace shadows { class Scene; }
 
 struct RenderPose {
     double x{};
@@ -245,7 +244,6 @@ struct Scratch {
 class SoftwareRenderer {
 public:
     explicit SoftwareRenderer(RenderSettings settings = {});
-    void collect_shadow_casters(const assets::Shape&,const RenderPose&,shadows::Scene&) const;
 
     void draw(
         const assets::Shape& shape,
@@ -253,7 +251,6 @@ public:
         Framebuffer& target,
         bool clear_target = true,
         SurfaceBuffer* surfaces = nullptr,
-        shadows::Scene* shadow_scene = nullptr,
         RenderDiagnostics* axis_diagnostics = nullptr,
         software_renderer_detail::Scratch* reusable_scratch = nullptr) const;
 
@@ -270,7 +267,7 @@ public:
 
 private:
     void draw_impl(const assets::Shape&,const RenderPose&,Framebuffer&,bool,
-        SurfaceBuffer*,shadows::Scene*,RenderDiagnostics*,bool shadow_only,
+        SurfaceBuffer*,RenderDiagnostics*,
         software_renderer_detail::Scratch*) const;
     RenderSettings settings_;
 };

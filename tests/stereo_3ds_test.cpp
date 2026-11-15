@@ -42,7 +42,7 @@ void check_projection() {
         pose.continuous_geometry = continuous; pose.subpixel_projection = continuous;
         render::Framebuffer mono(400,240), left(400,240), right(400,240);
         render::RenderDiagnostics diagnostics;
-        renderer.draw(quad, pose, mono, true, nullptr, nullptr, &diagnostics);
+        renderer.draw(quad, pose, mono, true, nullptr, &diagnostics);
         auto eye_pose = pose; apply_stereo_eye(eye_pose,-8); renderer.draw(quad, eye_pose, left);
         eye_pose = pose; apply_stereo_eye(eye_pose,8); renderer.draw(quad, eye_pose, right);
         if (std::none_of(mono.pixels().begin(),mono.pixels().end(),[](auto p){return p != 0;})) {
