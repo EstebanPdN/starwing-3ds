@@ -223,8 +223,13 @@ void MapVm::start(std::uint32_t address, ObjectHandle player) {
     call_stack_.clear();
     loop_counters_.clear();
     unsupported_controls_.clear();
+    // Forget everything the bridge knew, including that work RAM matched
+    // its copies: with an empty active list, a still-valid copy would let
+    // object_bridge_unchanged() report "unchanged" without looking at any
+    // object, and host edits would never reach the processor.
     for (auto& snapshot : object_bridge_) snapshot.valid = false;
     object_bridge_active_.clear();
+    object_bridge_memory_valid_ = false;
     sync_map_state_to_cpu();
 }
 
