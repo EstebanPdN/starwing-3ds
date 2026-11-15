@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(starwing_3ds_diagnostic VERSION 0.1 LANGUAGES C CXX ASM)
+project(starwing_3ds LANGUAGES C CXX ASM)
 
 set(STARFOX_SOURCE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")
 # Name files relative to the repository and build tree in __FILE__ strings and
@@ -15,21 +15,9 @@ set(STARWING_PATCH_DIR "${STARFOX_SOURCE_ROOT}/assets/patches" CACHE PATH
     "Private, locally prepared BPS resources; never published with the port")
 set(STARWING_SYMBOL_DIR "${STARFOX_SOURCE_ROOT}/assets/symbols" CACHE PATH
     "Locally prepared runtime symbol maps")
-set(STARWING_PRESENTATION_DIR "${CMAKE_CURRENT_LIST_DIR}/assets" CACHE PATH
-    "Private presentation resources used by the original local build")
 set(STARWING_UI_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}/source" CACHE PATH
     "Private generated UI artwork headers")
 
-add_executable(starwing-3ds-diagnostic
-    source/main_3ds.c
-    source/rom_probe.c
-    source/asset_stage.cpp
-    source/core_probe.cpp)
-target_include_directories(starwing-3ds-diagnostic PRIVATE
-    "${STARFOX_SOURCE_ROOT}/include")
-target_compile_features(starwing-3ds-diagnostic PRIVATE c_std_11 cxx_std_20)
-target_compile_options(starwing-3ds-diagnostic PRIVATE
-    -O2 -Wall -Wextra -Wpedantic -ffunction-sections -fdata-sections)
 set(STARFOX_ARM_BUILD "${STARFOX_SOURCE_ROOT}/../Build/3ds-core" CACHE PATH
     "Directory containing the ARM-built Starwing core libraries")
 foreach(STARFOX_ARM_LIBRARY IN ITEMS
@@ -38,15 +26,10 @@ foreach(STARFOX_ARM_LIBRARY IN ITEMS
     set_target_properties("${STARFOX_ARM_LIBRARY}_arm" PROPERTIES
         IMPORTED_LOCATION "${STARFOX_ARM_BUILD}/lib${STARFOX_ARM_LIBRARY}.a")
 endforeach()
-target_link_libraries(starwing-3ds-diagnostic PRIVATE
-    starfox_core_arm retro_cpu_65816_arm retro_cpu_core_arm
-    snes_spc_core_arm ctru m)
 
 set(STARWING_ROMFS "${CMAKE_CURRENT_BINARY_DIR}/romfs")
 file(MAKE_DIRECTORY "${STARWING_ROMFS}")
 configure_file("${CMAKE_CURRENT_LIST_DIR}/romfs/update-ca.crt" "${STARWING_ROMFS}/update-ca.crt" COPYONLY)
-configure_file("${STARWING_PRESENTATION_DIR}/top-background.rgb"
-    "${STARWING_ROMFS}/top-background.rgb" COPYONLY)
 foreach(STARWING_PATCH IN ITEMS
     ultrastarfox-v12.bps starfox-ex-v12.bps
     retail-japan-v10-to-usa-v12.bps
@@ -63,20 +46,6 @@ foreach(STARWING_SYMBOLS IN ITEMS ultrastarfox.txt starfox-ex.txt)
     configure_file("${STARWING_SYMBOL_DIR}/${STARWING_SYMBOLS}"
         "${STARWING_ROMFS}/${STARWING_SYMBOLS}" COPYONLY)
 endforeach()
-
-set(STARWING_SMDH "${CMAKE_CURRENT_BINARY_DIR}/starwing-diagnostic.smdh")
-ctr_generate_smdh(
-    OUTPUT "${STARWING_SMDH}"
-    NAME "Starwing 3DS Diagnostic"
-    DESCRIPTION "SD and ROM detection test"
-    AUTHOR "Esteban PDN"
-    ICON "${STARWING_ICON}")
-
-ctr_create_3dsx(starwing-diagnostic-3dsx
-    TARGET starwing-3ds-diagnostic
-    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/Starwing-3DS-Diagnostic-0.1.3dsx"
-    SMDH "${STARWING_SMDH}"
-    ROMFS "${STARWING_ROMFS}")
 
 add_library(starwing_citro2d STATIC
     vendor/citro2d/source/base.c

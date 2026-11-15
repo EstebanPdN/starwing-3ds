@@ -44,7 +44,6 @@ cmake -U CMAKE_CXX_FLAGS -S "${ROOT}/platform/3ds" -B "${BUILD}" \
   -DCMAKE_C_FLAGS_RELEASE="-O3 -flto -DNDEBUG" \
   "-DSTARWING_PATCH_DIR=${STARWING_PATCH_DIR:-${ROOT}/assets/patches}" \
   "-DSTARWING_SYMBOL_DIR=${STARWING_SYMBOL_DIR:-${ROOT}/assets/symbols}" \
-  "-DSTARWING_PRESENTATION_DIR=${STARWING_PRESENTATION_DIR:-${ROOT}/platform/3ds/assets}" \
   "-DSTARWING_ICON=${STARWING_ICON:-${ROOT}/platform/3ds/assets/icon-48.png}" \
   "-DSTARWING_UI_INCLUDE_DIR=${STARWING_UI_INCLUDE_DIR:-${ROOT}/platform/3ds/source}"
 cmake --build "${BUILD}" --target starwing-game-3dsx --parallel 4

@@ -25,7 +25,6 @@ the existing build environment variables, outside the source checkout:
 | `STARFOX_PRIVATE_INCLUDE_DIR` | Generated localization/game-data headers. |
 | `STARWING_PATCH_DIR` | The nine version-specific BPS inputs expected by the frontend. |
 | `STARWING_SYMBOL_DIR` | `ultrastarfox.txt` and `starfox-ex.txt`. |
-| `STARWING_PRESENTATION_DIR` | Approved icon and top-screen presentation resources. |
 | `STARWING_UI_INCLUDE_DIR` | Generated UI include files when supplied separately. |
 | `STARWING_BANNER_CGFX`, `STARWING_BANNER_AUDIO` | Private CIA presentation inputs. |
 

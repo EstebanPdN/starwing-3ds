@@ -29,7 +29,7 @@
     "docs/REPOSITORY.md",
     "scripts/check-repository.py",
     "CMakeLists.txt",
-    "platform/3ds/build.sh",
+    "platform/3ds/build-game.sh",
     "tools/test-host.sh"
   ]
 }
