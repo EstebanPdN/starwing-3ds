@@ -6,10 +6,6 @@
 #include <stdexcept>
 
 using namespace starfox;
-#ifdef WORD_RENDERER_REFERENCE
-void reference_draw(const assets::Shape&, const render::RenderPose&,
-    const render::RenderSettings&, render::Framebuffer&);
-#endif
 
 int main() try {
     std::uint32_t random_state = 0x3658faceU;
@@ -79,22 +75,6 @@ int main() try {
         hash(batch.commands); hash(batch.texels);
         commands += batch.commands.size();
         coloured += std::count_if(frame.pixels().begin(),frame.pixels().end(),[](auto v){return v!=0;});
-#ifdef WORD_RENDERER_REFERENCE
-        render::Framebuffer expected(width,height,settings.render_scale);
-        expected.enable_layer_tags(true); expected.begin_write_coverage();
-        render::RasterCommands original;
-        original.reset(expected.stored_width(),expected.stored_height());
-        original.accept_edge_runs(n % 2);
-        if (n % 4 == 0) expected.record_to(&original);
-        reference_draw(shape,pose,settings,expected);
-        expected.record_to(nullptr);
-        if (expected.pixels()!=frame.pixels() || expected.layer_tags()!=frame.layer_tags()
-            || !std::equal(expected.write_coverage().begin(),expected.write_coverage().end(),frame.write_coverage().begin())
-            || original.commands.size()!=batch.commands.size() || original.texels!=batch.texels
-            || (!batch.commands.empty() && std::memcmp(original.commands.data(),batch.commands.data(),batch.commands.size()*sizeof(render::RasterCommand)))) {
-            std::fprintf(stderr,"reference differs at case %u\n",n); return 1;
-        }
-#endif
     }
     std::printf("8192 poses: digest=%016llx commands=%llu coloured_pixels=%llu\n",
         (unsigned long long)digest,(unsigned long long)commands,(unsigned long long)coloured);

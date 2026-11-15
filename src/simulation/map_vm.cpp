@@ -11,10 +11,6 @@
 #include <bit>
 #include <stdexcept>
 #include <string>
-#if defined(__3DS__) && defined(STARWING_DEEP_PROFILE)
-#include <3ds.h>
-#include <cstdio>
-#endif
 
 namespace starfox::simulation {
 namespace {
@@ -70,77 +66,6 @@ std::int8_t signed_byte(std::uint8_t value) noexcept {
     return std::bit_cast<std::int8_t>(value);
 }
 
-#if defined(__3DS__) && defined(STARWING_DEEP_PROFILE)
-struct NativeBridgeProfile {
-    unsigned calls{};
-    std::uint64_t to_ticks{};
-    std::uint64_t cpu_ticks{};
-    std::uint64_t from_ticks{};
-    std::uint64_t display_ticks{};
-    void record(const char *kind, std::uint64_t begin, std::uint64_t after_to,
-        std::uint64_t after_cpu, std::uint64_t after_from,
-        std::uint64_t after_display, unsigned interval) {
-        ++calls;
-        to_ticks += after_to - begin;
-        cpu_ticks += after_cpu - after_to;
-        from_ticks += after_from - after_cpu;
-        display_ticks += after_display - after_from;
-        if (calls < interval) return;
-        if (FILE *log = std::fopen("sdmc:/3ds/Starwing/perf_native.log", "a")) {
-            std::fprintf(log, "%s calls=%u to=%llu cpu=%llu from=%llu display=%llu\n",
-                kind, calls,
-                static_cast<unsigned long long>(to_ticks),
-                static_cast<unsigned long long>(cpu_ticks),
-                static_cast<unsigned long long>(from_ticks),
-                static_cast<unsigned long long>(display_ticks));
-            std::fclose(log);
-        }
-        *this = {};
-    }
-};
-NativeBridgeProfile object_bridge_profile;
-NativeBridgeProfile general_bridge_profile;
-struct NativeRoutineProfile {
-    struct Entry {
-        std::uint32_t address{};
-        std::uint32_t calls{};
-        std::uint64_t ticks{};
-        std::uint64_t instructions{};
-    };
-    std::array<Entry, 128U> entries{};
-    std::uint32_t total_calls{};
-    void record(std::uint32_t address, std::size_t instructions,
-        std::uint64_t ticks) {
-        ++total_calls;
-        for (auto& entry : entries) {
-            if (entry.calls != 0U && entry.address != address) continue;
-            entry.address = address;
-            ++entry.calls;
-            entry.ticks += ticks;
-            entry.instructions += instructions;
-            break;
-        }
-        if (total_calls < 400U) return;
-        std::sort(entries.begin(), entries.end(),
-            [](const Entry& a, const Entry& b) { return a.ticks > b.ticks; });
-        if (FILE* log = std::fopen("sdmc:/3ds/Starwing/perf_routines.log", "a")) {
-            std::fprintf(log, "interval calls=%lu\n",
-                static_cast<unsigned long>(total_calls));
-            for (std::size_t i = 0U; i < 15U && entries[i].calls != 0U; ++i) {
-                const auto& entry = entries[i];
-                std::fprintf(log, "%06lx calls=%lu ticks=%llu instructions=%llu\n",
-                    static_cast<unsigned long>(entry.address),
-                    static_cast<unsigned long>(entry.calls),
-                    static_cast<unsigned long long>(entry.ticks),
-                    static_cast<unsigned long long>(entry.instructions));
-            }
-            std::fclose(log);
-        }
-        *this = {};
-    }
-};
-NativeRoutineProfile native_routines_profile;
-#endif
 
 } // namespace
 
@@ -692,9 +617,6 @@ std::size_t MapVm::call_native_object_routine_impl(
     if (!objects_->is_active(object)) {
         throw std::invalid_argument{"native routine object handle must be active"};
     }
-#if defined(__3DS__) && defined(STARWING_DEEP_PROFILE)
-    const auto profile_begin = svcGetSystemTick();
-#endif
     // Strategies execute consecutively against one persistent 65C816 WRAM
     // image. sync_objects_from_cpu() at the previous routine boundary already
     // imported its changes into ObjectPool, so rebuilding the entire native
@@ -706,9 +628,6 @@ std::size_t MapVm::call_native_object_routine_impl(
         sync_objects_to_cpu();
     }
     object_pool_needs_native_sync_ = false;
-#if defined(__3DS__) && defined(STARWING_DEEP_PROFILE)
-    const auto profile_to = svcGetSystemTick();
-#endif
     Wdc65816Registers registers;
     registers.x = original_object_pointer(object);
     // TRANS.ASM's strategy loop advances with LDY _NEXT,X / TYX, so
@@ -724,18 +643,8 @@ std::size_t MapVm::call_native_object_routine_impl(
         if (strategy_batch_active_) ++strategy_batch_counters_.batched_calls;
     }
     const auto instructions = cpu_.call_long(address, registers, instruction_limit);
-#if defined(__3DS__) && defined(STARWING_DEEP_PROFILE)
-    const auto profile_cpu = svcGetSystemTick();
-#endif
     sync_objects_from_cpu();
-#if defined(__3DS__) && defined(STARWING_DEEP_PROFILE)
-    const auto profile_from = svcGetSystemTick();
-#endif
     sync_display_from_cpu();
-#if defined(__3DS__) && defined(STARWING_DEEP_PROFILE)
-    object_bridge_profile.record("object", profile_begin, profile_to,
-        profile_cpu, profile_from, svcGetSystemTick(), 100U);
-#endif
     return instructions;
 }
 
@@ -747,30 +656,11 @@ std::size_t MapVm::call_native_routine(
     bool sync_objects,
     bool sync_objects_before_call) {
     finish_strategy_batch();
-#if defined(__3DS__) && defined(STARWING_DEEP_PROFILE)
-    const auto profile_begin = svcGetSystemTick();
-#endif
     if (sync_objects && sync_objects_before_call) sync_objects_to_cpu();
-#if defined(__3DS__) && defined(STARWING_DEEP_PROFILE)
-    const auto profile_to = svcGetSystemTick();
-#endif
     const auto instructions = cpu_.call_long(
         address, registers, instruction_limit, service_transfer_flag);
-#if defined(__3DS__) && defined(STARWING_DEEP_PROFILE)
-    const auto profile_cpu = svcGetSystemTick();
-#endif
     if (sync_objects) sync_objects_from_cpu();
-#if defined(__3DS__) && defined(STARWING_DEEP_PROFILE)
-    const auto profile_from = svcGetSystemTick();
-#endif
     sync_display_from_cpu();
-#if defined(__3DS__) && defined(STARWING_DEEP_PROFILE)
-    const auto profile_end = svcGetSystemTick();
-    general_bridge_profile.record("general", profile_begin, profile_to,
-        profile_cpu, profile_from, profile_end, 20U);
-    native_routines_profile.record(address, instructions,
-        profile_end - profile_begin);
-#endif
     return instructions;
 }
 

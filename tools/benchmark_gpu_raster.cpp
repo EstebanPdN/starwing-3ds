@@ -1,7 +1,4 @@
 #include "starfox/render/gpu_raster.hpp"
-#if !defined(STARFOX_TEST_RASTER_CPU)
-#include <SDL3/SDL.h>
-#endif
 #include <chrono>
 #include <iostream>
 #include <string_view>
@@ -75,14 +72,6 @@ int main(int argc,char** argv) {
         foreground.begin_write_coverage();foreground.end_write_coverage();foreground.clear();
         if(std::count(foreground.write_coverage().begin(),foreground.write_coverage().end(),1)!=0) return 24;
     }
-#if !defined(STARFOX_TEST_RASTER_CPU)
-    if(!SDL_Init(SDL_INIT_VIDEO)) return 1;
-    struct SdlLifetime {~SdlLifetime(){SDL_Quit();}} sdl;
-    GpuRaster gpu;
-    GpuRaster resident;
-    GpuRaster explicitly_binned;
-    if(gpu.wait_for_completion() || resident.wait_for_completion()) return 34;
-#endif
     starfox::assets::Shape shape;
     shape.vertices={{-90,-60,0},{-80,60,25},{90,65,0},{80,-65,-20}};
     shape.colour_words={0x0009,0x006c,0x4000};
@@ -94,74 +83,6 @@ int main(int argc,char** argv) {
     for(unsigned i=0;i<64;++i) texture.texels[i]=std::uint8_t(i%7);
     shape.textures.push_back(texture);
     const auto faces=shape.faces;
-#if !defined(STARFOX_TEST_RASTER_CPU)
-    if(argc==2 && (std::string_view(argv[1])=="--compare-bins"
-        || std::string_view(argv[1])=="--compare-resident-bins"
-        || std::string_view(argv[1])=="--compare-mixed-bins")) {
-        const bool mixed=std::string_view(argv[1])=="--compare-mixed-bins";
-        const bool resident_only=mixed || std::string_view(argv[1])=="--compare-resident-bins";
-        auto* environment=SDL_GetEnvironment();
-        if(!SDL_SetEnvironmentVariable(environment,"STARFOX_TEST_GPU_BINS","1",true)) return 27;
-        // Initialize both pipelines before alternation; the same device,
-        // command data and readback are used for each paired measurement.
-        for(unsigned workload=mixed?1U:0U;workload<=(mixed?2U:0U);++workload)
-        for(unsigned scale:{1U,2U,4U}) for(bool metadata:{false,true}) {
-            shape.faces=faces;
-            if(workload) shape.faces[0].colour_id=shape.faces[1].colour_id=2;
-            Framebuffer frame(400,224,scale),reference(400,224,scale);
-            frame.enable_layer_tags(true);reference.enable_layer_tags(true);
-            SurfaceBuffer surfaces(400*scale,224*scale),expected(400*scale,224*scale);
-            RasterCommands batch;batch.reset(frame.stored_width(),frame.stored_height());
-            frame.record_to(&batch);RenderSettings config;config.render_scale=scale;SoftwareRenderer renderer(config);
-            for(unsigned object=0;object<32;++object) {
-                RenderPose pose;pose.z=100+object*13;pose.x=int(object%8)*15-50;
-                pose.vanish_x=200;pose.vanish_y=112;
-                if(workload) {pose.texture_scroll_x=-3;pose.texture_scroll_y=260;}
-                if(workload==2 && object%4!=0) {
-                    pose.simple_scaled_sprite=true;pose.simple_sprite_colour=2;pose.simple_sprite_world_size=80;
-                    if(object%3==0) pose.palette_override=203;
-                }
-                renderer.draw(shape,pose,frame,false,metadata?&surfaces:nullptr);
-            }
-            frame.record_to(nullptr);replay_raster_commands(batch,reference,metadata?&expected:nullptr);
-            if(workload && (batch.texels.empty()
-                || std::none_of(batch.commands.begin(),batch.commands.end(),[](const auto& c){return c.textured!=0;}))) return 36;
-            if(workload==2 && std::none_of(batch.commands.begin(),batch.commands.end(),[](const auto& c){return c.textured==2;})) return 37;
-            if(!SDL_SetEnvironmentVariable(environment,"STARFOX_TEST_GPU_BINS","1",true)
-                || !gpu.render(batch,frame,metadata?&surfaces:nullptr)) return 28;
-            std::vector<double> samples[2];
-            for(unsigned repeat=0;repeat<13;++repeat) for(unsigned order=0;order<2;++order) {
-                const auto mode=(repeat+order)%2;
-                const bool configured=mode?SDL_SetEnvironmentVariable(environment,"STARFOX_TEST_GPU_BINS","1",true)
-                    :SDL_UnsetEnvironmentVariable(environment,"STARFOX_TEST_GPU_BINS");
-                if(!configured) return 29;
-                const auto start=std::chrono::steady_clock::now();
-                if(resident_only) {
-                    if(!gpu.render_resident(gpu.resident_output().device,batch,metadata)
-                        || !gpu.wait_for_completion()) return 30;
-                } else if(!gpu.render(batch,frame,metadata?&surfaces:nullptr)) return 30;
-                const auto ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
-                if(resident_only) {
-                    const auto completed=gpu.resident_output();
-                    if(!gpu.wait_for_completion() || gpu.resident_output().generation!=completed.generation
-                        || gpu.resident_output().pixels!=completed.pixels) return 35;
-                }
-                if(resident_only && !gpu.readback(frame,metadata?&surfaces:nullptr)) return 33;
-                if(frame.pixels()!=reference.pixels() || frame.layer_tags()!=reference.layer_tags()) return 31;
-                if(metadata) for(std::size_t i=0;i<expected.samples().size();++i) {
-                    const auto& a=expected.samples()[i];const auto& b=surfaces.samples()[i];
-                    if(a.valid!=b.valid || a.palette_index!=b.palette_index || a.depth!=b.depth
-                        || a.normal_x!=b.normal_x || a.normal_y!=b.normal_y || a.normal_z!=b.normal_z) return 32;
-                }
-                if(repeat>=4) samples[mode].push_back(ms);
-            }
-            for(auto& sample:samples) std::sort(sample.begin(),sample.end());
-            std::cout<<"paired bins workload="<<workload<<" resident="<<resident_only<<" scale="<<scale<<" surfaces="<<metadata<<" commands="<<batch.commands.size()
-                <<" cpu_bins_ms="<<samples[0][4]<<" gpu_bins_ms="<<samples[1][4]<<'\n';
-        }
-        return 0;
-    }
-#endif
     {
         RasterCommands edges;edges.reset(8,2);RasterCommand edge;
         edge.left=0;edge.right=8;edge.top=0;edge.bottom=1;edge.even=7;edge.reserved1=1;edge.u=-1;edge.v=7;edges.add(edge);
@@ -169,9 +90,6 @@ int main(int argc,char** argv) {
         Framebuffer expected(8,2),actual(8,2);expected.set(7,0,7);expected.set(2,1,7);expected.set(5,1,7);
         replay_raster_commands(edges,actual,nullptr);
         if(actual.pixels()!=expected.pixels()) throw std::runtime_error("Edge-only replay coverage failed");
-#if !defined(STARFOX_TEST_RASTER_CPU)
-        if(!gpu.render(edges,actual,nullptr) || actual.pixels()!=expected.pixels()) throw std::runtime_error("Edge-only GPU coverage failed");
-#endif
     }
     {
         RasterCommands masked;masked.reset(67,3);masked.texels.resize(40);
@@ -198,11 +116,6 @@ int main(int argc,char** argv) {
         replay_raster_commands(masked,actual,&mask_surfaces);check_mask_surfaces();
         if(actual.pixels()!=expected.pixels() || actual.layer_tags()!=expected.layer_tags())
             throw std::runtime_error("Masked solid replay lost gaps, zero writes or word boundaries");
-#if !defined(STARFOX_TEST_RASTER_CPU)
-        if(!gpu.render(masked,actual,&mask_surfaces) || actual.pixels()!=expected.pixels() || actual.layer_tags()!=expected.layer_tags())
-            throw std::runtime_error("Masked solid GPU coverage mismatch");
-        check_mask_surfaces();
-#endif
         for(unsigned invalid=0;invalid<5;++invalid) {
             auto bad=c;
             if(invalid==0) bad.u_mask=0;
@@ -214,10 +127,6 @@ int main(int argc,char** argv) {
             replay_raster_commands(masked,actual,nullptr);
             if(actual.pixels()!=expected.pixels() || actual.layer_tags()!=expected.layer_tags())
                 throw std::runtime_error("Invalid solid mask replay was not rejected");
-#if !defined(STARFOX_TEST_RASTER_CPU)
-            if(!gpu.render(masked,actual,nullptr) || actual.pixels()!=expected.pixels() || actual.layer_tags()!=expected.layer_tags())
-                throw std::runtime_error("Invalid solid mask GPU was not rejected");
-#endif
         }
     }
     for(unsigned width:{224U,257U}) for(unsigned scale:{1U,2U,4U}) for(unsigned mode=0;mode<14;++mode) for(bool textured:{false,true}) {
@@ -256,31 +165,7 @@ int main(int argc,char** argv) {
         if(reference.pixels()!=replayed.pixels() || reference.layer_tags()!=replayed.layer_tags()) {
             std::cerr<<"CPU command parity failed scale="<<scale<<" mode="<<mode<<" textured="<<textured<<'\n';return 2;
         }
-#if !defined(STARFOX_TEST_RASTER_CPU)
-        if(!gpu.render(batch,recorded,&actual)) {std::cerr<<gpu.status()<<'\n';return 3;}
-        if(reference.pixels()!=recorded.pixels() || reference.layer_tags()!=recorded.layer_tags()) {
-            std::cerr<<"GPU command parity failed scale="<<scale<<" mode="<<mode<<" textured="<<textured<<'\n';return 4;
-        }
-        Framebuffer deferred(width,193,scale);deferred.enable_layer_tags(true);
-        deferred.clear(233);
-        SurfaceBuffer deferred_surfaces(width*scale,193*scale);
-        const auto device=gpu.resident_output().device;
-        if(!resident.render_resident(device,batch,true)) {std::cerr<<resident.status()<<'\n';return 7;}
-        const auto first=resident.resident_output();
-        if(!first.pixels || !first.surfaces || first.device!=device || first.width!=width*scale
-            || first.height!=193*scale || deferred.pixels().front()!=233) return 8;
-        // Replacing an unread CPU-binned frame with GPU bins is legal;
-        // exported views are frame-scoped. The next case switches back.
-        if(!resident.render_resident(device,batch,true,true)
-            || resident.resident_output().generation<=first.generation
-            || !resident.readback(deferred,&deferred_surfaces)
-            || reference.pixels()!=deferred.pixels() || reference.layer_tags()!=deferred.layer_tags()) return 9;
-#endif
         std::vector<const SurfaceBuffer*> comparisons{&software};
-#if !defined(STARFOX_TEST_RASTER_CPU)
-        comparisons.push_back(&actual);
-        comparisons.push_back(&deferred_surfaces);
-#endif
         for(std::size_t i=0;i<expected.samples().size();++i) for(const auto* samples:comparisons) {
             const auto& a=expected.samples()[i];const auto& b=samples->samples()[i];
             if(a.valid!=b.valid || a.palette_index!=b.palette_index || a.normal_x!=b.normal_x || a.normal_y!=b.normal_y
@@ -288,79 +173,5 @@ int main(int argc,char** argv) {
         }
     }
     shape.faces=faces;
-#if !defined(STARFOX_TEST_RASTER_CPU)
-    std::cout<<gpu.status()<<": 168 native flat/texture/line/wave/wobble/clip/sprite cases exactly match pixels, tags and surfaces\n";
-    // No-metadata frames must not expose the previous frame's surface buffer.
-    // Exercise shrinking/growing allocations and repeated explicit captures.
-    for(unsigned width:{65U,17U,257U}) {
-        Framebuffer expected(width,19),captured(width,19);
-        RasterCommands batch;batch.reset(width,19);expected.record_to(&batch);
-        expected.set(3,4,71);expected.record_to(nullptr);
-        replay_raster_commands(batch,expected,nullptr);
-        // Start with CPU bins, lazily enable GPU bins on the same device, then
-        // alternate without resetting allocations or exposing stale ownership.
-        for(bool binning:{false,true,false,true}) {
-            if(!explicitly_binned.render_resident(gpu.resident_output().device,batch,false,binning)
-                || !explicitly_binned.readback(captured,nullptr) || captured.pixels()!=expected.pixels()) return 38;
-        }
-        if(!resident.render_resident(gpu.resident_output().device,batch,false)
-            || resident.resident_output().surfaces
-            || !resident.readback(captured,nullptr)
-            || captured.pixels()!=expected.pixels()) return 11;
-        captured.clear(255);
-        if(!resident.readback(captured,nullptr) || captured.pixels()!=expected.pixels()) return 12;
-    }
-    {
-        RasterCommands empty;empty.reset(65,19);
-        Framebuffer captured(65,19);captured.enable_layer_tags(true);captured.clear(255);
-        SurfaceBuffer surfaces(65,19);
-        if(!resident.render_resident(gpu.resident_output().device,empty,true)
-            || !resident.readback(captured,&surfaces)) return 25;
-        if(std::any_of(captured.pixels().begin(),captured.pixels().end(),[](auto v){return v!=0;})
-            || std::any_of(surfaces.samples().begin(),surfaces.samples().end(),[](const auto& v){return v.valid;})) return 26;
-    }
-    {
-        // Queue enough changing unread frames to wrap the bounded submission
-        // queue repeatedly. Grow/shrink buffers and alternate bin ownership.
-        for(unsigned n=0;n<32;++n) {
-            RasterCommands queued;queued.reset(65+(n%3)*64,19);
-            RasterCommand c;c.left=2;c.top=3;c.right=6;c.bottom=7;c.even=n+1;
-            c.has_surface=1;c.surface={0,0,1,float(n)};queued.add(c);
-            if(!resident.render_resident(gpu.resident_output().device,queued,true,(n&1)!=0)) return 41;
-        }
-        Framebuffer captured(129,19);SurfaceBuffer surfaces(129,19);
-        if(!resident.readback(captured,&surfaces)) return 42;
-        for(unsigned y=0;y<19;++y) for(unsigned x=0;x<129;++x) {
-            const auto i=y*129+x;const bool covered=x>=2 && x<6 && y>=3 && y<7;
-            if(captured.pixels()[i]!=(covered?32:0) || surfaces.samples()[i].valid!=covered
-                || (covered && surfaces.samples()[i].depth!=31)) return 43;
-        }
-        std::cout<<"32 changing unread submissions: bounded queue, bin switching, resized buffers and final capture passed\n";
-    }
-    resident.release_device();
-    if(resident.resident_output().pixels || resident.wait_for_completion()) return 10;
-    std::cout<<"Borrowed-device resident output, unread replacement, deferred capture and release: passed\n";
-    for(unsigned scale:{1U,2U,4U}) {
-        Framebuffer frame(400,224,scale);frame.enable_layer_tags(true);
-        RenderSettings settings;settings.render_scale=scale;SoftwareRenderer renderer(settings);
-        RasterCommands batch;double cpu=0,hardware=0;
-        for(unsigned repeat=0;repeat<12;++repeat) for(unsigned order=0;order<2;++order) {
-            const bool use_gpu=(repeat+order)%2;
-            frame.clear();batch.reset(frame.stored_width(),frame.stored_height());
-            frame.record_to(use_gpu?&batch:nullptr);
-            const auto start=std::chrono::steady_clock::now();
-            for(unsigned object=0;object<32;++object) {
-                RenderPose pose;pose.z=100+object*13;pose.x=int(object%8)*15-50;
-                pose.vanish_x=200;pose.vanish_y=112;renderer.draw(shape,pose,frame,false);
-            }
-            frame.record_to(nullptr);
-            if(use_gpu && !gpu.render(batch,frame,nullptr)) return 6;
-            const auto duration=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
-            if(repeat>=2) (use_gpu?hardware:cpu)+=duration;
-        }
-        std::cout<<"scale="<<scale<<" CPU_ms="<<cpu/10<<" GPU_ms="<<hardware/10<<'\n';
-    }
-#else
     std::cout<<"168 native raster command replay cases match source renderer exactly\n";
-#endif
 }

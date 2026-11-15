@@ -134,10 +134,8 @@ std::unique_ptr<GameSimulation> GameSimulation::restored_state(
 }
 
 void GameSimulation::swap_state(GameSimulation& other) noexcept {
-#if !defined(WINAPI_FAMILY) || (WINAPI_FAMILY != WINAPI_FAMILY_APP)
     static_assert(std::is_nothrow_move_constructible_v<GameSimulation>);
     static_assert(std::is_nothrow_move_assignable_v<GameSimulation>);
-#endif
     if (this == &other) return;
     std::swap(*this, other);
     for (auto* game : {this, &other}) {

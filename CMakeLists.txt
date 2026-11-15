@@ -6,9 +6,6 @@ project(starfox_enhanced VERSION 0.0.6.7 LANGUAGES CXX)
 # shared engine and optional native regression/data tools.
 option(STARFOX_BUILD_TESTS "Build deterministic host engine tests" ON)
 option(STARFOX_BUILD_TOOLS "Build host trace and data tools" ON)
-set(STARFOX_BUILD_RUNTIME OFF)
-set(STARFOX_BUILD_VR OFF)
-set(STARFOX_ENABLE_XBRZ OFF)
 set(STARFOX_PACKAGE_MSU1_MUSIC OFF)
 
 set(STARFOX_ROM_FILE
@@ -92,32 +89,6 @@ FetchContent_Declare(
     SOURCE_SUBDIR _starfox_no_upstream_project
 )
 FetchContent_MakeAvailable(dr_libs)
-
-if(STARFOX_ENABLE_XBRZ)
-    FetchContent_Declare(
-        xbrz
-        GIT_REPOSITORY https://github.com/janisozaur/xbrz.git
-        GIT_TAG 93c54433fa0df37c689c919e8152fb0b9136584a
-        SOURCE_SUBDIR _starfox_no_upstream_project
-    )
-    FetchContent_MakeAvailable(xbrz)
-    add_library(xbrz_filter STATIC "${xbrz_SOURCE_DIR}/xbrz.cpp")
-    target_include_directories(xbrz_filter SYSTEM PUBLIC "${xbrz_SOURCE_DIR}")
-    target_compile_features(xbrz_filter PUBLIC cxx_std_20)
-    # Upstream's debug-only pixel breakpoint uses MSVC intrinsics even on
-    # other compilers. Keep this optimized third-party filter in release mode.
-    target_compile_definitions(xbrz_filter PRIVATE NDEBUG)
-    set_target_properties(xbrz_filter PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    # The pinned xBRZ revision calls std::sqrt without including <cmath>; it
-    # only ever compiled because older standard libraries leaked the
-    # declaration through another header. Force the include rather than
-    # patching a third-party source tree.
-    if(MSVC)
-        target_compile_options(xbrz_filter PRIVATE /FI cmath)
-    else()
-        target_compile_options(xbrz_filter PRIVATE -include cmath)
-    endif()
-endif()
 
 include(tools/cmake/SpcState.cmake)
 add_library(snes_spc_core STATIC
@@ -230,10 +201,6 @@ target_compile_features(starfox_core PUBLIC cxx_std_20)
 find_package(Threads REQUIRED)
 target_link_libraries(starfox_core PRIVATE
     retro_cpu_65816 snes_spc_core Threads::Threads)
-if(STARFOX_ENABLE_XBRZ)
-    target_link_libraries(starfox_core PRIVATE xbrz_filter)
-    target_compile_definitions(starfox_core PRIVATE STARFOX_ENABLE_XBRZ)
-endif()
 
 if(MSVC)
     target_compile_options(starfox_core PRIVATE /W4 /permissive-)
@@ -310,10 +277,6 @@ if(STARFOX_BUILD_TESTS)
     add_test(NAME starfox_bps_tests COMMAND starfox_bps_tests)
     add_executable(starfox_pixel_filter_tests tests/pixel_filter_tests.cpp)
     target_link_libraries(starfox_pixel_filter_tests PRIVATE starfox_core)
-    if(STARFOX_ENABLE_XBRZ)
-        target_compile_definitions(
-            starfox_pixel_filter_tests PRIVATE STARFOX_ENABLE_XBRZ)
-    endif()
     add_test(
         NAME starfox_pixel_filter_tests COMMAND starfox_pixel_filter_tests)
     if(EXISTS "${STARFOX_RETAIL_V12_FILE}"
@@ -532,7 +495,6 @@ if(STARFOX_BUILD_TESTS)
     add_test(NAME starfox_packed_bsp_tests COMMAND starfox_packed_bsp_tests)
     target_link_libraries(starfox_face_material_tests PRIVATE starfox_core)
     add_test(NAME starfox_face_material_tests COMMAND starfox_face_material_tests)
-    target_compile_definitions(starfox_raster_commands_tests PRIVATE STARFOX_TEST_RASTER_CPU)
     target_link_libraries(starfox_raster_commands_tests PRIVATE starfox_core)
     add_test(NAME starfox_raster_commands_tests COMMAND starfox_raster_commands_tests)
     target_link_libraries(starfox_core_tests PRIVATE starfox_core)

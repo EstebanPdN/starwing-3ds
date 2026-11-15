@@ -26,9 +26,6 @@
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
-#ifdef STARWING_DEEP_PROFILE
-#include <cstdio>
-#endif
 
 namespace starfox::platform_3ds {
 
@@ -61,24 +58,6 @@ bool same_bg2_tiles(const simulation::SnesPpuState& a,
         && a.tunnel_scene == b.tunnel_scene;
 }
 
-#ifdef STARWING_DEEP_PROFILE
-bool same_mode1_tiles(const simulation::SnesPpuState& a,
-    const simulation::SnesPpuState& b) noexcept {
-    return same_bg2_tiles(a, b)
-        && a.bg1_tile_size_16 == b.bg1_tile_size_16
-        && a.bg1_character_base == b.bg1_character_base
-        && a.bg1_screen_base == b.bg1_screen_base
-        && a.bg1_screen_size == b.bg1_screen_size
-        && a.bg1_scroll_x == b.bg1_scroll_x
-        && a.bg1_scroll_y == b.bg1_scroll_y
-        && a.bg3_tile_size_16 == b.bg3_tile_size_16
-        && a.bg3_character_base == b.bg3_character_base
-        && a.bg3_screen_base == b.bg3_screen_base
-        && a.bg3_screen_size == b.bg3_screen_size
-        && a.bg3_scroll_x == b.bg3_scroll_x
-        && a.bg3_scroll_y == b.bg3_scroll_y;
-}
-#endif
 
 bool same_mode1_bg1(const simulation::SnesPpuState& a,
     const simulation::SnesPpuState& b) noexcept {
@@ -796,18 +775,6 @@ const render::Framebuffer& Frame3ds::draw(
     transient_lod_shape_.reset();
     if (!snapshots_ready_) capture_after_tick(game);
     interpolation_alpha = std::clamp(interpolation_alpha, 0.0, 1.0);
-#ifdef STARWING_DEEP_PROFILE
-    const auto profile_begin = osGetTime();
-    static unsigned mode1_hits = 0U, mode1_builds = 0U;
-    static unsigned mode2_hits = 0U, mode2_builds = 0U;
-    static unsigned mode1_vram_changes = 0U, mode1_scroll_changes = 0U;
-    static unsigned mode1_other_changes = 0U;
-    static unsigned mode1_main_changes = 0U, mode1_mosaic_changes = 0U;
-    static unsigned mode1_bg2_extra_changes = 0U, mode1_base_changes = 0U;
-    static unsigned mode1_tunnel_changes = 0U;
-    static unsigned mode1_bg1_builds = 0U, mode1_bg2_builds = 0U;
-    static unsigned mode1_bg3_builds = 0U;
-#endif
     const auto& map = game.map();
     const auto& ppu = prepared_background ? *prepared_background
         : presentation_ppu(game, interpolation_alpha);
@@ -994,54 +961,6 @@ const render::Framebuffer& Frame3ds::draw(
         const bool same_background = same_bg1 && same_bg2 && same_bg3 && same_panorama;
         if (same_background) ++background_cache_hits_;
         else ++background_cache_misses_;
-#ifdef STARWING_DEEP_PROFILE
-        if (same_background) ++mode1_hits;
-        else {
-            ++mode1_builds;
-            if (!same_bg1) ++mode1_bg1_builds;
-            if (!same_bg2) ++mode1_bg2_builds;
-            if (!same_bg3) ++mode1_bg3_builds;
-            if (cache.valid) {
-                if (cache.ppu.vram != ppu.vram) ++mode1_vram_changes;
-                if (cache.scroll_x != background_x
-                    || cache.scroll_y != background_y
-                    || cache.ppu.bg1_scroll_x != ppu.bg1_scroll_x
-                    || cache.ppu.bg1_scroll_y != ppu.bg1_scroll_y
-                    || cache.ppu.bg2_scroll_x != ppu.bg2_scroll_x
-                    || cache.ppu.bg2_scroll_y != ppu.bg2_scroll_y
-                    || cache.ppu.bg3_scroll_x != ppu.bg3_scroll_x
-                    || cache.ppu.bg3_scroll_y != ppu.bg3_scroll_y)
-                    ++mode1_scroll_changes;
-                if (cache.ppu.vram == ppu.vram
-                    && cache.scroll_x == background_x
-                    && cache.scroll_y == background_y
-                    && !same_mode1_tiles(cache.ppu, ppu))
-                    ++mode1_other_changes;
-                if (cache.ppu.main_screen != ppu.main_screen)
-                    ++mode1_main_changes;
-                if (cache.ppu.mosaic != ppu.mosaic)
-                    ++mode1_mosaic_changes;
-                if (cache.ppu.bg2_horizontal_offsets_enabled
-                        != ppu.bg2_horizontal_offsets_enabled
-                    || cache.ppu.bg2_vertical_offsets_enabled
-                        != ppu.bg2_vertical_offsets_enabled
-                    || cache.ppu.bg2_scanline_scroll_enabled
-                        != ppu.bg2_scanline_scroll_enabled)
-                    ++mode1_bg2_extra_changes;
-                if (cache.ppu.bg1_character_base != ppu.bg1_character_base
-                    || cache.ppu.bg2_character_base != ppu.bg2_character_base
-                    || cache.ppu.bg3_character_base != ppu.bg3_character_base
-                    || cache.ppu.bg1_screen_base != ppu.bg1_screen_base
-                    || cache.ppu.bg2_screen_base != ppu.bg2_screen_base
-                    || cache.ppu.bg3_screen_base != ppu.bg3_screen_base)
-                    ++mode1_base_changes;
-                if (cache.ppu.tunnel_scene != ppu.tunnel_scene
-                    || (ppu.tunnel_scene
-                        && cache.ppu.cgram != ppu.cgram))
-                    ++mode1_tunnel_changes;
-            }
-        }
-#endif
         if (native_mode1_background && !same_atlas) {
             // Decode the complete, stationary tilemap once. Rebuilding from
             // a scrolled 256-pixel screenshot makes donor patches change at
@@ -1156,9 +1075,6 @@ const render::Framebuffer& Frame3ds::draw(
         }
     }
     const auto stage_background = svcGetSystemTick();
-#ifdef STARWING_DEEP_PROFILE
-    const auto profile_background = osGetTime();
-#endif
 
     using render::word::exact_lround;
     const auto camera = timing::interpolate(
@@ -1302,10 +1218,6 @@ const render::Framebuffer& Frame3ds::draw(
     world_cache_snapshot_us_ = 0U;
     const auto stage_world_prepare_end = svcGetSystemTick();
     std::uint64_t world_record_ticks=0, scene_compile_ticks=0;
-#ifdef STARWING_DEEP_PROFILE
-    auto profile_items = osGetTime();
-    auto profile_models = profile_items;
-#endif
     {
         ++world_cache_misses_;
         const auto world_record_begin=svcGetSystemTick();
@@ -1369,10 +1281,6 @@ const render::Framebuffer& Frame3ds::draw(
                 ? static_cast<std::uint32_t>(object_frame & 0x7fU)
                 : static_cast<std::uint32_t>(frame_number);
         };
-#ifdef STARWING_DEEP_PROFILE
-        profile_items = osGetTime();
-        profile_models = profile_items;
-#endif
 
         const auto make_pose = [&](const RenderItem& item, bool shadow) {
             const auto& object = *item.object;
@@ -1493,9 +1401,6 @@ const render::Framebuffer& Frame3ds::draw(
             native_commands_.unpack();
             render::replay_raster_commands(native_commands_,world_,nullptr);
         }
-#ifdef STARWING_DEEP_PROFILE
-        profile_models = osGetTime();
-#endif
     }
 
     native_scene_active_=native_world && !native_scene_.stats().overflow;
@@ -1565,9 +1470,6 @@ const render::Framebuffer& Frame3ds::draw(
                     false, nullptr, nullptr, nullptr, &model_scratch_);
             }
     }
-#ifdef STARWING_DEEP_PROFILE
-    const auto profile_native = osGetTime();
-#endif
     const auto stage_native_model_end = svcGetSystemTick();
 
     if (!reuse_source_foreground
@@ -1662,43 +1564,6 @@ const render::Framebuffer& Frame3ds::draw(
             }
         }
     }
-#ifdef STARWING_DEEP_PROFILE
-    static unsigned frame_count = 0U;
-    static std::uint64_t background_ms = 0U, item_ms = 0U;
-    static std::uint64_t model_ms = 0U, native_ms = 0U, finish_ms = 0U;
-    ++frame_count;
-    background_ms += profile_background - profile_begin;
-    item_ms += profile_items - profile_background;
-    model_ms += profile_models - profile_items;
-    native_ms += profile_native - profile_models;
-    finish_ms += osGetTime() - profile_native;
-    if (frame_count >= 20U) {
-        if (FILE *log = std::fopen("sdmc:/3ds/Starwing/perf_draw.log", "a")) {
-            std::fprintf(log, "frames=%u background=%llu items=%llu models=%llu native=%llu finish=%llu mode1_hits=%u mode1_builds=%u mode1_vram=%u mode1_scroll=%u mode1_other=%u main=%u mosaic=%u bg2extra=%u base=%u tunnel=%u bg1build=%u bg2build=%u bg3build=%u mode2_hits=%u mode2_builds=%u\n",
-                frame_count,
-                static_cast<unsigned long long>(background_ms),
-                static_cast<unsigned long long>(item_ms),
-                static_cast<unsigned long long>(model_ms),
-                static_cast<unsigned long long>(native_ms),
-                static_cast<unsigned long long>(finish_ms),
-                mode1_hits, mode1_builds, mode1_vram_changes,
-                mode1_scroll_changes, mode1_other_changes,
-                mode1_main_changes, mode1_mosaic_changes,
-                mode1_bg2_extra_changes, mode1_base_changes,
-                mode1_tunnel_changes,
-                mode1_bg1_builds, mode1_bg2_builds, mode1_bg3_builds,
-                mode2_hits, mode2_builds);
-            std::fclose(log);
-        }
-        frame_count = 0U;
-        background_ms = item_ms = model_ms = native_ms = finish_ms = 0U;
-        mode1_hits = mode1_builds = mode2_hits = mode2_builds = 0U;
-        mode1_vram_changes = mode1_scroll_changes = mode1_other_changes = 0U;
-        mode1_main_changes = mode1_mosaic_changes = 0U;
-        mode1_bg2_extra_changes = mode1_base_changes = mode1_tunnel_changes = 0U;
-        mode1_bg1_builds = mode1_bg2_builds = mode1_bg3_builds = 0U;
-    }
-#endif
     const bool top_hud_shown = level_flow && show_top_hud_;
     // Bring the retained top HUD up to this draw's meters and status sprites
     // before choosing how to compose the wide frame: a group that changed
@@ -1751,10 +1616,6 @@ const render::Framebuffer& Frame3ds::draw(
                 && mode2_background_x_ == background_x
                 && mode2_background_y_ == background_y
                 && same_bg2_tiles(mode2_background_ppu_, ppu);
-#ifdef STARWING_DEEP_PROFILE
-            if (same_background) ++mode2_hits;
-            else ++mode2_builds;
-#endif
             if (same_background) ++background_cache_hits_;
             else ++background_cache_misses_;
             if (same_background) {

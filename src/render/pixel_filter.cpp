@@ -5,9 +5,6 @@
 #include <cstddef>
 #include <cmath>
 
-#ifdef STARFOX_ENABLE_XBRZ
-#include "xbrz.h"
-#endif
 
 namespace starfox::render {
 namespace {
@@ -58,11 +55,7 @@ bool two_d_filter_compiled_in(TwoDFilter filter) noexcept {
     case TwoDFilter::scalefx:
         return true;
     case TwoDFilter::xbrz:
-#ifdef STARFOX_ENABLE_XBRZ
-        return true;
-#else
         return false;
-#endif
     }
     return false;
 }
@@ -280,15 +273,6 @@ bool filter_overlay_layer(
         scale_scalefx(scratch.source,scratch.filtered,width,height,scratch.scalefx,workers);
     } else workers.parallel_rows(height,
         [&](std::uint32_t first, std::uint32_t last) {
-#ifdef STARFOX_ENABLE_XBRZ
-            if (backend == TwoDFilter::xbrz) {
-                xbrz::scale(factor, source, filtered,
-                    static_cast<int>(width), static_cast<int>(height),
-                    xbrz::ColorFormat::ARGB, xbrz::ScalerCfg{},
-                    static_cast<int>(first), static_cast<int>(last));
-                return;
-            }
-#endif
             if (backend == TwoDFilter::sharp_bilinear || backend == TwoDFilter::crt) {
                 scale_soft(backend, factor, source, filtered, width, height, first, last);
             } else {
@@ -401,15 +385,6 @@ void apply_two_d_filter(
         [&](std::uint32_t slice_first, std::uint32_t slice_last) {
             const auto y_first = band_first + slice_first;
             const auto y_last = band_first + slice_last;
-#ifdef STARFOX_ENABLE_XBRZ
-            if (backend == TwoDFilter::xbrz) {
-                xbrz::scale(factor, source, filtered,
-                    static_cast<int>(width), static_cast<int>(height),
-                    xbrz::ColorFormat::ARGB, xbrz::ScalerCfg{},
-                    static_cast<int>(y_first), static_cast<int>(y_last));
-                return;
-            }
-#endif
             if (backend == TwoDFilter::sharp_bilinear || backend == TwoDFilter::crt) {
                 scale_soft(backend, factor, source, filtered, width, height, y_first, y_last);
             } else {

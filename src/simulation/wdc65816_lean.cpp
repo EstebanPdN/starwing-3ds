@@ -33,13 +33,6 @@ std::uint32_t starfox_bus_write_address[16];
 std::uint8_t starfox_bus_write_value[16];
 #endif
 
-#ifdef STARFOX_LEAN_PROFILE
-// Host-only measurement: executions per 24-bit program address, and the
-// addresses touched since the harness last cleared them.
-std::uint32_t* starfox_lean_profile;
-std::uint32_t* starfox_lean_touched;
-std::uint32_t starfox_lean_touched_count;
-#endif
 
 #include "wdc65816_registers.hpp"
 
@@ -242,15 +235,7 @@ LEAN_LOOP_ATTRIBUTES std::size_t lean_execute(::WDC65C816& cpu, const Fast65816T
     (void)ip0; (void)bus; (void)ob; (void)wrb; (void)watch_base; (void)watch_size; (void)watch; (void)watch_seen; (void)trapped;
 
 #define LEAN_IP() (static_cast<u32>(reinterpret_cast<uptr>(pc) - 1U - reinterpret_cast<uptr>(pc_base)))
-#ifdef STARFOX_LEAN_PROFILE
-#define LEAN_PROFILE_STEP(ip_value) do { \
-        const u32 at_ = (pbr | (static_cast<u32>(ip_value) & 0xffffU)) & 0xffffffU; \
-        if (starfox_lean_profile != nullptr && ++starfox_lean_profile[at_] == 1U) \
-            starfox_lean_touched[starfox_lean_touched_count++] = at_; \
-    } while (false)
-#else
 #define LEAN_PROFILE_STEP(ip_value) do {} while (false)
-#endif
 #define LEAN_DISPATCH do { \
         if (LEAN_UNLIKELY(pc >= pc_limit)) goto slow; \
         --remaining; \
