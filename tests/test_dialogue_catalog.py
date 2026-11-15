@@ -19,6 +19,17 @@ dialogue_header = importlib.util.module_from_spec(dialogue_spec)
 dialogue_spec.loader.exec_module(dialogue_header)
 
 
+def require_private_inputs(test, *paths):
+    """Skip a test whose cartridge-derived catalog inputs are not supplied.
+
+    These files are generated from the game and kept out of the repository
+    (see .gitignore), so public checkouts and CI run only the other checks.
+    """
+    missing = [path for path in paths if not (ROOT / path).exists()]
+    if missing:
+        test.skipTest("private catalog input not supplied: " + ", ".join(missing))
+
+
 class DialogueCatalogTests(unittest.TestCase):
     def test_source_punctuation_display(self):
         self.assertEqual(dialogue_header.source_display_text("slippy slippy##"),
@@ -26,6 +37,8 @@ class DialogueCatalogTests(unittest.TestCase):
         self.assertEqual(dialogue_header.source_display_text("hello!"), "hello!")
 
     def test_font_covers_translated_catalogs(self):
+        require_private_inputs(self, "assets/localization/upstream-dialogue.json",
+                               "assets/localization/ex-translations.tsv")
         glyphs = font_import.parse_bdf((ROOT / "assets/fonts/misaki_gothic.bdf").read_text())
         catalog = json.loads((ROOT / "assets/localization/upstream-dialogue.json").read_text(encoding="utf-8"))
         required = set()
@@ -39,6 +52,9 @@ class DialogueCatalogTests(unittest.TestCase):
         self.assertEqual(missing, [], "Missing Unicode glyph codepoints")
 
     def test_ex_translation_ids_and_languages(self):
+        require_private_inputs(self, "assets/localization/ex-dialogue.json",
+                               "assets/localization/ex-translations.tsv",
+                               "include/starfox/localization/ex_dialogue_catalog.hpp")
         source = json.loads((ROOT / "assets/localization/ex-dialogue.json").read_text())
         source_ids = {message["id"] for message in source["messages"]}
         with (ROOT / "assets/localization/ex-translations.tsv").open(encoding="utf-8", newline="") as stream:
@@ -73,6 +89,8 @@ class DialogueCatalogTests(unittest.TestCase):
         source = ROOT / "upstream-ultrastarfox/SF/MSG"
         if not source.exists():
             self.skipTest("upstream source submodule unavailable")
+        require_private_inputs(self, "assets/localization/spanish-original.txt",
+                               "assets/localization/upstream-dialogue.json")
         expected = catalog_import.import_catalog(source, ROOT / "assets/localization/spanish-original.txt")
         actual = json.loads((ROOT / "assets/localization/upstream-dialogue.json").read_text(encoding="utf-8"))
         self.assertEqual(actual, expected)
@@ -89,6 +107,7 @@ class DialogueCatalogTests(unittest.TestCase):
                 catalog_import.read_script(script)
 
     def test_ex_catalog_has_unique_ids_and_valid_addresses(self):
+        require_private_inputs(self, "assets/localization/ex-dialogue.json")
         data = json.loads((ROOT / "assets/localization/ex-dialogue.json").read_text())
         records = data["messages"]
         self.assertEqual(len(records), 406)
