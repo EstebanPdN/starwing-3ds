@@ -13,14 +13,24 @@
 #include <vector>
 #include <unordered_map>
 
+// Save-state field serialization. Writer appends fields and Reader reads them
+// back in the same order; that order is each component's schema. Used by the
+// engine's serialized components and the 3DS autosave.
 namespace starfox::state {
 
 // Explicit little-endian fields only. Never persist object memory, pointers,
 // padding, size_t-dependent containers, or a compiler's struct layout.
+// operator() appends integers and enums at their own width, bool as one byte,
+// floats by bit pattern, std::array element by element, std::vector and
+// std::unordered_map after a u32 count (maps in ascending key order) and
+// std::optional after a presence byte. Other class types need a
+// serialize(archive, value) overload found by argument-dependent lookup.
 class Writer {
 public:
     template<class... T> void operator()(const T&... fields) { (value(fields), ...); }
     [[nodiscard]] const std::vector<std::uint8_t>& bytes() const noexcept { return bytes_; }
+    // Writes the elements without a length prefix; the length is part of the
+    // component schema.
     template<class T, std::size_t N> void fixed(std::span<T,N> fields) {
         if constexpr (std::same_as<std::remove_cv_t<T>,std::uint8_t>)
             bytes_.insert(bytes_.end(),fields.begin(),fields.end());
@@ -75,6 +85,10 @@ private:
     std::vector<std::uint8_t> bytes_;
 };
 
+// Reads fields in the order Writer wrote them. Throws std::runtime_error for
+// input above 64 MiB, truncation, an invalid bool, a non-canonical map, or a
+// count larger than the remaining input or the 64 MiB allocation budget.
+// finish() rejects trailing bytes.
 class Reader {
 public:
     explicit Reader(std::span<const std::uint8_t> bytes) : bytes_(bytes) {

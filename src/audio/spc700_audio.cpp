@@ -22,6 +22,9 @@
 namespace starfox::audio {
 namespace {
 
+// Offsets within the .spc snapshot that spc_save_spc/spc_load_spc exchange:
+// header registers (PC, A, X, Y, PSW, SP), 64 KiB of ARAM at $100 and the
+// DSP registers at $10100. kDspFlags is the DSP FLG register.
 constexpr std::size_t kSpcHeaderSize = 0x100U;
 constexpr std::size_t kSpcRamSize = 0x10000U;
 constexpr std::size_t kSpcRamOffset = kSpcHeaderSize;
@@ -71,6 +74,8 @@ struct CoreStateCopy {
 
 } // namespace
 
+// One SPC700/S-DSP instance with its own ARAM image, IPL upload decoder and
+// output filter. CommandStream selects which CPU port writes reach its driver.
 struct Spc700Audio::Impl {
     enum class CommandStream {
         music,
@@ -208,6 +213,10 @@ struct Spc700Audio::Impl {
         uploading = false;
     }
 
+    // Follows the IPL upload handshake in the CPU's port writes and stores
+    // data bytes directly in aram instead of emulating the IPL ROM: ports 2/3
+    // carry a block address, port 1 the transfer flag and then the data, and
+    // port 0 the token. A zero transfer flag starts the driver at the address.
     void consume_upload_write(const simulation::ApuPortWrite& write) {
         cpu_ports[write.port] = write.value;
         switch (upload_state) {
@@ -265,6 +274,10 @@ struct Spc700Audio::Impl {
         }
     }
 
+    // Renders one 50 ms tick into output: applies the port writes that
+    // command_stream accepts at their clock offsets (clamped to be
+    // non-decreasing), runs the SPC to the end of the tick and filters the
+    // PCM. rendered_frames counts completed SPC frames.
     void render(
         std::span<const simulation::ApuPortWrite> writes,
         std::vector<std::int16_t>& output,
@@ -334,10 +347,10 @@ struct Spc700Audio::Impl {
                 // never discard an Arwing engine or let an effect key-off a
                 // music voice.
                 // Star Fox normally reserves port 3 for effects, but its
-                // $01/$02 PAUSESND commands are global driver controls. The
-                // PC port deliberately runs music and effects on independent
-                // SPC instances, so deliver those two controls to both stems;
-                // otherwise gameplay pauses silence neither music driver.
+                // $01/$02 PAUSESND commands are global driver controls. Split
+                // stems run music and effects on independent SPC instances,
+                // so deliver those two controls to both stems; otherwise a
+                // gameplay pause would not reach the music driver.
                 const auto global_pause_command = write.port == 3U
                     && (write.value == 0x01U || write.value == 0x02U);
                 const auto accepts_command = command_stream == CommandStream::cartridge
@@ -389,7 +402,7 @@ struct Spc700Audio::Impl {
 
 #ifdef __3DS__
 // The two SPC stems have independent emulated RAM, DSP and filters. Run the
-// effects stem on the Old 3DS system core while the application core renders
+// effects stem on core 1 (the system core) while the application core renders
 // music. If APT cannot grant core 1, keep the exact sequential path below.
 struct Spc700Audio::ParallelRenderer {
     LightEvent requested{};
@@ -404,9 +417,9 @@ struct Spc700Audio::ParallelRenderer {
     std::exception_ptr failure{};
 
     ParallelRenderer() {
-        // 70-80% of core 1 makes a parallel SPC stem worthwhile even on Old
-        // 3DS. APT grants only the available budget; a failed request leaves
-        // both stems on the application core.
+        // Request 70% of core 1, then 50%. APT grants only the available
+        // budget; if both requests fail, no worker starts and both stems stay
+        // on the application core.
         if (R_FAILED(APT_SetAppCpuTimeLimit(70U))
             && R_FAILED(APT_SetAppCpuTimeLimit(50U))) return;
         LightEvent_Init(&requested, RESET_ONESHOT);
@@ -495,6 +508,8 @@ void Spc700Audio::load_state(std::span<const std::uint8_t> bytes) {
 #ifdef __3DS__
     const auto parallel_stems_enabled = parallel_stems_enabled_;
 #endif
+    // The envelope stores the schema little-endian at offset 8; its low byte
+    // (1 split stems, 2 cartridge) selects the layout before unpacking.
     const bool cartridge = bytes.size() >= 12U && bytes[8] == 2U;
     state::Reader reader{state::unpack(bytes, cartridge ? 0x53504302U : 0x53504301U, 0U)};
     Spc700Audio restored{cartridge ? Routing::cartridge : Routing::split_stems};

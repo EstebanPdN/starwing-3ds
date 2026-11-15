@@ -35,6 +35,10 @@ public:
         return bytes_[position_++];
     }
 
+    // BPS variable-length integer: 7 data bits per byte, least significant
+    // group first, high bit set on the last byte, plus an implicit offset per
+    // continuation byte so each value has one encoding. Values that do not
+    // fit 64 bits are rejected.
     std::uint64_t number() {
         std::uint64_t result{};
         std::uint64_t shift{1U};
@@ -84,6 +88,7 @@ std::uint32_t read_little_u32(
         | (static_cast<std::uint32_t>(bytes[offset + 3U]) << 24U);
 }
 
+// Copy offsets store the sign in bit 0 and the magnitude in the bits above.
 std::int64_t signed_offset(std::uint64_t encoded) {
     const auto magnitude = static_cast<std::int64_t>(encoded >> 1U);
     return (encoded & 1U) != 0U ? -magnitude : magnitude;
@@ -111,6 +116,7 @@ std::vector<std::uint8_t> apply_bps_patch(
         fail("missing BPS1 signature");
     }
 
+    // The patch ends with the source, target and patch CRC-32s.
     const auto source_crc_offset = patch.size() - 12U;
     const auto target_crc_offset = patch.size() - 8U;
     const auto patch_crc_offset = patch.size() - 4U;

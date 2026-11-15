@@ -2,18 +2,25 @@
 
 #include <cstdint>
 
+// Per-tick controller input: ButtonMask (Button bits from buttons.hpp, in the
+// SNES joypad layout) and TickInput, which GameSimulation::tick consumes once
+// per 20 Hz tick.
 namespace starfox::input {
 
 using ButtonMask = std::uint16_t;
 
+// Buttons held at the tick, and the buttons newly pressed or released since
+// the previous tick.
 struct TickInput {
     ButtonMask held{};
     ButtonMask pressed{};
     ButtonMask released{};
 };
 
-// Presentation may poll a PC controller three times for every gameplay tick.
-// This latch retains transitions until the 20 Hz simulation consumes them.
+// Presentation may poll the controller several times per gameplay tick (three
+// at 60 Hz). This latch retains transitions until the 20 Hz simulation
+// consumes them: consume() returns the latest held state with every press and
+// release since the last consume() or reset(), then clears those edges.
 class InputLatch {
 public:
     void sample(ButtonMask held) noexcept {

@@ -1,3 +1,9 @@
+// Host trace of game start-up: runs the player map MAPP, points PLAYPT at the
+// player object, calls INITGAME_STRATS_L natively, then runs the strategy
+// scheduler for [ticks] ticks (default 1). Exits 0 when the expected objects,
+// pointers and strategy work appear.
+// Usage: starfox_game_init_trace SF.SFC SYMBOLS.TXT [ticks]
+// CTest: starfox_upstream_game_init (20 ticks).
 #include "starfox/assets/rom.hpp"
 #include "starfox/simulation/map_vm.hpp"
 #include "starfox/simulation/object_pool.hpp"
@@ -51,6 +57,8 @@ int main(int argc, char** argv) {
         }
         const auto player = objects.first_active();
         starfox::simulation::Wdc65816Registers registers;
+        // Original-layout object records are 56 bytes from $0338; X addresses
+        // the player's record.
         registers.x = static_cast<std::uint16_t>(0x0338U + (player - 1U) * 56U);
         const auto playpt_address = ram_symbol(symbols, "PLAYPT");
         const auto internal_playpt_address = ram_symbol(symbols, "INTERNALPLAYPT");

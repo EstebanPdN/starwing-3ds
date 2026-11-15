@@ -1,3 +1,10 @@
+// Host probe of the planet sprite path on LEVEL1_1: runs SETUP_PLANETS_L,
+// SETUPPLANETPAL_L, DRAWPLANETSPRITES, DMA256SCREEN and SWITCHBUFFER_FAST
+// natively, prints their instruction counts and any unknown Super FX launches,
+// and optionally renders BG1, BG2 and OBJ to a BMP (STARFOX_PLANET_BG1_ONLY
+// set: BG1 only). Exits 1 if an unknown Super FX launch occurred.
+// Usage: starfox_planet_probe SF.SFC SYMBOLS.TXT [output.bmp]
+// CTest: starfox_upstream_planet_probe.
 #include "starfox/assets/rom.hpp"
 #include "starfox/render/background_renderer.hpp"
 #include "starfox/render/framebuffer.hpp"

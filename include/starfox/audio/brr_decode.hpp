@@ -1,6 +1,9 @@
 #pragma once
 #include <stdint.h>
 #include "starfox/audio/saturate.hpp"
+// BRR sample decoding that tools/cmake/SpcDspOptimizations.cmake substitutes
+// for SPC_DSP::decode_brr in the pinned SPC core. tests/brr_decode_test.cpp
+// compares it with the original algorithm for every header byte.
 namespace starfox { namespace audio {
 // Four BRR samples share the range and predictor. Select those once and keep
 // the previous two samples in registers instead of rereading the ring buffer.
@@ -20,6 +23,11 @@ inline void decode_brr_group(unsigned nybbles, unsigned shift, int* pos) {
         p2=p1>>1;p1=sample;
     }
 }
+// Decodes four samples. nybbles holds two BRR data bytes (the first in bits
+// 15-8); header is the block header (range in bits 7-4, filter in bits 3-2).
+// pos points at the voice's next four ring-buffer slots: pos[10] and pos[11]
+// hold the two previous samples, and each result is also stored 12 slots
+// later in the duplicated buffer.
 inline void decode_brr_four(unsigned nybbles, unsigned header, int* pos) {
     const unsigned shift=header>>4;
     if(shift>=13) {

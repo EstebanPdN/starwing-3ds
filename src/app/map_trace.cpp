@@ -1,3 +1,9 @@
+// Host trace of one map script: runs MAP_SYMBOL in the map VM, advancing past
+// each wait until the script ends or [max waits] (default 100000) is reached,
+// then prints the wait count, live objects and how many map controls the VM
+// skipped as unsupported. Exits 0 only if the script ended.
+// Usage: starfox_map_trace SF.SFC SYMBOLS.TXT MAP_SYMBOL [max waits]
+// CTest: starfox_upstream_map_trace (MAP1_1A).
 #include "starfox/assets/rom.hpp"
 #include "starfox/simulation/map_vm.hpp"
 #include "starfox/simulation/object_pool.hpp"

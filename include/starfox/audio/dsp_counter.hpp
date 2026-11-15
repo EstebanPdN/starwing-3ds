@@ -1,6 +1,9 @@
 #pragma once
 #include <stdint.h>
 
+// Division-free S-DSP rate counter test. SpcDspOptimizations.cmake (in
+// tools/cmake) substitutes it for the modulo in the pinned
+// SPC_DSP::read_counter.
 namespace starfox { namespace audio {
 // Exact uint32 divisibility using the odd modular inverse and a rotation.
 // The table is precomputed as inverse(rate >> ctz(rate)) mod 2^32,
@@ -41,6 +44,8 @@ static constexpr DspCounterDivisor dsp_counter_divisors[32] = {
     {0x00000001U,0x7fffffffU,1}, // 2
     {0x00000001U,0xffffffffU,0}, // 1
 };
+// True when counter is a multiple of the period of DSP rate index rate (0-31,
+// periods as listed above), i.e. when counter % period == 0.
 inline bool dsp_counter_fires(uint32_t counter, unsigned rate) noexcept {
     const auto& d=dsp_counter_divisors[rate];
     const uint32_t product=counter*d.inverse;

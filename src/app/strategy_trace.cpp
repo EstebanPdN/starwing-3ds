@@ -1,3 +1,10 @@
+// Host trace of native strategy execution: starts MAP_SYMBOL, advances it one
+// distance unit so it spawns objects, then runs the strategy of the first
+// active object that has one and prints its instruction count and position.
+// With [ticks], it instead ticks every strategy that many times and prints
+// totals.
+// Usage: starfox_strategy_trace SF.SFC SYMBOLS.TXT MAP_SYMBOL [ticks]
+// CTest: starfox_upstream_strategy_trace (MAP1_1A, 1 tick).
 #include "starfox/assets/rom.hpp"
 #include "starfox/simulation/map_vm.hpp"
 #include "starfox/simulation/object_pool.hpp"

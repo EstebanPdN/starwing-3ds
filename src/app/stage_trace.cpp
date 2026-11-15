@@ -1,3 +1,15 @@
+// Host trace of a stage: boots GameSimulation at MAP_SYMBOL, runs [ticks]
+// ticks (default 1000; stops early if the map ends) and prints flow, map,
+// player and display state, shape decode coverage and unhandled Super FX
+// launches. [input] is a ButtonMask (0x prefix accepted) held every tick, or,
+// with [single-press-tick], applied for one tick there and every 300 after.
+// Environment: STARFOX_GOD_MODE, STARFOX_TRACE_TRANSITIONS, STARFOX_DUMP_OAM,
+// STARFOX_FORCE_EXIT (writes STARFOX_FORCE_EXIT_VALUE, default 1, to
+// LEVELFINISHED at tick 400).
+// Usage: starfox_stage_trace SF.SFC SYMBOLS.TXT MAP_SYMBOL [ticks] [input]
+//        [single-press-tick]
+// CTest: starfox_upstream_stage_trace (LEVEL1_1, 100 ticks) and
+// starfox_upstream_route_lifecycle (LEVEL1_3, 500 ticks).
 #include "starfox/assets/rom.hpp"
 #include "starfox/assets/shape_decoder.hpp"
 #include "starfox/simulation/game_simulation.hpp"

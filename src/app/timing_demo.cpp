@@ -1,3 +1,6 @@
+// Host demo of FixedStepClock: one second of 60 Hz frame times must produce
+// exactly kSimulationHz (20) gameplay steps. Exits 0 when the count matches.
+// Usage: starfox_timing_demo
 #include "starfox/timing/fixed_step.hpp"
 
 #include <chrono>

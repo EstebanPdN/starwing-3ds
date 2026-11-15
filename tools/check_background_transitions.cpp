@@ -1,3 +1,14 @@
+// Host check of background state over a level run. Boots LEVEL (a playable
+// level entry symbol) with god mode, no input, unlocked 20 FPS timing, MSU-1
+// off and the SPC output ports fed back each tick, then prints every change of
+// flow, background and BG2 PPU setup (and BG_5_1I/BG_5_1E orbital scroll)
+// within TICKS ticks. If the final background is BG_2_6A, it checks the colony
+// archive, the HDMA table and, in tunnel mode, the tunnel gradient against
+// references. With NEW_CAPTURE_DIRECTORY (which must not exist yet) it writes
+// isolated BG2/BG3 BMP captures. Mismatch counts are printed, not enforced;
+// the tunnel-gradient boundary probe throws on its first mismatch.
+// Usage: starfox_background_transition_check ROM SYMBOLS LEVEL TICKS(1..8000)
+//        [NEW_CAPTURE_DIRECTORY]
 #include "starfox/simulation/game_simulation.hpp"
 #include "starfox/audio/spc700_audio.hpp"
 #include "starfox/render/background_renderer.hpp"

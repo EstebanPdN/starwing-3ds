@@ -1,3 +1,14 @@
+// Host preview of a scene after [ticks] gameplay ticks (default 100): draws
+// the BG and OBJ layers, dust, shadows, particles, scaled text and decoded
+// models with the software renderer into OUTPUT.bmp and prints PPU, camera
+// and object diagnostics. MAP is a map entry symbol; CONTINUE, POSTLEVELMAP
+// (the planet map after a synthetic first-stage clear) and ENDGAME (LEVEL1_1
+// with LEVELFINISHED set to 6) select special scenes. Exits 1 if no object
+// was drawn.
+// Environment: STARFOX_DUMP_OAM, STARFOX_DUMP_OBJECTS, STARFOX_NO_OVERLAYS,
+// STARFOX_NO_OAM, STARFOX_NO_METERS.
+// Usage: starfox_stage_preview SF.SFC SYMBOLS.TXT
+//        MAP|CONTINUE|POSTLEVELMAP|ENDGAME OUTPUT.bmp [ticks]
 #include "starfox/assets/rom.hpp"
 #include "starfox/assets/shape_decoder.hpp"
 #include "starfox/input/buttons.hpp"
@@ -109,9 +120,9 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Planet maps are a full 256x224 PPU composition. Cropping them to
-        // the 224x192 Super FX viewport hid Corneria's bottom-edge Arwing and
-        // made the transition probe report a false missing-ship result.
+        // Planet maps are a full 256x224 PPU composition. The 224x192 Super FX
+        // viewport would crop Corneria's bottom-edge Arwing, and the transition
+        // probe would then report a missing ship.
         starfox::render::Framebuffer framebuffer{
             post_level_map ? 256U : 224U,
             post_level_map ? 224U : 192U};
@@ -305,7 +316,7 @@ int main(int argc, char** argv) {
                 ppu, framebuffer, starfox::render::TilePriorityPass::high);
             // The planet-map Arwing uses OBJ priority 3 so it remains above
             // every route/planet layer. Match the runtime's final OAM pass;
-            // omitting it made transition previews falsely show no ship.
+            // without it, transition previews show no ship.
             if (oam_enabled) sprite_renderer.draw_objects(ppu, framebuffer, 3U);
         } else {
             background_renderer.draw_bg2(

@@ -2,6 +2,8 @@
 
 #include "starfox/input/input_latch.hpp"
 
+// Button bits for input::ButtonMask, shared by the engine, the 3DS input
+// mapping and host tests/tools.
 namespace starfox::input {
 
 // Native input uses the original SNES joypad bit layout so strategy code can

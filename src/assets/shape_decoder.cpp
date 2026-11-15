@@ -10,6 +10,7 @@
 namespace starfox::assets {
 namespace {
 
+// Command bytes of the point, face and BSP streams.
 constexpr std::uint8_t kEndShape = 0;
 constexpr std::uint8_t kPoints8 = 4;
 constexpr std::uint8_t kPoints16 = 8;
@@ -276,6 +277,10 @@ bool ShapeDecoder::looks_like_shape_header(std::uint32_t address) const noexcept
 }
 
 void ShapeDecoder::decode_points(Shape& shape) const {
+    // Scan to the first Frames table, following Jumps, for its declared count
+    // and the number of leading entries that reach a valid command. A stream
+    // without one has a single frame. Relative offsets (Frames entries and
+    // Jumps) count from the second byte of their 16-bit offset word.
     const auto first_frame_counts = [this, &shape]() {
         auto cursor = shape.header.points_address;
         for (std::size_t command_count = 0; command_count < 4096; ++command_count) {
@@ -326,6 +331,7 @@ void ShapeDecoder::decode_points(Shape& shape) const {
     }();
     shape.declared_frame_count = first_frame_counts.first;
 
+    // Decodes one frame; each Frames table jumps to entry selected_frame % count.
     const auto decode_frame = [this, &shape](std::uint32_t selected_frame) {
         auto cursor = shape.header.points_address;
         ShapeFrame frame;
@@ -419,6 +425,7 @@ void ShapeDecoder::decode_faces(Shape& shape) const {
         return face;
     };
 
+    // A face list shared by several BSP nodes is decoded once.
     std::unordered_set<std::uint32_t> decoded_face_lists;
     const auto decode_face_list = [this, &shape, &decode_face, &decoded_face_lists](
                                       std::uint32_t address) {
@@ -500,6 +507,7 @@ void ShapeDecoder::decode_faces(Shape& shape) const {
         visit(root);
     };
 
+    // Linear face stream; BspInit hands the rest of the shape to decode_bsp.
     for (std::size_t command_count = 0; command_count < 65'536; ++command_count) {
         const auto opcode = rom_.read8(cursor++);
         if (in_faces && opcode >= 2U && opcode <= 12U) {
@@ -581,6 +589,8 @@ void ShapeDecoder::decode_colours(Shape& shape, std::uint16_t minimum_count) con
         shape.colour_words.push_back(word);
         ColourMaterial material;
         material.raw = word;
+        // Bits 15-14 = 10: a COLANIM list (count byte, then material words) at
+        // $8000 plus the low 14 bits, in the colour-table bank.
         if ((word & 0xc000U) == 0x8000U) {
             const auto animation = (static_cast<std::uint32_t>(colour_table_bank_) << 16U)
                 | 0x8000U | (word & 0x3fffU);
@@ -613,6 +623,8 @@ void ShapeDecoder::decode_texture(Shape& shape, std::uint16_t descriptor) const 
         return;
     }
 
+    // Texture descriptor: bit 13 selects the high texel nibble, bits 12-8 the
+    // coordinate set and bits 7-0 the TEXTUREADDRTAB entry.
     const auto texture_index = static_cast<std::uint8_t>(descriptor);
     const auto coordinate_index = static_cast<std::uint8_t>((descriptor >> 8U) & 0x1fU);
     const auto texture_count = static_cast<std::uint32_t>(
@@ -648,6 +660,7 @@ void ShapeDecoder::decode_texture(Shape& shape, std::uint16_t descriptor) const 
     const auto width = static_cast<std::size_t>(texture.u_mask) + 1U;
     const auto height = static_cast<std::size_t>(texture.v_mask) + 1U;
     texture.texels.reserve(width * height);
+    // Texel rows are 256 bytes apart; each byte holds two 4-bit texels.
     const auto high_nibble = (descriptor & 0x2000U) != 0U;
     const auto texture_file_offset = static_cast<std::size_t>(
         ((texture.address >> 16U) & 0x7fU) * 0x8000U

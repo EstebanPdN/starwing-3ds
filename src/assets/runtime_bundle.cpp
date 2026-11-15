@@ -12,6 +12,7 @@
 namespace starfox::assets {
 std::uint32_t runtime_companion_manifest(std::span<const std::uint8_t> (*resource)(int)) {
     if(!resource) throw std::invalid_argument("Missing runtime resource provider");
+    // Manifest order. 102 and 109 are the symbol listings and hash as text.
     constexpr std::array identifiers{101,102,108,109,120,121,122,123,124,125,126};
     std::array<RuntimeManifestResource,identifiers.size()> resources{};
     for(std::size_t i=0;i<identifiers.size();++i) {
@@ -24,6 +25,7 @@ namespace {
 
 constexpr std::array<std::uint8_t, 8> magic{
     'S', 'F', 'O', 'X', 'A', 'S', '0', '1'};
+// Magic (8), manifest (4), four payload sizes (16) and four CRC-32s (16).
 constexpr auto header_size = std::size_t{44U};
 constexpr auto trailer_size = std::size_t{4U};
 constexpr auto maximum_bundle_size = std::size_t{64U * 1024U * 1024U};
@@ -178,6 +180,7 @@ RuntimeBundlePayload decode_runtime_bundle(
             "Starfox-Assets.BIN failed its file checksum"};
     }
 
+    // The exact-size check above keeps every payload subspan in range.
     auto cursor = header_size;
     const auto take = [&bytes, &cursor](std::size_t size) {
         const auto result = bytes.subspan(cursor, size);

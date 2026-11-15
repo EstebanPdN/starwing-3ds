@@ -10,6 +10,9 @@
 namespace starfox::assets {
 namespace {
 
+// Reads the crunched stream backwards from its end: big-endian 32-bit words
+// are loaded from high to low addresses and consumed from bit 0 upward. The
+// highest set bit of the first word marks the end of its data bits.
 class ReverseBits {
 public:
     explicit ReverseBits(std::span<const std::uint8_t> source)
@@ -39,6 +42,8 @@ public:
 
     [[nodiscard]] std::size_t cursor() const noexcept { return cursor_; }
 
+    // Returns count (at most 24) bits; the first bit taken is the most
+    // significant bit of the result.
     [[nodiscard]] std::uint32_t take(std::uint32_t count) {
         if (count > 24U) {
             throw std::invalid_argument{"decrunch bit request is too large"};
@@ -72,6 +77,7 @@ private:
     std::uint32_t output_size_{};
 };
 
+// Inverse of RomImage::lorom_offset() for banks $00-$7f.
 std::uint32_t offset_to_lorom(std::size_t offset) {
     const auto bank = static_cast<std::uint32_t>(offset / 0x8000U);
     const auto address = static_cast<std::uint32_t>(offset % 0x8000U) + 0x8000U;
@@ -114,6 +120,11 @@ DecrunchResult decrunch_reverse(const RomImage& rom, std::uint32_t end_address) 
         }
     };
 
+    // Output is produced from its last byte backwards. Each step is an
+    // optional literal run (3-bit count, extended by 4-, 10- or 18-bit
+    // counts) followed, while output remains, by a back-reference: a 2-bit
+    // length class (extended above 4 bytes) and an 8-, 12-, 14- or 16-bit
+    // offset to bytes already written above the destination.
     while (destination != 0U) {
         auto raw_count = bits.take(3U);
         if (raw_count != 0U) {

@@ -1,3 +1,8 @@
+// Host preview of one model: decodes SHAPE by symbol name and draws it with
+// the software renderer, turning 2048 angle units (1/32 turn) every three
+// output frames and interpolating the frames between. Writes OUTPUT.bmp, or
+// numbered OUTPUT_NNN.bmp files when [frames] (1-600) is above 1.
+// Usage: starfox_shape_preview ROM SYMBOLS SHAPE OUTPUT.bmp [frames]
 #include "starfox/assets/rom.hpp"
 #include "starfox/assets/shape_decoder.hpp"
 #include "starfox/render/framebuffer.hpp"
