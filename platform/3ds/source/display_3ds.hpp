@@ -77,7 +77,6 @@ public:
     [[nodiscard]] bool present(const render::Framebuffer& indexed,
         const render::Palette256& palette, bool reuse_source = false,
         const render::Framebuffer* right = nullptr, bool wait_for_gpu = false);
-    [[nodiscard]] bool present_black();
     // BG2 tile geometry and palette expansion run on PICA200. The foreground
     // framebuffer must contain only the world, HUD and text; write coverage
     // supplies alpha so an explicitly drawn palette index zero stays opaque.
@@ -135,7 +134,6 @@ public:
     // Before HOME/POWER: let the last submitted frame finish while the
     // application still owns the GPU. Emits no new GPU work.
     [[nodiscard]] bool wait_gpu_idle(std::uint32_t timeout_ms) noexcept;
-    [[nodiscard]] bool cpu_presentation() const noexcept { return cpu_fallback_; }
     void set_wide(bool value) noexcept { wide_ = value; }
     [[nodiscard]] std::size_t bg2_fragment_count() const noexcept {
         return tile_quads_.size();

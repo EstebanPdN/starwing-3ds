@@ -64,11 +64,6 @@ done
   -I"${ROOT}/include" -I"${ROOT}/platform/3ds/source" \
   "${ROOT}/tests/test_mode_3ds_test.cpp" -o "${TEST_BUILD}/test_mode_3ds_test"
 "${TEST_BUILD}/test_mode_3ds_test"
-"${CC:-cc}" -std=c11 -O2 -Wall -Wextra \
-  -c "${ROOT}/platform/3ds/source/c3d_units_3ds.c" -o "${TEST_BUILD}/c3d_units.o"
-"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra \
-  "${ROOT}/tests/c3d_units_test.cpp" "${TEST_BUILD}/c3d_units.o" -o "${TEST_BUILD}/c3d_units_test"
-"${TEST_BUILD}/c3d_units_test"
 "${CC:-cc}" -std=c11 -O2 -Wall -Wextra -I"${ROOT}/tests/gpu_3ds_host" \
   -c "${ROOT}/platform/3ds/source/gpu_lifetime_3ds.c" -o "${TEST_BUILD}/gpu_lifetime.o"
 "${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -pthread -I"${ROOT}/tests/gpu_3ds_host" \

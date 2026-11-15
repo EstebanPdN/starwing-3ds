@@ -78,28 +78,6 @@ inline void expand_frame(const render::Framebuffer& frame, const Colours16& colo
     }
 }
 
-// The same expansion for one rectangle of the frame; texels outside it keep
-// what an earlier expansion left in the staging buffer. For a frame that
-// Frame3ds::wide_frame_patch() says differs from the staged one only inside
-// `bounds`, this brings the staging buffer to what expand_frame() produces.
-inline void expand_frame_area(const render::Framebuffer& frame, const Colours16& colours,
-    bool foreground, std::uint16_t* out, std::uint32_t stride,
-    std::uint32_t x, std::uint32_t y, std::uint32_t width, std::uint32_t height) noexcept {
-    const auto frame_width = frame.width();
-    const auto* pixels = frame.pixels().data();
-    const auto coverage = frame.write_coverage();
-    const auto* mask = coverage.size() == frame.pixels().size()
-        ? coverage.data() : pixels;
-    for (std::uint32_t row = y; row < y + height; ++row) {
-        const auto source = static_cast<std::size_t>(row) * frame_width + x;
-        auto* target = out + static_cast<std::size_t>(row) * stride + x;
-        if (foreground)
-            expand_masked_row(pixels + source, mask + source, colours, target, width);
-        else
-            expand_opaque_row(pixels + source, colours, target, width);
-    }
-}
-
 // What a foreground staging buffer is known to hold, row by row: the number
 // of leading texels known to be zero. A new buffer is unknown (zero).
 struct ForegroundRows {

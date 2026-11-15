@@ -1256,7 +1256,7 @@ const render::Framebuffer& Frame3ds::draw(
             // software pass, which clears it first, or replays the commands
             // into it, which clears it too. Its 96 KB are left alone.
             native_commands_.reset(400,240);
-            native_commands_.accept_edge_runs(native_edge_runs_);
+            native_commands_.accept_edge_runs(true);
             eye_world.record_to(&native_commands_);
         } else eye_world.clear(0U);
         const int eye = stereo ? (side == 0U ? -int(stereo_strength_)
@@ -1737,16 +1737,6 @@ const render::Framebuffer& Frame3ds::draw(
     }
     if ((mode2_gameplay && gpu_bg2) || native_scene_active_) wide_frame_.end_write_coverage();
     if (!keep_wide_foreground) {
-        // A patched frame names the revision it was patched from and where;
-        // any other composition starts a frame with no such relation.
-        wide_foreground_patch_.from_revision = 0U;
-        wide_foreground_patch_.count = 0U;
-        if (patch_wide_foreground) {
-            wide_foreground_patch_.from_revision = wide_foreground_revision_;
-            wide_foreground_patch_.count = top_hud_damage_count_;
-            std::copy_n(top_hud_damage_.begin(), top_hud_damage_count_,
-                wide_foreground_patch_.areas.begin());
-        }
         if (++wide_foreground_revision_ == 0U) wide_foreground_revision_ = 1U;
     }
     wide_foreground_valid_ = native_scene_active_ && (mode2_gameplay || native_mode1_background) && !stereo;
@@ -2233,7 +2223,7 @@ void Frame3ds::refresh_top_hud_spans() {
     const auto& pixels = top_hud_cache_.pixels();
     const auto size = static_cast<std::uint32_t>(pixels.size());
     struct Range { std::uint32_t first, last; };
-    std::array<Range, WideFramePatch::capacity> ranges{};
+    std::array<Range, top_hud_damage_capacity> ranges{};
     std::size_t count = 0U;
     for (std::size_t i = 0U; i < top_hud_damage_count_; ++i) {
         const auto& area = top_hud_damage_[i];

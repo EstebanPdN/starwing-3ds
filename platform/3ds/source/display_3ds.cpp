@@ -709,33 +709,6 @@ bool Display3ds::present(const render::Framebuffer& indexed,
     return true;
 }
 
-bool Display3ds::present_black() {
-    if (gpu_active_) {
-        if (!acquire_gpu_frame(250U)) return false;
-        C2D_TargetClear(top_, C2D_Color32(0, 0, 0, 255));
-        C2D_SceneBegin(top_);
-        C2D_ViewReset();
-        last_top_framebuffer_ = gfxGetFramebuffer(
-            GFX_TOP, GFX_LEFT, nullptr, nullptr);
-        C3D_FrameEnd(GX_CMDLIST_FLUSH);
-        frame_texture_valid_ = false;
-        cpu_frame_valid_ = false;
-        return true;
-    }
-    u16 width{}, height{};
-    auto* screen = starwing_cpu_top_framebuffer(&width, &height);
-    if (screen == nullptr || width != 240U || height != 400U)
-        return false;
-    std::memset(screen, 0, 400U * 240U * sizeof(std::uint16_t));
-    last_top_framebuffer_ = screen;
-    // Swap only the top screen; the bottom has its own presenter.
-    GSPGPU_FlushDataCache(screen, 400U * 240U * sizeof(std::uint16_t));
-    starwing_swap_cpu_top();
-    frame_texture_valid_ = false;
-    cpu_frame_valid_ = false;
-    return true;
-}
-
 bool Display3ds::eligible_mode2(
     const simulation::SnesPpuState& ppu) const noexcept {
     // The planner splits horizontal and vertical HDMA at exact scanline

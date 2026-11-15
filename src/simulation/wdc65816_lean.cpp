@@ -177,7 +177,7 @@ LEAN_LOOP_ATTRIBUTES std::size_t lean_execute(::WDC65C816& cpu, const Fast65816T
 #include "wdc65816_lean_ops.inl"
 #undef LEAN_TABLES
     Fast65816Core core;
-    core.attach(cpu, tables);
+    core.attach(cpu);
     auto& state = core.cpu_state;
     // Registers as 16-bit values in 32-bit locals; the flag words keep the
     // library's raw representation.
@@ -235,11 +235,9 @@ LEAN_LOOP_ATTRIBUTES std::size_t lean_execute(::WDC65C816& cpu, const Fast65816T
     (void)ip0; (void)bus; (void)ob; (void)wrb; (void)watch_base; (void)watch_size; (void)watch; (void)watch_seen; (void)trapped;
 
 #define LEAN_IP() (static_cast<u32>(reinterpret_cast<uptr>(pc) - 1U - reinterpret_cast<uptr>(pc_base)))
-#define LEAN_PROFILE_STEP(ip_value) do {} while (false)
 #define LEAN_DISPATCH do { \
         if (LEAN_UNLIKELY(pc >= pc_limit)) goto slow; \
         --remaining; \
-        LEAN_PROFILE_STEP(reinterpret_cast<uptr>(pc) - reinterpret_cast<uptr>(pc_base)); \
         entry = &table[*pc++]; \
         goto *entry->first; \
     } while (false)
@@ -362,12 +360,9 @@ LEAN_LOOP_ATTRIBUTES std::size_t lean_execute(::WDC65C816& cpu, const Fast65816T
 
 // 24-bit accesses: the second byte is the next address.
 #define LEAN_RD16_RAW(address, before, out) do { const u32 e_ = (address); LEAN_RD16_PAIR(e_, e_ + 1U, before, out); } while (false)
-#define LEAN_WR16_RAW(address, value, before) do { const u32 e_ = (address); LEAN_WR16_PAIR(e_, e_ + 1U, value, before); } while (false)
 // Bank zero accesses: both bytes wrap inside the bank.
 #define LEAN_RD8_ZERO(address, before, out) LEAN_RD8_RAW((address) & 0xffffU, before, out)
-#define LEAN_WR8_ZERO(address, value, before) LEAN_WR8_RAW((address) & 0xffffU, value, before)
 #define LEAN_RD16_ZERO(address, before, out) do { const u32 e_ = (address); LEAN_RD16_PAIR(e_ & 0xffffU, (e_ + 1U) & 0xffffU, before, out); } while (false)
-#define LEAN_WR16_ZERO(address, value, before) do { const u32 e_ = (address); LEAN_WR16_PAIR(e_ & 0xffffU, (e_ + 1U) & 0xffffU, value, before); } while (false)
 // The stack: high byte at S, low byte at S-1.
 #define LEAN_PUSH8(value, before) do { LEAN_WR8_RAW(S & 0xffffU, value, before); S = (S - 1U) & 0xffffU; } while (false)
 #define LEAN_PUSH16_BYTES(value, before) do { \
@@ -497,7 +492,6 @@ slow: {
             if (remaining >= lean_margin && trapped) pc_limit = host + (last < 0x1000U - 3U ? last : 0x1000U - 3U);
         }
         --remaining;
-        LEAN_PROFILE_STEP(ip);
         ++pc;
         entry = &table[opcode];
         goto *entry->first;

@@ -52,14 +52,6 @@ public:
             last_draw_valid_ = false;
         native_engine_enabled_=enabled; native_mode1_enabled_=mode1;
     }
-    // Whether the PICA world receives each polygon as a few slanted bands
-    // rather than one span per row. Off reproduces the reference raster.
-    void set_native_edge_runs(bool enabled) noexcept {
-        if (native_edge_runs_ != enabled) {
-            native_edge_runs_ = enabled;
-            last_draw_valid_ = false;
-        }
-    }
     // What the last PICA world was compiled from. The frame records it
     // packed; the full commands are rebuilt here, for whoever asks.
     const render::RasterCommands& native_commands() const {
@@ -109,20 +101,6 @@ public:
     // writes that frame, and only then. Never zero.
     [[nodiscard]] std::uint32_t wide_frame_revision() const noexcept {
         return wide_foreground_revision_;
-    }
-    // How the wide frame reached its current revision. When `from_revision`
-    // is not zero, the frame equals the one that carried that revision
-    // everywhere outside the first `count` areas (pixels and write
-    // coverage): a presenter still holding that revision may refresh those
-    // texels alone. Zero means the frame was composed again from its layers.
-    struct WideFramePatch {
-        static constexpr std::size_t capacity = 12U;
-        std::uint32_t from_revision{};
-        std::size_t count{};
-        std::array<HudRect, capacity> areas{};
-    };
-    [[nodiscard]] const WideFramePatch& wide_frame_patch() const noexcept {
-        return wide_foreground_patch_;
     }
     // Decode the stage's currently active geometry while the source display
     // is black, before the first visible gameplay presentation.
@@ -211,7 +189,6 @@ public:
 private:
     bool native_engine_enabled_{}, native_mode1_enabled_{}, native_scene_active_{}, last_native_world_{};
     mutable render::RasterCommands native_commands_;
-    bool native_edge_runs_{true};
     render::Framebuffer native_background_{0,0}, empty_native_{0,0};
     std::uint32_t native_background_revision_{1U};
     bool native_mode1_layers_valid_{};
@@ -381,13 +358,13 @@ private:
     // Groups that overlap need the complete ordered rebuild.
     bool top_hud_disjoint_{};
     // Where the last refresh rewrote top_hud_cache_.
-    std::array<HudRect, WideFramePatch::capacity> top_hud_damage_{};
+    static constexpr std::size_t top_hud_damage_capacity = 12U;
+    std::array<HudRect, top_hud_damage_capacity> top_hud_damage_{};
     std::size_t top_hud_damage_count_{};
     bool top_hud_damage_all_{};
     // Mode 2 over a PICA world: the wide frame is empty but for
     // source_foreground_spans_ and the top HUD.
     bool wide_source_layer_{};
-    WideFramePatch wide_foreground_patch_{};
     [[nodiscard]] bool refresh_top_hud(const simulation::SnesPpuState& ppu,
         const simulation::MeterState& meters, simulation::Experience experience,
         std::uint64_t ppu_memory_revision, std::uint64_t ppu_vram_revision);

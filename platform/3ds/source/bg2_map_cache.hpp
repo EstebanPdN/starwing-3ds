@@ -3,9 +3,6 @@
 #include "bg2_atlas_cache.hpp"
 #include "bg2_motion.hpp"
 
-// Bg2MapSourceCache::matches/ensure accept the simulation's VRAM revision.
-#define STARWING_BG2_MAP_REVISION 1
-
 namespace starfox::platform_3ds {
 
 // The complete BG2 image depends on map words and referenced character
