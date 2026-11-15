@@ -21,10 +21,12 @@ game mode; the results are evidence for the exact build that produced them.
 
 ## What the tour does
 
-Before gameplay, a GPU self-test draws 60 ROM-free patterns through the
-production display code (ordinary presentation, BG2, the world, wide and 4:3
-views, checker scales and palette changes) and compares the picture read back
-from the GPU with the expected one.
+Before gameplay, a GPU self-test draws ROM-free patterns through the
+production display code and compares the picture read back from the GPU with
+the expected one: 60 presentation cases (ordinary presentation, BG2, the
+world, wide and 4:3 views, checker scales, palette changes, affine rows and
+subpixel edges), then 16 Mode 1 layer cases and 8 line-batch cases, which run
+only while every earlier case has completed with the GPU alive (84 in total).
 
 The tour then enters 22 scenarios in order: `BOOT` (intro, title and menus,
 driven with START taps) and the direct entries of every level of the three

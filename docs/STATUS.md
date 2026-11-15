@@ -25,7 +25,7 @@ been published from it.
   and bottom HUD redraw only what changed; the world raster is packed for the
   GPU.
 - A START+SELECT [hardware test tour](HARDWARE-TESTS.md) measures 22
-  scenarios and checks the GPU with 60 ROM-free patterns.
+  scenarios and checks the GPU with 84 ROM-free cases.
 - Fixed: Star Fox EX levels could end incorrectly because starting a map left
   the object bridge trusting stale work-RAM copies.
 - Builds no longer embed the build machine's paths, and dumps record the
