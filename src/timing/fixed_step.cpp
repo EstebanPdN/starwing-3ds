@@ -73,7 +73,7 @@ RasterPhaseBatch RasterPhaseClock::advance(
     if (presentation_hz == 0U
         || kPresentationTimebaseHz % presentation_hz != 0U) {
         throw std::invalid_argument{
-            "presentation_hz must be a nonzero divisor of 720"};
+            "presentation_hz must be a nonzero divisor of 1440"};
     }
     if (speed_multiplier == 0U) {
         throw std::invalid_argument{"speed_multiplier cannot be zero"};
