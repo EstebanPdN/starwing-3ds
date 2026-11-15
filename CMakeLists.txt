@@ -544,85 +544,85 @@ if(STARFOX_BUILD_TESTS)
     target_link_libraries(starfox_level_clear_tests PRIVATE starfox_core)
     target_link_libraries(starfox_hitlist_tests PRIVATE starfox_core)
 
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SF.SFC"
-       AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SYMBOLS.TXT")
+    if(EXISTS "${STARFOX_ROM_FILE}"
+       AND EXISTS "${STARFOX_SYMBOLS_FILE}")
         add_test(
             NAME starfox_upstream_simulation_data
             COMMAND starfox_simulation_tests
-                    "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SF.SFC"
-                    "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SYMBOLS.TXT"
+                    "${STARFOX_ROM_FILE}"
+                    "${STARFOX_SYMBOLS_FILE}"
         )
         add_test(NAME starfox_upstream_state_data COMMAND starfox_state_tests
-            "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SF.SFC"
-            "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SYMBOLS.TXT")
+            "${STARFOX_ROM_FILE}"
+            "${STARFOX_SYMBOLS_FILE}")
         add_test(
             NAME starfox_upstream_direct_audio
             COMMAND starfox_direct_audio_tests
-                    "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SF.SFC"
-                    "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SYMBOLS.TXT"
+                    "${STARFOX_ROM_FILE}"
+                    "${STARFOX_SYMBOLS_FILE}"
         )
         add_test(
             NAME starfox_upstream_transition_parity
             COMMAND starfox_transition_parity_tests
-                    "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SF.SFC"
-                    "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SYMBOLS.TXT"
+                    "${STARFOX_ROM_FILE}"
+                    "${STARFOX_SYMBOLS_FILE}"
         )
         add_test(NAME starfox_upstream_ending COMMAND starfox_ending_tests
-            "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SF.SFC"
-            "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SYMBOLS.TXT")
+            "${STARFOX_ROM_FILE}"
+            "${STARFOX_SYMBOLS_FILE}")
         add_test(NAME starfox_upstream_intro_pacing COMMAND starfox_intro_pacing_tests
-            "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SF.SFC"
-            "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SYMBOLS.TXT")
+            "${STARFOX_ROM_FILE}"
+            "${STARFOX_SYMBOLS_FILE}")
         add_test(NAME starfox_upstream_geometry_pacing COMMAND starfox_geometry_pacing_tests
-            "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SF.SFC"
-            "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SYMBOLS.TXT")
+            "${STARFOX_ROM_FILE}"
+            "${STARFOX_SYMBOLS_FILE}")
         add_test(NAME starfox_upstream_hitlist COMMAND starfox_hitlist_tests
-            "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SF.SFC"
-            "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SYMBOLS.TXT")
+            "${STARFOX_ROM_FILE}"
+            "${STARFOX_SYMBOLS_FILE}")
         add_test(NAME starfox_upstream_level_clear COMMAND starfox_level_clear_tests
-            "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SF.SFC"
-            "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SYMBOLS.TXT")
+            "${STARFOX_ROM_FILE}"
+            "${STARFOX_SYMBOLS_FILE}")
         add_test(
             NAME starfox_upstream_map_trace
             COMMAND starfox_map_trace
-                    "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SF.SFC"
-                    "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SYMBOLS.TXT"
+                    "${STARFOX_ROM_FILE}"
+                    "${STARFOX_SYMBOLS_FILE}"
                     MAP1_1A
         )
         add_test(
             NAME starfox_upstream_strategy_trace
             COMMAND starfox_strategy_trace
-                    "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SF.SFC"
-                    "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SYMBOLS.TXT"
+                    "${STARFOX_ROM_FILE}"
+                    "${STARFOX_SYMBOLS_FILE}"
                     MAP1_1A
                     1
         )
         add_test(
             NAME starfox_upstream_game_init
             COMMAND starfox_game_init_trace
-                    "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SF.SFC"
-                    "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SYMBOLS.TXT"
+                    "${STARFOX_ROM_FILE}"
+                    "${STARFOX_SYMBOLS_FILE}"
                     20
         )
         add_test(
             NAME starfox_upstream_stage_trace
             COMMAND starfox_stage_trace
-                    "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SF.SFC"
-                    "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SYMBOLS.TXT"
+                    "${STARFOX_ROM_FILE}"
+                    "${STARFOX_SYMBOLS_FILE}"
                     LEVEL1_1
                     100
         )
         add_test(
             NAME starfox_upstream_planet_probe
             COMMAND starfox_planet_probe
-                    "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SF.SFC"
-                    "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SYMBOLS.TXT"
+                    "${STARFOX_ROM_FILE}"
+                    "${STARFOX_SYMBOLS_FILE}"
         )
         add_test(
             NAME starfox_upstream_route_lifecycle
             COMMAND starfox_stage_trace
-                    "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SF.SFC"
-                    "${CMAKE_CURRENT_SOURCE_DIR}/upstream-ultrastarfox/SYMBOLS.TXT"
+                    "${STARFOX_ROM_FILE}"
+                    "${STARFOX_SYMBOLS_FILE}"
                     LEVEL1_3
                     500
         )
