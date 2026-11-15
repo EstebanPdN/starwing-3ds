@@ -14,10 +14,16 @@ void replay_raster_commands(const RasterCommands& batch,Framebuffer& frame,Surfa
     frame.record_to(nullptr);
     if(clear_target) {frame.clear();if(surfaces) surfaces->clear();}
     for(const auto& c:batch.commands) {
+        const bool edge_run=c.textured==0 && (c.reserved1&8U)!=0;
         for(std::int32_t y=std::max<std::int32_t>(0,c.top);
             y<std::min<std::int32_t>(int(batch.height()),c.bottom);++y)
             for(std::int32_t x=std::max<std::int32_t>(0,c.left);
                 x<std::min<std::int32_t>(int(batch.width()),c.right);++x) {
+                if(edge_run) {
+                    // Arithmetic shifts: an edge may start left of pixel zero.
+                    const auto row=y-c.top;
+                    if(x<((c.u+c.du*row)>>8) || x>((c.v+c.dv*row)>>8)) continue;
+                } else
                 if(c.textured==0 && (c.reserved1&1U)!=0 && x!=c.u && x!=c.v) continue;
                 if(c.textured==0 && (c.reserved1&4U)!=0) {
                     const auto stride=c.u_mask;

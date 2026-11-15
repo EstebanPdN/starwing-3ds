@@ -98,10 +98,9 @@ void composite_transparent_layer(const Framebuffer& source,
             static_cast<std::uint8_t>(PixelLayer::three_d);
         // ARM11 has no NEON. Plain indexed overlays can transfer four
         // pixels with a word mask, leaving every zero byte transparent.
-        // Keep ownership and overlapping self-copies on the scalar path.
-        const auto copy_words = !destination.layer_tags_enabled()
-            && !destination.tracks_write_coverage()
-            && destination.command_buffer() == nullptr
+        // Preserve coverage/tags with the same byte mask. Overlapping
+        // self-copies keep their established scalar traversal order.
+        const auto copy_words = destination.command_buffer() == nullptr
             && &source != &destination;
         for (auto y = stored_source_top; y < stored_source_bottom; ++y) {
             auto source_index = y * source.stored_width()
@@ -129,6 +128,14 @@ void composite_transparent_layer(const Framebuffer& source,
                         const auto blended = (colours & mask) | (previous & ~mask);
                         std::memcpy(destination_pixels.data() + destination_index,
                             &blended, 4U);
+                        destination.mark_written_mask4(destination_index, nonzero);
+                        if (transfer_tags) {
+                            std::uint32_t before, tags=geometry_tag*0x01010101U;
+                            std::memcpy(&before,destination_tags.data()+destination_index,4U);
+                            if (source_tagged) std::memcpy(&tags,source_tags.data()+source_index,4U);
+                            const auto result=(tags&mask)|(before&~mask);
+                            std::memcpy(destination_tags.data()+destination_index,&result,4U);
+                        }
                     }
                     source_index += 4U;
                     destination_index += 4U;

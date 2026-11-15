@@ -1,3 +1,4 @@
+#include <cstring>
 #include "starfox/simulation/map_vm.hpp"
 #include "starfox/assets/bps.hpp"
 #include "starfox/state/archive.hpp"
@@ -306,7 +307,7 @@ void MapVm::start(std::uint32_t address, ObjectHandle player) {
 }
 
 std::int16_t MapVm::player_world_z() const noexcept {
-    return objects_->is_active(player_) ? objects_->at(player_).world_z : 0;
+    return objects_->is_active(player_) ? objects_->get(player_).world_z : 0;
 }
 
 std::uint8_t MapVm::read_native_byte(std::uint32_t address) const noexcept {
@@ -579,6 +580,13 @@ void MapVm::begin_strategy_batch() {
 
 void MapVm::finish_strategy_batch() noexcept {
     strategy_batch_active_ = false;
+    if (strategy_checkpoint_marked_) {
+#ifdef STARFOX_VERIFY_BRIDGE
+        verify_strategy_checkpoint();
+#endif
+        cpu_.close_wram_checkpoint();
+        strategy_checkpoint_marked_ = false;
+    }
     if (!strategy_batch_dirty_) return;
     // Object synchronization is a host mirror operation, not another source
     // instruction. Preserve the final bus byte of the real scheduler work.
@@ -590,6 +598,16 @@ void MapVm::finish_strategy_batch() noexcept {
 
 void MapVm::abort_strategy_batch() noexcept {
     strategy_batch_active_ = false;
+    // The tables as they were before the call that failed.
+    bool recovered = true;
+    if (strategy_checkpoint_marked_) {
+        recovered = cpu_.read_wram_checkpoint(object_base_,
+                {strategy_checkpoint_base_.data(), strategy_checkpoint_size_})
+            && cpu_.read_wram_checkpoint(extended_object_base_,
+                {strategy_checkpoint_extended_.data(), strategy_checkpoint_size_});
+        cpu_.close_wram_checkpoint();
+        strategy_checkpoint_marked_ = false;
+    }
     if (!strategy_batch_dirty_) return;
     const auto bus = cpu_.open_bus();
     // A failed native call has not yet imported its lists. Materialize the
@@ -597,7 +615,7 @@ void MapVm::abort_strategy_batch() noexcept {
     // exactly the same host objects as ordinary per-call synchronization.
     objects_->copy_active_handles(object_bridge_active_);
     for (auto& snapshot : object_bridge_) snapshot.valid = false;
-    sync_object_payloads_from_cpu(true);
+    sync_object_payloads_from_cpu(recovered);
     cpu_.restore_open_bus(bus);
     strategy_batch_dirty_ = false;
 }
@@ -609,6 +627,28 @@ void MapVm::capture_strategy_checkpoint() {
     const auto highest = object_bridge_active_.empty() ? ObjectHandle{} :
         *std::max_element(object_bridge_active_.begin(), object_bridge_active_.end());
     const auto size = static_cast<std::size_t>(highest) * object_size_;
+    const auto tables = std::size_t{object_count_} * object_size_;
+#ifdef STARFOX_VERIFY_BRIDGE
+    if (strategy_checkpoint_marked_) verify_strategy_checkpoint();
+#endif
+    // The processor keeps the old bytes of whatever this call stores to: a
+    // strategy touches a handful of objects, the tables are 8 KB.
+    strategy_checkpoint_marked_ = cpu_.wram_block_watched(object_base_, tables)
+        && cpu_.wram_block_watched(extended_object_base_, tables)
+        && cpu_.open_wram_checkpoint();
+    strategy_checkpoint_size_ = size;
+    if (strategy_checkpoint_marked_) {
+#ifdef STARFOX_VERIFY_BRIDGE
+        verify_checkpoint_base_.assign(cpu_.mapped_wram(object_base_, tables),
+            cpu_.mapped_wram(object_base_, tables) + size);
+        verify_checkpoint_extended_.assign(cpu_.mapped_wram(extended_object_base_, tables),
+            cpu_.mapped_wram(extended_object_base_, tables) + size);
+        verify_checkpoint_open_ = true;
+#endif
+        cpu_.restore_open_bus(bus);
+        strategy_batch_counters_.checkpoint_bytes += static_cast<std::uint32_t>(2U * size);
+        return;
+    }
     const bool base = cpu_.read_mapped_wram_block(object_base_,
         {strategy_checkpoint_base_.data(), size});
     const bool extended = cpu_.read_mapped_wram_block(extended_object_base_,
@@ -629,7 +669,7 @@ std::uint32_t MapVm::strategy_address(ObjectHandle object) {
         if (low && high) return *low | (static_cast<std::uint32_t>(*high) << 16U);
         finish_strategy_batch();
     }
-    return objects_->at(object).strategy_address;
+    return objects_->get(object).strategy_address;
 }
 
 std::size_t MapVm::call_native_object_routine(
@@ -878,7 +918,149 @@ void MapVm::write_native_object_byte(
     objects_->write_base_byte(handle, offset, value);
 }
 
+bool MapVm::object_tables_marked() const noexcept {
+    const auto bytes = std::size_t{object_count_} * object_size_;
+    return cpu_.wram_marks_cover(object_base_, bytes)
+        && cpu_.wram_marks_cover(extended_object_base_, bytes);
+}
+
+// Whether both tables in work RAM still equal the copies taken when the
+// bridge last remembered them.
+bool MapVm::object_tables_unchanged() const noexcept {
+    const auto bytes = std::size_t{object_count_} * object_size_;
+    const auto* base = cpu_.mapped_wram(object_base_, bytes);
+    const auto* extended = cpu_.mapped_wram(extended_object_base_, bytes);
+    if (!base || !extended || object_bridge_memory_base_.size() != bytes
+        || object_bridge_memory_extended_.size() != bytes) return false;
+    // Only what was stored to since can differ.
+    if (object_tables_marked())
+        return cpu_.wram_marked_equal(object_base_, object_bridge_memory_base_)
+            && cpu_.wram_marked_equal(extended_object_base_, object_bridge_memory_extended_);
+    // A writer that leaves no marks ran. If the tables are as they were, the
+    // marks from before it stand again.
+    const bool equal = std::memcmp(base, object_bridge_memory_base_.data(), bytes) == 0
+        && std::memcmp(extended, object_bridge_memory_extended_.data(), bytes) == 0;
+    if (equal) cpu_.revalidate_wram_marks();
+    return equal;
+}
+
+// Nothing was stored to this slot of either table since the bridge last
+// remembered them, so a valid snapshot of it still holds its bytes.
+bool MapVm::object_slot_unmarked(ObjectHandle handle) const noexcept {
+    const auto base = static_cast<std::uint32_t>(original_object_pointer(handle));
+    const auto extended_base = extended_object_base_
+        + static_cast<std::uint32_t>(handle - 1U) * object_size_;
+    return !cpu_.wram_marked(base + 4U, object_size_ - 4U)
+        && !cpu_.wram_marked(extended_base, extended_object_bytes_);
+}
+
+#ifdef STARFOX_VERIFY_BRIDGE
+namespace {
+MapVm::BridgeVerifyStats bridge_stats{};
+}
+MapVm::BridgeVerifyStats MapVm::bridge_verify_stats() noexcept { return bridge_stats; }
+
+// The bridge's test as it was before the marks: everything compared.
+bool MapVm::object_bridge_unchanged_reference() const {
+    if(!object_bridge_memory_valid_
+        || !objects_->lists_match(object_bridge_active_scratch_,object_bridge_free_scratch_)
+        || cpu_.peek_ram16(active_list_)!=object_bridge_memory_active_
+        || cpu_.peek_ram16(free_list_)!=object_bridge_memory_free_) return false;
+    const auto bytes=std::size_t(object_count_)*object_size_;
+    const auto* base=cpu_.mapped_wram(object_base_,bytes);
+    const auto* extended=cpu_.mapped_wram(extended_object_base_,bytes);
+    if(!base || !extended || std::memcmp(base,object_bridge_memory_base_.data(),bytes)
+        || std::memcmp(extended,object_bridge_memory_extended_.data(),bytes))return false;
+    for(auto handle:object_bridge_active_) {
+        const auto& saved=object_bridge_[handle];
+        if(!saved.valid || !(saved.host==objects_->get(handle)))return false;
+    }
+    return true;
+}
+
+void MapVm::verify_strategy_checkpoint() const {
+    if (!verify_checkpoint_open_) return;
+    std::vector<std::uint8_t> base(strategy_checkpoint_size_), extended(strategy_checkpoint_size_);
+    if (!cpu_.read_wram_checkpoint(object_base_, base)
+        || !cpu_.read_wram_checkpoint(extended_object_base_, extended))
+        throw std::logic_error{"object bridge: the processor lost a checkpoint"};
+    if (base != verify_checkpoint_base_ || extended != verify_checkpoint_extended_)
+        throw std::logic_error{"object bridge: the checkpoint differs from the tables it was taken from"};
+    ++bridge_stats.checkpoints;
+}
+#endif
+
+bool MapVm::object_bridge_unchanged() const {
+#ifdef STARFOX_VERIFY_BRIDGE
+    const bool reference = object_bridge_unchanged_reference();
+    ++bridge_stats.checks;
+    const auto verified = [&](bool result) {
+        if (result && !reference)
+            throw std::logic_error{"object bridge: the marks missed a change"};
+        if (result) ++bridge_stats.shortcuts;
+        else if (reference) ++bridge_stats.missed_shortcuts;
+        return result;
+    };
+#else
+    const auto verified = [](bool result) { return result; };
+#endif
+    if (!object_bridge_memory_valid_) return verified(false);
+    // The pool's lists against the last walk of the cartridge's: only when
+    // the pool's have changed since they were last found equal.
+    if (objects_->list_epoch() != object_bridge_list_epoch_) {
+        if (!objects_->lists_match(object_bridge_active_scratch_, object_bridge_free_scratch_))
+            return verified(false);
+        object_bridge_list_epoch_ = objects_->list_epoch();
+    }
+    if (cpu_.peek_ram16(active_list_) != object_bridge_memory_active_
+        || cpu_.peek_ram16(free_list_) != object_bridge_memory_free_) return verified(false);
+    if (!object_tables_unchanged()) return verified(false);
+    for (auto handle : object_bridge_active_) {
+        const auto& saved = object_bridge_[handle];
+        if (!saved.valid) return verified(false);
+        // An object nobody asked to write to still equals the copy.
+        if (!objects_->touched(handle)) continue;
+        if (!(saved.host == objects_->get(handle))) return verified(false);
+        objects_->clear_touched(handle);
+    }
+    return verified(true);
+}
+void MapVm::remember_object_bridge() {
+    const auto bytes=std::size_t(object_count_)*object_size_;
+    const auto* base=cpu_.mapped_wram(object_base_,bytes);
+    const auto* extended=cpu_.mapped_wram(extended_object_base_,bytes);
+    const auto active=cpu_.peek_ram16(active_list_),free=cpu_.peek_ram16(free_list_);
+    object_bridge_memory_valid_=base && extended && active && free;
+    if(!object_bridge_memory_valid_)return;
+    // The copies hold the tables as they were when the marks were last
+    // cleared: only the marked chunks have to be brought up to date.
+    if (object_bridge_memory_base_.size() == bytes && object_bridge_memory_extended_.size() == bytes
+        && object_tables_marked()) {
+        cpu_.wram_copy_marked(object_base_, object_bridge_memory_base_);
+        cpu_.wram_copy_marked(extended_object_base_, object_bridge_memory_extended_);
+    } else {
+        object_bridge_memory_base_.assign(base,base+bytes);
+        object_bridge_memory_extended_.assign(extended,extended+bytes);
+    }
+#ifdef STARFOX_VERIFY_BRIDGE
+    if (std::memcmp(base, object_bridge_memory_base_.data(), bytes) != 0
+        || std::memcmp(extended, object_bridge_memory_extended_.data(), bytes) != 0)
+        throw std::logic_error{"object bridge: the remembered tables differ from work RAM"};
+#endif
+    object_bridge_memory_active_=*active;object_bridge_memory_free_=*free;
+    cpu_.clear_wram_marks();
+}
 void MapVm::sync_objects_to_cpu() {
+    if(object_bridge_unchanged()) {
+        const auto last_free=object_bridge_free_scratch_.empty()?0:object_bridge_free_scratch_.back();
+        if(last_free) (void)cpu_.read8(object_base_+(last_free-1U)*object_size_+1U);
+        else if(!object_bridge_active_.empty()) (void)cpu_.read8(extended_object_base_
+            +(object_bridge_active_.back()-1U)*object_size_+20U);
+        else (void)cpu_.read8(free_list_+1U);
+        object_pool_needs_native_sync_=false;
+        return;
+    }
+    object_bridge_memory_valid_=false;
     bool active_matches = object_bridge_active_.size() == objects_->active_count();
     std::size_t active_index = 0U;
     for (auto handle = objects_->first_active(); handle != 0;
@@ -898,6 +1080,7 @@ void MapVm::sync_objects_to_cpu() {
     }
     std::array<std::uint8_t, 57> base_bytes{};
     std::array<std::uint8_t, kExtendedObjectBytes> extended_bytes{};
+    const bool tables_marked = object_tables_marked();
     const auto write_link = [this](std::uint32_t address, std::uint16_t value) {
         const auto current = cpu_.peek_ram16(address);
         if (!current || *current != value) cpu_.write16(address, value);
@@ -923,8 +1106,30 @@ void MapVm::sync_objects_to_cpu() {
         const auto extended_payload = std::span<const std::uint8_t>{
             extended_bytes.data(), extended_object_bytes_};
         auto& snapshot = object_bridge_[handle];
-        const auto& object = objects_->at(handle);
-        const bool host_matches = snapshot.valid && snapshot.host == object;
+        const auto& object = objects_->get(handle);
+        const bool host_matches = snapshot.valid
+            && (!objects_->touched(handle) || snapshot.host == object);
+#ifdef STARFOX_VERIFY_BRIDGE
+        if (host_matches && !(snapshot.host == object))
+            throw std::logic_error{"object bridge: an object changed without being touched"};
+#endif
+        if (host_matches) objects_->clear_touched(handle);
+        // Neither side changed since the snapshot was taken.
+        if (host_matches && tables_marked && object_slot_unmarked(handle)) {
+#ifdef STARFOX_VERIFY_BRIDGE
+            const auto* live = cpu_.mapped_wram(base + 4U, object_size_ - 4U);
+            const auto* live_extended = cpu_.mapped_wram(extended_base, extended_object_bytes_);
+            if (!live || !live_extended
+                || !std::equal(live, live + (object_size_ - 4U), snapshot.base.begin() + 4U)
+                || !std::equal(live_extended, live_extended + extended_object_bytes_,
+                    snapshot.extended.begin()))
+                throw std::logic_error{"object bridge: a slot changed without a mark"};
+            ++bridge_stats.skipped_slots;
+#endif
+            previous_active = handle;
+            last_active = handle;
+            continue;
+        }
         const bool mapped_base = host_matches && cpu_.read_mapped_wram_block(
             base + 4U, std::span<std::uint8_t>{base_bytes.data() + 4U,
                 static_cast<std::size_t>(object_size_ - 4U)});
@@ -974,6 +1179,7 @@ void MapVm::sync_objects_to_cpu() {
         std::copy(extended_payload.begin(), extended_payload.end(),
             snapshot.extended.begin());
         snapshot.valid = wrote_base && wrote_extended;
+        objects_->clear_touched(handle);
         previous_active = handle;
         last_active = handle;
     }
@@ -1003,15 +1209,26 @@ void MapVm::sync_objects_to_cpu() {
 }
 
 void MapVm::sync_objects_from_cpu() {
+    if(!strategy_batch_active_ && object_bridge_unchanged()) {
+        ++strategy_batch_counters_.list_imports;
+        ++strategy_batch_counters_.payload_passes;
+        strategy_batch_counters_.payload_slots+=static_cast<std::uint32_t>(object_bridge_active_.size());
+        if(!object_bridge_active_.empty()) (void)cpu_.read8(extended_object_base_
+            +(object_bridge_active_.back()-1U)*object_size_+20U);
+        else cpu_.restore_open_bus(0U);
+        return;
+    }
     sync_object_lists_from_cpu();
     if (strategy_batch_active_) {
         strategy_batch_dirty_ = true;
         return;
     }
     sync_object_payloads_from_cpu();
+    remember_object_bridge();
 }
 
 void MapVm::sync_object_lists_from_cpu() {
+    object_bridge_memory_valid_=false;
     ++strategy_batch_counters_.list_imports;
     const auto read_list = [this](std::uint16_t pointer,
                                   std::vector<ObjectHandle>& result) {
@@ -1029,10 +1246,40 @@ void MapVm::sync_object_lists_from_cpu() {
     };
     auto& active = object_bridge_active_scratch_;
     auto& free = object_bridge_free_scratch_;
-    read_list(cpu_.read16(active_list_), active);
-    read_list(cpu_.read16(free_list_), free);
-    if (active.size() + free.size() != object_count_) {
-        throw std::runtime_error{"native active/free lists do not cover the object pool"};
+    // Both lists are a function of their heads and of each pool slot's link
+    // word. Most routines change none of them: the last walk then stands,
+    // and so does the open bus byte a walk leaves, the high byte of the
+    // null link that ends it.
+    auto& links = object_list_links_scratch_;
+    const auto* active_head = cpu_.mapped_wram(active_list_, 2U);
+    const auto* free_head = cpu_.mapped_wram(free_list_, 2U);
+    const auto* pool = cpu_.mapped_wram(object_base_,
+        std::size_t{object_count_} * object_size_);
+    const bool comparable = active_head != nullptr && free_head != nullptr
+        && pool != nullptr && object_size_ >= 2U;
+    if (comparable) {
+        const auto word = [](const std::uint8_t* bytes) {
+            return static_cast<std::uint16_t>(bytes[0] | (bytes[1] << 8U));
+        };
+        links.resize(std::size_t{object_count_} + 2U);
+        links[0] = word(active_head);
+        links[1] = word(free_head);
+        for (std::size_t slot = 0; slot < object_count_; ++slot)
+            links[slot + 2U] = word(pool + slot * object_size_);
+    }
+    if (comparable && object_list_links_valid_ && links == object_list_links_) {
+        cpu_.restore_open_bus(0U);
+    } else {
+        object_list_links_valid_ = false;
+        read_list(cpu_.read16(active_list_), active);
+        read_list(cpu_.read16(free_list_), free);
+        if (active.size() + free.size() != object_count_) {
+            throw std::runtime_error{"native active/free lists do not cover the object pool"};
+        }
+        if (comparable) {
+            object_list_links_.swap(links);
+            object_list_links_valid_ = true;
+        }
     }
     if (active != object_bridge_active_) {
         for (auto& snapshot : object_bridge_) snapshot.valid = false;
@@ -1044,10 +1291,12 @@ void MapVm::sync_object_lists_from_cpu() {
     if (!objects_->lists_match(active, free)) {
         objects_->restore_lists(active, free);
     }
+    object_bridge_list_epoch_ = objects_->list_epoch();
     for (const auto handle : free) object_bridge_[handle].valid = false;
 }
 
 void MapVm::sync_object_payloads_from_cpu(bool checkpoint) {
+    object_bridge_memory_valid_=false;
     ++strategy_batch_counters_.payload_passes;
     strategy_batch_counters_.payload_slots += static_cast<std::uint32_t>(object_bridge_active_.size());
     std::array<std::uint8_t, 57> base_bytes{};
@@ -1056,10 +1305,28 @@ void MapVm::sync_object_payloads_from_cpu(bool checkpoint) {
         return static_cast<std::uint16_t>(bytes[offset])
             | (static_cast<std::uint16_t>(bytes[offset + 1U]) << 8U);
     };
+    const bool tables_marked = !checkpoint && object_tables_marked();
     for (const auto handle : object_bridge_active_) {
         const auto base = static_cast<std::uint32_t>(original_object_pointer(handle));
         const auto extended_base = extended_object_base_
             + static_cast<std::uint32_t>(handle - 1U) * object_size_;
+        // Neither side changed since the snapshot was taken: what follows
+        // would read the slot, find it equal and go on.
+        if (tables_marked && object_bridge_[handle].valid && !objects_->touched(handle)
+            && object_slot_unmarked(handle)) {
+#ifdef STARFOX_VERIFY_BRIDGE
+            const auto& kept = object_bridge_[handle];
+            const auto* live = cpu_.mapped_wram(base + 4U, object_size_ - 4U);
+            const auto* live_extended = cpu_.mapped_wram(extended_base, extended_object_bytes_);
+            if (!live || !live_extended || !(kept.host == objects_->get(handle))
+                || !std::equal(live, live + (object_size_ - 4U), kept.base.begin() + 4U)
+                || !std::equal(live_extended, live_extended + extended_object_bytes_,
+                    kept.extended.begin()))
+                throw std::logic_error{"object bridge: a slot changed without a mark"};
+            ++bridge_stats.skipped_slots;
+#endif
+            continue;
+        }
         const auto base_payload = std::span<std::uint8_t>{
             base_bytes.data() + 4U, static_cast<std::size_t>(object_size_ - 4U)};
         const bool mapped_base = checkpoint || cpu_.read_mapped_wram_block(base + 4U, base_payload);
@@ -1081,11 +1348,12 @@ void MapVm::sync_object_payloads_from_cpu(bool checkpoint) {
         }
         auto& snapshot = object_bridge_[handle];
         if (snapshot.valid && mapped_base && mapped_extended
-            && snapshot.host == objects_->at(handle)
+            && snapshot.host == objects_->get(handle)
             && std::equal(base_payload.begin(), base_payload.end(),
                 snapshot.base.begin() + 4U)
             && std::equal(extended_payload.begin(), extended_payload.end(),
                 snapshot.extended.begin())) {
+            objects_->clear_touched(handle);
             continue;
         }
         objects_->unpack_base_payload(handle, base_payload);
@@ -1114,6 +1382,7 @@ void MapVm::sync_object_payloads_from_cpu(bool checkpoint) {
                 snapshot.base.begin() + 4U);
             std::copy(extended_payload.begin(), extended_payload.end(),
                 snapshot.extended.begin());
+            objects_->clear_touched(handle);
         }
     }
     if (!checkpoint && !object_bridge_active_.empty()) {
@@ -1164,6 +1433,7 @@ bool MapVm::execute_native_condition(std::uint32_t address) {
 
 ObjectHandle MapVm::allocate_map_object() {
     const auto handle = objects_->allocate_after(objects_->first_active());
+    if (handle != 0U) objects_->at(handle).type = 0x08U; // ATZREMOVE, as SETUPOBJ_L.
     last_spawned_ = handle;
     return handle;
 }
@@ -1317,7 +1587,7 @@ void MapVm::execute_ready_records() {
         if (opcode == 12) {
             const auto shape = rom_->read16(cursor_ + 3U);
             for (const auto handle : objects_->active_handles()) {
-                if (handle != player_ && objects_->at(handle).shape == shape) {
+                if (handle != player_ && objects_->get(handle).shape == shape) {
                     (void)objects_->remove(handle);
                 }
             }

@@ -11,6 +11,37 @@
 
 namespace starfox::platform_3ds {
 
+bool compose_native_mode1_background(const render::Framebuffer& source,
+    const render::Framebuffer& bg2, const render::Framebuffer& bg3_low,
+    const render::Framebuffer& bg3_high, render::Framebuffer& target,
+    bool include_bg3_high) noexcept {
+    const auto native=[](const render::Framebuffer& f){return f.width()==400U&&f.height()==240U&&f.draw_scale()==1U;};
+    if(source.width()!=256U||source.height()!=224U||source.draw_scale()!=1U
+        ||!native(bg2)||!native(bg3_low)||!native(bg3_high)||!native(target)
+        ||target.layer_tags_enabled()||target.tracks_write_coverage()||target.command_buffer())return false;
+    const auto read=[](const std::uint8_t* p){std::uint32_t v;std::memcpy(&v,p,4U);return v;};
+    const auto over=[](std::uint32_t bottom,std::uint32_t top){
+        const auto nonzero=((((top&0x7f7f7f7fU)+0x7f7f7f7fU)|top)>>7U)&0x01010101U;
+        return top|(bottom&~(nonzero*255U));
+    };
+    auto* out=target.pixels().data();
+    const auto* low=bg3_low.pixels().data();const auto* high=bg3_high.pixels().data();const auto* front=bg2.pixels().data();
+    const auto margin=[&](std::size_t first,std::size_t last){
+        for(auto i=first;i<last;i+=4U){
+            auto value=read(low+i);
+            if(include_bg3_high)value=over(value,read(high+i));
+            value=over(value,read(front+i));
+            std::memcpy(out+i,&value,4U);
+        }
+    };
+    margin(0U,8U*400U);
+    for(std::size_t y=8U;y<232U;++y){
+        margin(y*400U,y*400U+72U);margin(y*400U+328U,(y+1U)*400U);
+        std::memcpy(out+y*400U+72U,source.pixels().data()+(y-8U)*256U,256U);
+    }
+    margin(232U*400U,240U*400U);return true;
+}
+
 void compose_native_mode1(const render::Framebuffer& source,
     const render::Framebuffer& world, const render::Framebuffer& bg2_low,
     const render::Framebuffer& bg2_high, const render::Framebuffer& bg3_low,
@@ -567,8 +598,10 @@ void capture_native_coverage_spans(const render::Framebuffer& source,
     for (std::uint32_t y = 0U; y < 224U; ++y) {
         const auto row = y * 256U;
         for (std::uint32_t x = 0U; x < 256U;) {
+            while(x+4U<=256U) { std::uint32_t lanes;std::memcpy(&lanes,coverage.data()+row+x,4U);if(lanes)break;x+=4U; }
             while (x < 256U && coverage[row + x] == 0U) ++x;
             const auto first = x;
+            while(x+4U<=256U) { std::uint32_t lanes;std::memcpy(&lanes,coverage.data()+row+x,4U);if(lanes!=0x01010101U)break;x+=4U; }
             while (x < 256U && coverage[row + x] != 0U) ++x;
             if (x != first) spans.push_back({row + first,
                 (y + 8U) * 400U + 72U + first, x - first});

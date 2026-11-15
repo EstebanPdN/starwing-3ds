@@ -47,6 +47,7 @@ cmake -U CMAKE_CXX_FLAGS -S "${ROOT}/platform/3ds" -B "${BUILD}" \
   "-DSTARWING_PATCH_DIR=${STARWING_PATCH_DIR:-${ROOT}/assets/patches}" \
   "-DSTARWING_SYMBOL_DIR=${STARWING_SYMBOL_DIR:-${ROOT}/assets/symbols}" \
   "-DSTARWING_PRESENTATION_DIR=${STARWING_PRESENTATION_DIR:-${ROOT}/platform/3ds/assets}" \
+  "-DSTARWING_ICON=${STARWING_ICON:-${ROOT}/platform/3ds/assets/icon-48.png}" \
   "-DSTARWING_UI_INCLUDE_DIR=${STARWING_UI_INCLUDE_DIR:-${ROOT}/platform/3ds/source}"
 cmake --build "${BUILD}" --target starwing-game-3dsx --parallel 4
 printf 'Gameplay 3DSX: %s\n' "${BUILD}/Starwing-3DS-Game.3dsx"
@@ -59,7 +60,7 @@ BANNERTOOL="${BANNERTOOL:-$(command -v bannertool || true)}"
 FFMPEG="${FFMPEG:-$(command -v ffmpeg || true)}"
 STARWING_BANNER_CGFX="${STARWING_BANNER_CGFX:-${ROOT}/../assets/banners/STARFOX_3D/sculpted-v2/output/StarFox-sculpted.cgfx}"
 STARWING_BANNER_AUDIO="${STARWING_BANNER_AUDIO:-${ROOT}/../splash.mp3}"
-STARWING_ICON="${STARWING_ICON:-${STARWING_PRESENTATION_DIR:-${ROOT}/platform/3ds/assets}/icon-48.png}"
+STARWING_ICON="${STARWING_ICON:-${ROOT}/platform/3ds/assets/icon-48.png}"
 if [[ ! -x "${MAKEROM}" || ! -x "${BANNERTOOL}" || ! -x "${FFMPEG}" ]]; then
   printf 'makerom, bannertool, and ffmpeg are required for the CIA.\n' >&2
   exit 1
@@ -68,8 +69,10 @@ if [[ ! -f "${STARWING_BANNER_CGFX}" || ! -f "${STARWING_BANNER_AUDIO}" ]]; then
   printf 'Set STARWING_BANNER_CGFX and STARWING_BANNER_AUDIO to the private CIA resources.\n' >&2
   exit 1
 fi
+# STARWING_CIA_TITLE labels a local experimental CIA on the HOME Menu; the
+# version files stay as they are.
 "${BANNERTOOL}" makesmdh \
-  -s "Starwing 3DS" -l "Star Fox and EX" \
+  -s "${STARWING_CIA_TITLE:-Starwing 3DS}" -l "Star Fox and EX" \
   -p "Esteban PDN" -i "${STARWING_ICON}" \
   -f visible,allow3d,extendedbanner,nosavebackups \
   -o "${BUILD}/starwing-game.icn"

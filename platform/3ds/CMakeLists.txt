@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 project(starwing_3ds_diagnostic VERSION 0.1 LANGUAGES C CXX ASM)
 
 set(STARFOX_SOURCE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")
+set(STARWING_ICON "${CMAKE_CURRENT_LIST_DIR}/assets/icon-48.png" CACHE FILEPATH "HOME Menu icon")
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/version.txt" STARWING_VERSION LIMIT_COUNT 1)
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/cia-version.txt" STARWING_CIA_VERSION LIMIT_COUNT 1)
 set(STARWING_PATCH_DIR "${STARFOX_SOURCE_ROOT}/assets/patches" CACHE PATH
@@ -63,7 +64,7 @@ ctr_generate_smdh(
     NAME "Starwing 3DS Diagnostic"
     DESCRIPTION "SD and ROM detection test"
     AUTHOR "Esteban PDN"
-    ICON "${STARWING_PRESENTATION_DIR}/icon-48.png")
+    ICON "${STARWING_ICON}")
 
 ctr_create_3dsx(starwing-diagnostic-3dsx
     TARGET starwing-3ds-diagnostic
@@ -81,9 +82,6 @@ target_include_directories(starwing_citro2d PUBLIC vendor/citro2d/include)
 target_compile_options(starwing_citro2d PRIVATE -O3 -ffunction-sections -fdata-sections)
 target_link_libraries(starwing_citro2d PUBLIC citro3d ctru m)
 
-ctr_add_shader_library(starwing_span_shader OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/span.shbin" source/native_engine/span.v.pica)
-dkp_add_embedded_binary_library(starwing_span_binary starwing_span_shader)
-
 add_executable(starwing-3ds-game
     source/game_3ds.cpp
     source/memory_3ds.cpp
@@ -94,6 +92,7 @@ add_executable(starwing-3ds-game
     source/asset_stage.cpp
     source/audio_3ds.cpp
     source/display_3ds.cpp
+    source/gpu_self_test.cpp
     source/gpu_lifetime_3ds.c
     source/frame_3ds.cpp
     source/native_canvas.cpp
@@ -126,7 +125,7 @@ target_compile_options(starwing-3ds-game PRIVATE
     -O3 -Wall -Wextra -ffunction-sections -fdata-sections)
 target_link_libraries(starwing-3ds-game PRIVATE
     starfox_core_arm retro_cpu_65816_arm retro_cpu_core_arm
-    snes_spc_core_arm starwing_citro2d starwing_span_binary citro3d ctru m)
+    snes_spc_core_arm starwing_citro2d citro3d ctru m)
 
 set(STARWING_GAME_SMDH "${CMAKE_CURRENT_BINARY_DIR}/starwing-game.smdh")
 ctr_generate_smdh(
@@ -134,7 +133,7 @@ ctr_generate_smdh(
     NAME "Starwing 3DS"
     DESCRIPTION "Native Star Fox and EX"
     AUTHOR "Esteban PDN"
-    ICON "${STARWING_PRESENTATION_DIR}/icon-48.png")
+    ICON "${STARWING_ICON}")
 ctr_create_3dsx(starwing-game-3dsx
     TARGET starwing-3ds-game
     OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/Starwing-3DS-Game.3dsx"

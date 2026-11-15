@@ -80,8 +80,19 @@ public:
     [[nodiscard]] bool remove(ObjectHandle handle) noexcept;
     [[nodiscard]] bool is_active(ObjectHandle handle) const noexcept;
     [[nodiscard]] std::uint64_t generation(ObjectHandle handle) const noexcept;
+    // A reference that can change the object: it marks the object as touched.
+    // Do not keep it across a call into the cartridge logic.
     [[nodiscard]] GameObject& at(ObjectHandle handle);
     [[nodiscard]] const GameObject& at(ObjectHandle handle) const;
+    // The same object for reading, from a pool that is not const.
+    [[nodiscard]] const GameObject& get(ObjectHandle handle) const { return at(handle); }
+    // Whether the object may have changed since clear_touched(): every way of
+    // changing one goes through this class. The bridge to the cartridge logic
+    // clears the mark once its own copy of the object equals it.
+    [[nodiscard]] bool touched(ObjectHandle handle) const noexcept { return touched_[handle]; }
+    void clear_touched(ObjectHandle handle) noexcept { touched_[handle] = false; }
+    // Advances whenever the active or the free list changes.
+    [[nodiscard]] std::uint64_t list_epoch() const noexcept { return list_epoch_; }
     [[nodiscard]] std::vector<ObjectHandle> active_handles() const;
     [[nodiscard]] std::vector<ObjectHandle> free_handles() const;
     void copy_active_handles(std::vector<ObjectHandle>& output) const;
@@ -125,6 +136,9 @@ private:
     std::array<Slot, kMaximumObjects + 1> slots_{};
     std::array<ObjectHandle, kMaximumObjects + 1> free_next_{};
     std::array<std::uint64_t, kMaximumObjects + 1> generations_{};
+    // Not part of the saved state: hints for the bridge.
+    std::array<bool, kMaximumObjects + 1> touched_{};
+    std::uint64_t list_epoch_{};
     std::uint64_t next_generation_{};
     ObjectHandle first_active_{};
     ObjectHandle first_free_{};

@@ -1,16 +1,22 @@
 #pragma once
+#include "mode1_bg2_atlas.hpp"
+#include "mode1_layer_plan.hpp"
 
 #include "starfox/assets/shape_decoder.hpp"
 #include "starfox/render/background_renderer.hpp"
 #include "starfox/render/dust_renderer.hpp"
+#include "starfox/render/exterior_ship_visibility.hpp"
 #include "starfox/render/object_snapshot.hpp"
 #include "starfox/render/particle_renderer.hpp"
 #include "starfox/render/scaled_text_renderer.hpp"
 #include "starfox/render/software_renderer.hpp"
+#include "starfox/render/source_depth_tables.hpp"
 #include "starfox/render/sprite_renderer.hpp"
 #include "starfox/simulation/game_simulation.hpp"
 #include "native_canvas.hpp"
+#include "hud_layout.hpp"
 #include "sprite_source_cache.hpp"
+#include "bg3_atlas_cache.hpp"
 #include "bg2_motion.hpp"
 #include "native_engine/scene.hpp"
 
@@ -37,6 +43,7 @@ public:
         std::uint32_t world_composite_us{};
         std::uint32_t native_model_us{};
         std::uint32_t finalize_us{};
+        std::uint32_t world_record_us{}, scene_compile_us{};
     };
 
     Frame3ds(const assets::RomImage& rom, const assets::SymbolMap& symbols);
@@ -45,8 +52,30 @@ public:
             last_draw_valid_ = false;
         native_engine_enabled_=enabled; native_mode1_enabled_=mode1;
     }
+    // Whether the PICA world receives each polygon as a few slanted bands
+    // rather than one span per row. Off reproduces the reference raster.
+    void set_native_edge_runs(bool enabled) noexcept {
+        if (native_edge_runs_ != enabled) {
+            native_edge_runs_ = enabled;
+            last_draw_valid_ = false;
+        }
+    }
+    // What the last PICA world was compiled from. The frame records it
+    // packed; the full commands are rebuilt here, for whoever asks.
+    const render::RasterCommands& native_commands() const {
+        native_commands_.unpack();
+        return native_commands_;
+    }
     const render::Framebuffer& native_background() const noexcept { return native_background_; }
+    std::uint32_t native_background_revision() const noexcept { return native_background_revision_; }
     const native_engine::Scene* native_scene() const noexcept { return native_scene_active_ ? &native_scene_ : nullptr; }
+    void set_retained_mode1_layers(bool enabled) noexcept {
+        if (retained_mode1_enabled_!=enabled) last_draw_valid_=false;
+        retained_mode1_enabled_=enabled;
+    }
+    [[nodiscard]] const Mode1LayerPlan* mode1_layers() const noexcept {
+        return retained_mode1_active_ ? &mode1_layer_plan_ : nullptr;
+    }
     void set_stereo_strength(std::uint8_t strength) noexcept;
     [[nodiscard]] bool stereo_active() const noexcept { return last_draw_stereo_; }
     [[nodiscard]] std::uint8_t stereo_strength() const noexcept { return stereo_strength_; }
@@ -75,6 +104,25 @@ public:
     void capture_after_tick(const simulation::GameSimulation& game);
     [[nodiscard]] const render::Framebuffer& last_frame() const noexcept {
         return last_frame_wide_ ? wide_frame_ : frame_;
+    }
+    // Names the contents of the wide frame: it changes whenever draw()
+    // writes that frame, and only then. Never zero.
+    [[nodiscard]] std::uint32_t wide_frame_revision() const noexcept {
+        return wide_foreground_revision_;
+    }
+    // How the wide frame reached its current revision. When `from_revision`
+    // is not zero, the frame equals the one that carried that revision
+    // everywhere outside the first `count` areas (pixels and write
+    // coverage): a presenter still holding that revision may refresh those
+    // texels alone. Zero means the frame was composed again from its layers.
+    struct WideFramePatch {
+        static constexpr std::size_t capacity = 12U;
+        std::uint32_t from_revision{};
+        std::size_t count{};
+        std::array<HudRect, capacity> areas{};
+    };
+    [[nodiscard]] const WideFramePatch& wide_frame_patch() const noexcept {
+        return wide_foreground_patch_;
     }
     // Decode the stage's currently active geometry while the source display
     // is black, before the first visible gameplay presentation.
@@ -141,7 +189,7 @@ public:
     [[nodiscard]] SpriteCacheStats sprite_cache_stats() const noexcept {
         return {source_foreground_cache_hits_, source_foreground_cache_misses_,
             source_foreground_selective_hits_, top_hud_selective_hits_,
-            sizeof(source_sprite_cache_) + sizeof(hud_sprite_cache_),
+            sizeof(source_sprite_cache_) + sizeof(hud_sprite_cache_) + sizeof(mode1_empty_sprite_cache_),
             source_sprite_cache_.character_count(), hud_sprite_cache_.character_count()};
     }
 
@@ -154,6 +202,7 @@ public:
         std::size_t interpolation_entries{}, interpolation_buckets{};
         std::size_t fixed_particle_dust_bytes{}, tracked_vector_capacity_bytes{};
         std::size_t bg2_presentation_fixed_bytes{};
+        std::size_t mode1_layer_plan_capacity_bytes{};
     };
     // On-demand dump inventory: exact vector payload capacities, not an
     // allocator/heap total. Map node allocations and shape data are separate.
@@ -161,8 +210,16 @@ public:
 
 private:
     bool native_engine_enabled_{}, native_mode1_enabled_{}, native_scene_active_{}, last_native_world_{};
-    render::RasterCommands native_commands_;
+    mutable render::RasterCommands native_commands_;
+    bool native_edge_runs_{true};
     render::Framebuffer native_background_{0,0}, empty_native_{0,0};
+    std::uint32_t native_background_revision_{1U};
+    bool native_mode1_layers_valid_{};
+    bool retained_mode1_enabled_{}, retained_mode1_active_{}, last_retained_mode1_{};
+    Mode1LayerPlan mode1_layer_plan_;
+    SpriteSourceCache mode1_empty_sprite_cache_{SpriteSourceCache::Selection::foreground};
+    std::uint32_t panorama_atlas_revision_{1U};
+    std::int16_t native_mode1_scroll_x_{}, native_mode1_scroll_y_{};
     native_engine::Scene native_scene_;
     struct Mode1BackgroundCache {
         render::Framebuffer bg3_low{256U, 224U};
@@ -173,6 +230,7 @@ private:
         render::Framebuffer bg2_high{256U, 224U};
         render::Framebuffer bg1{256U, 224U};
         simulation::SnesPpuState ppu{};
+        Bg3AtlasSourceCache atlas_source{};
         std::array<std::uint16_t, 256U> cgram{};
         std::uint64_t ppu_vram_revision{};
         std::int16_t scroll_x{};
@@ -180,6 +238,8 @@ private:
         bool valid{};
         bool bg1_valid{};
         bool panorama_valid{};
+        bool bg2_raster_valid{};
+        std::uint32_t atlas_revision{};
     };
 
     struct RenderItem {
@@ -188,16 +248,17 @@ private:
         simulation::MatrixQ15 rotation_matrix{};
         std::int16_t world_x{};
         std::int16_t world_z{};
-        friend bool operator==(const RenderItem&, const RenderItem&) = default;
+        // The live object, valid for the draw that built this item.
+        const simulation::GameObject* object{};
     };
 
     [[nodiscard]] std::uint32_t ram_symbol(const char *name) const;
     [[nodiscard]] std::uint32_t fx_symbol(const char *name) const;
     [[nodiscard]] std::uint16_t colour_symbol(const char *name) const;
     [[nodiscard]] const assets::Shape* load_base_shape(
-        std::uint16_t shape, std::uint16_t colour);
+        std::uint16_t shape, std::uint16_t colour, std::uint16_t minimum_colours = 0);
     [[nodiscard]] const assets::Shape* load_lod_shape(const assets::Shape& base,
-        std::uint16_t pointer, std::uint16_t colour);
+        std::uint16_t pointer, std::uint16_t colour, std::uint16_t minimum_colours = 0);
     [[nodiscard]] bool make_shape_cache_room(std::size_t bytes,
         const assets::Shape* protected_base = nullptr);
 
@@ -207,6 +268,11 @@ private:
     simulation::TrigTables trigonometry_;
     render::Framebuffer frame_{256U, 224U};
     render::Framebuffer wide_frame_{400U, 240U};
+    // The wide frame holds the 2D layer of a PICA world, composed with or
+    // without the top HUD.
+    bool wide_foreground_valid_{};
+    bool wide_foreground_top_hud_{};
+    std::uint32_t wide_foreground_revision_{1U};
     // Native 400x240 world raster: wider view, rather than a scaled 256x224
     // texture. The software model renderer clips to these physical pixels.
     render::Framebuffer world_{400U, 240U};
@@ -214,23 +280,15 @@ private:
     render::Framebuffer right_frame_{400U, 240U};
     std::uint8_t stereo_strength_{};
     bool last_draw_stereo_{};
-    // Indexed world pixels are independent of PPU composition and CGRAM.
-    // Key reuse from the quantized poses and view matrix actually consumed by
-    // the rasterizer; interpolation alpha alone is not a pixel dependency.
-    std::array<std::int32_t, 18U> world_cache_key_{};
-    simulation::MatrixQ15 world_cache_view_{};
-    std::vector<RenderItem> world_cache_render_items_{};
-    std::uint64_t world_cache_scene_revision_{};
+    // The world is recorded again at every draw. Its former whole-state
+    // cache (a copy of every object, particle and dust point per frame, then
+    // compared at the next) only ever matched a repeated presentation of
+    // one instant, which the game loop does not produce while it runs; a
+    // match kept exactly what recording the same inputs again yields.
+    // world_cache_misses_ counts the recordings; hits stay zero.
     std::uint64_t last_ppu_memory_revision_{};
     std::uint64_t world_cache_validation_us_{};
     std::uint64_t world_cache_snapshot_us_{};
-    std::vector<simulation::ObjectHandle> world_cache_draw_order_{};
-    std::vector<std::optional<simulation::GameObject>> world_cache_objects_{};
-    std::array<simulation::ParticleState, simulation::kMaximumParticles>
-        world_cache_particles_{};
-    std::array<simulation::DustPoint, simulation::kMaximumDustPoints>
-        world_cache_dust_{};
-    bool world_cache_valid_{};
     std::uint64_t world_cache_hits_{};
     std::uint64_t world_cache_misses_{};
     std::uint64_t background_cache_hits_{};
@@ -260,11 +318,35 @@ private:
     timing::TransformSnapshot current_camera_{};
     Bg2Motion bg2_motion_{};
     simulation::SnesPpuState presentation_ppu_{};
-    render::ObjectSnapshotMap previous_objects_{};
-    render::ObjectSnapshotMap current_objects_{};
+    // Presentation endpoints of every object slot, indexed by handle. Two
+    // captures are kept; a capture overwrites the older one in place, so a
+    // source tick allocates nothing and a draw looks nothing up by hash.
+    struct ObjectSnapshots {
+        static constexpr std::size_t slots = simulation::kMaximumObjects + 1U;
+        std::array<render::ObjectPresentationSnapshot, slots> entries{};
+        std::array<bool, slots> present{};
+        std::uint32_t count{};
+        [[nodiscard]] const render::ObjectPresentationSnapshot* find(
+            simulation::ObjectHandle handle) const noexcept {
+            return handle < slots && present[handle] ? &entries[handle] : nullptr;
+        }
+    };
+    std::array<ObjectSnapshots, 2U> object_snapshots_{};
+    // object_snapshots_[current_objects_index_] is the latest capture. The
+    // other is the one before, unless a scene cut made both ends the same.
+    std::uint8_t current_objects_index_{};
+    bool previous_objects_are_current_{true};
+    [[nodiscard]] const ObjectSnapshots& current_objects() const noexcept {
+        return object_snapshots_[current_objects_index_];
+    }
+    [[nodiscard]] const ObjectSnapshots& previous_objects() const noexcept {
+        return object_snapshots_[previous_objects_are_current_
+            ? current_objects_index_ : 1U - current_objects_index_];
+    }
     std::uint64_t snapshot_scene_revision_{};
     simulation::GameFlowState snapshot_flow_{};
     bool snapshots_ready_{};
+    Mode1Bg2Atlas bg2_mode1_atlas_;
     render::BackgroundRenderer backgrounds_;
     render::SpriteRenderer sprites_;
     render::Framebuffer corner_hud_{256U,224U};
@@ -285,6 +367,37 @@ private:
     std::uint8_t top_hud_object_select_{};
     bool top_hud_objects_enabled_{};
     bool top_hud_cache_valid_{};
+    // The top HUD is retained by group: lives, boss health, shield stack and
+    // bombs/boost stack. A group keeps the two source crops it was scaled
+    // from and where they landed in top_hud_cache_, so a meter that moves
+    // rewrites that group's rectangle and not the whole 400x240 layer.
+    struct TopHudGroup {
+        HudRect upper{}, bar{};
+        HudRect upper_target{}, bar_target{};
+    };
+    std::array<TopHudGroup, 4U> top_hud_groups_{};
+    // What meter_hud_ holds, in paint order.
+    render::MeterRectangles top_hud_meter_rectangles_{};
+    // Groups that overlap need the complete ordered rebuild.
+    bool top_hud_disjoint_{};
+    // Where the last refresh rewrote top_hud_cache_.
+    std::array<HudRect, WideFramePatch::capacity> top_hud_damage_{};
+    std::size_t top_hud_damage_count_{};
+    bool top_hud_damage_all_{};
+    // Mode 2 over a PICA world: the wide frame is empty but for
+    // source_foreground_spans_ and the top HUD.
+    bool wide_source_layer_{};
+    WideFramePatch wide_foreground_patch_{};
+    [[nodiscard]] bool refresh_top_hud(const simulation::SnesPpuState& ppu,
+        const simulation::MeterState& meters, simulation::Experience experience,
+        std::uint64_t ppu_memory_revision, std::uint64_t ppu_vram_revision);
+    void add_top_hud_damage(HudRect area) noexcept;
+    void scan_top_hud_spans();
+    void refresh_top_hud_spans();
+    void patch_wide_top_hud(bool source_foreground) noexcept;
+    void erase_wide_source_layer(bool hud_damage) noexcept;
+    void draw_wide_source_layer() noexcept;
+    void draw_wide_top_hud() noexcept;
     std::uint64_t top_hud_cache_hits_{};
     std::uint64_t top_hud_cache_misses_{};
     render::software_renderer_detail::Scratch model_scratch_;
@@ -299,7 +412,7 @@ private:
         std::size_t bytes{};
         std::uint64_t last_use{};
     };
-    std::unordered_map<std::uint32_t, CachedShape> shapes_;
+    std::unordered_map<std::uint64_t, CachedShape> shapes_;
     // Compact LODs inherit scale/material/bounds from their parent. They
     // cannot share the base cache or a key containing only the child address.
     std::unordered_map<std::uint64_t, CachedShape> lod_shapes_;
@@ -310,8 +423,59 @@ private:
     // retained-cache budget. At most one transient base and one LOD exist.
     std::optional<assets::Shape> transient_base_shape_, transient_lod_shape_;
     std::unordered_set<std::uint64_t> invalid_lods_;
-    std::unordered_set<std::uint32_t> invalid_shapes_;
+    std::unordered_set<std::uint64_t> invalid_shapes_;
     std::vector<RenderItem> items_;
+
+    // ---- World path: values resolved once, or once per source tick ----
+    // The symbol map is immutable for the session. Every address the frame
+    // reads by name is looked up at construction, never per draw.
+    struct ResolvedSymbols {
+        std::uint32_t view_pos_x{}, view_pos_y{}, view_pos_z{};
+        std::uint32_t view_rot_x{}, view_rot_y{}, view_rot_z{};
+        std::uint32_t bg2_x_scroll{}, bg2_scroll{};
+        std::uint32_t game_frame{}, shadow_height{}, player_fly_mode{};
+        std::uint32_t vanish_x{}, vanish_y{}, depth_colours{}, depth_thresholds{};
+        std::uint32_t flash_player_strategy{}, depth_tables{};
+        std::uint16_t special_colour{}, red_colour{}, white_colour{};
+    };
+    ResolvedSymbols resolved_{};
+    render::ExteriorShipVisibility exterior_visibility_;
+    // Rotation matrices of the two camera endpoints (pure functions of
+    // previous_camera_ and current_camera_), refreshed at each capture.
+    simulation::MatrixQ15 previous_view_matrix_{}, current_view_matrix_{};
+    // The scene's depth-cue tables are ROM constants selected by three
+    // words; read them from the ROM again only when a word changes.
+    std::optional<render::SourceDepthTables> depth_tables_;
+    std::uint32_t depth_tables_address_{};
+    std::uint16_t depth_tables_thresholds_{}, depth_tables_colours_{};
+    // What an object slot last resolved its model to. A binding is good
+    // while its key is asked again and the shape caches have not changed;
+    // then the draw skips every hash lookup and only stamps the entry's use.
+    struct ShapeBinding {
+        std::uint64_t key{}, generation{};
+        CachedShape* entry{};
+    };
+    static constexpr std::size_t binding_slots = simulation::kMaximumObjects + 1U;
+    std::array<ShapeBinding, binding_slots> base_bindings_{};
+    std::array<ShapeBinding, binding_slots> lod_bindings_{};
+    std::array<ShapeBinding, binding_slots> shadow_bindings_{};
+    // Advanced by every insertion into, or removal from, a shape cache or a
+    // rejected-shape set. Never zero.
+    std::uint64_t shape_cache_generation_{1U};
+    [[nodiscard]] const assets::Shape* resolve_base_shape(std::uint16_t shape,
+        std::uint16_t colour, std::uint16_t minimum_colours, CachedShape** entry);
+    [[nodiscard]] const assets::Shape* resolve_lod_shape(const assets::Shape& base,
+        std::uint16_t pointer, std::uint16_t colour, std::uint16_t minimum_colours,
+        CachedShape** entry);
+    [[nodiscard]] const assets::Shape* bound_base_shape(ShapeBinding& binding,
+        std::uint16_t shape, std::uint16_t colour, std::uint16_t minimum_colours);
+    [[nodiscard]] const assets::Shape* bound_lod_shape(ShapeBinding& binding,
+        const assets::Shape& base, std::uint16_t pointer, std::uint16_t colour,
+        std::uint16_t minimum_colours);
+    // presentation_ppu_ mirrors the live PPU. Its memory arrays are copied
+    // again only when the simulation's revision tokens say they changed.
+    std::uint64_t presentation_ppu_memory_revision_{}, presentation_ppu_vram_revision_{};
+    bool presentation_ppu_synced_{};
 };
 
 } // namespace starfox::platform_3ds

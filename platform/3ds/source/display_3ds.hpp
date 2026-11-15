@@ -5,6 +5,9 @@
 #include "bg2_plan.hpp"
 #include "bg2_atlas_cache.hpp"
 #include "bg2_map_cache.hpp"
+#include "mode1_layer_plan.hpp"
+#include "indexed_atlas_updates.hpp"
+#include "texel_expand.hpp"
 #include "starfox/render/palette.hpp"
 #include "starfox/simulation/snes_ppu.hpp"
 
@@ -40,6 +43,7 @@ struct DisplayFrameTiming {
     bool gpu_begin_failed{}, gpu_submitted{}, bg2_plan_worker_used{};
     bool bg2_raster_cache_used{}, bg2_raster_cache_hit{};
     std::uint32_t bg2_emitted_quads{};
+    std::uint32_t mode1_layer_quads{}, mode1_layer_upload_bytes{}, mode1_layer_converted_bytes{};
 };
 
 // CPU builds the indexed source raster and palette. PICA200 owns the texture
@@ -83,7 +87,10 @@ public:
         const render::Framebuffer& foreground,
         const render::Palette256& palette, bool reuse_source = false,
         const render::Framebuffer* right = nullptr,
-        const native_engine::Scene* scene = nullptr, std::uint8_t stereo_strength = 0U);
+        const native_engine::Scene* scene = nullptr, std::uint8_t stereo_strength = 0U,
+        // Names the contents of `foreground` (Frame3ds::wide_frame_revision);
+        // zero when they have no name.
+        std::uint32_t foreground_revision = 0U);
     // Start the New 3DS geometry job before software rendering. The caller
     // must not advance the PPU until present_mode2() has consumed the job.
     // Pass false while higher-priority audio is still computing on core 2:
@@ -102,9 +109,21 @@ public:
     }
     bool present_native(const render::Framebuffer& background,
         const render::Framebuffer& foreground,const render::Palette256&,
-        const native_engine::Scene&);
+        const native_engine::Scene&, std::uint32_t background_revision = 0U,
+        std::uint32_t foreground_revision = 0U);
+    bool present_mode1_layers(const Mode1LayerPlan&, const render::Framebuffer& foreground,
+        const render::Palette256&, const native_engine::Scene&,
+        std::uint32_t foreground_revision = 0U);
+    [[nodiscard]] bool retained_mode1_available() const noexcept {
+        return gpu_active_ && native_engine_.ready() && mode1_layers_available_;
+    }
     bool native_engine_ready() const noexcept { return native_engine_.ready(); }
     bool open_native_engine() { return native_engine_.open(); }
+    bool discard_test_atlases() {
+        if (!wait_gpu_idle(500U)) return false;
+        release_mode1_layers();
+        return true;
+    }
     const native_engine::GpuStats& native_engine_stats() const noexcept { return native_engine_.stats(); }
     [[nodiscard]] bool gpu_active() const noexcept { return gpu_active_; }
     // Bounded replacement for C3D_FrameBegin(0): a wedged GX queue must not
@@ -134,7 +153,19 @@ public:
         std::size_t quad_capacity_bytes{}, plan_capacity_bytes{};
         std::size_t worker_plan_capacity_bytes{}, linear_staging_bytes{};
         bool worker_plan_available{};
+        std::size_t mode1_texture_bytes{},mode1_index_cache_bytes{};
     };
+    [[nodiscard]] std::size_t mode1_texture_bytes() const noexcept {
+        std::size_t bytes{};
+        for(const auto& layer:mode1_textures_)for(const auto& texture:layer.textures)
+            if(texture.data)bytes+=std::size_t(texture.width)*texture.height*4U;
+        return bytes;
+    }
+    [[nodiscard]] std::size_t mode1_index_cache_bytes() const noexcept {
+        std::size_t bytes{};
+        for(const auto& layer:mode1_textures_)bytes+=layer.updates.storage_capacity_bytes();
+        return bytes;
+    }
     // Dump-only ownership snapshot; never inspect a worker-owned vector while
     // that worker exists, even if the GPU queue has already been fenced.
     [[nodiscard]] MemoryStats memory_stats() const noexcept {
@@ -146,14 +177,18 @@ public:
             (std::size_t(linear_pixels_ != nullptr) + std::size_t(linear_overlay_ != nullptr)
                 + std::size_t(linear_right_ != nullptr))
                 * texture_width_ * texture_height_ * sizeof(std::uint16_t),
-            bg2_plan_worker_ == nullptr};
+            bg2_plan_worker_ == nullptr,mode1_texture_bytes(),mode1_index_cache_bytes()};
     }
     [[nodiscard]] bool show_full_dump_progress(const char* stage,
         std::uint64_t written, std::uint64_t total);
+    // Bottom-screen notice of the automatic test tour, in the same panel.
+    [[nodiscard]] bool show_test_status(const char* stage, const char* detail,
+        unsigned percent);
     const u8* top_framebuffer() const noexcept { return last_top_framebuffer_; }
     void note_top_framebuffer(const u8* pixels) noexcept {
         last_top_framebuffer_ = pixels;
         frame_texture_valid_ = false;
+        native_textures_valid_ = false;
         cpu_frame_valid_ = false;
         right_texture_valid_ = right_overlay_valid_ = false;
     }
@@ -164,6 +199,20 @@ public:
 
 private:
     native_engine::Pica native_engine_;
+    struct Mode1TextureLayer {
+        std::array<C3D_Tex,2> textures{};
+        std::array<std::uint32_t,256> colours{};
+        IndexedAtlasUpdates updates;
+        const render::Framebuffer* source{};
+        std::uint32_t revision{};
+        unsigned width{},height{};
+        bool valid{},empty{};
+    };
+    std::array<Mode1TextureLayer,Mode1LayerPlan::layer_count> mode1_textures_{};
+    bool mode1_layers_available_{true};
+    bool prepare_mode1_layer(const Mode1LayerPlan&,unsigned,const render::Palette256&,bool& reused);
+    bool draw_mode1_layer(const Mode1LayerPlan&,unsigned);
+    void release_mode1_layers() noexcept;
     struct TileQuad {
         std::uint16_t x, y, width, height, slot;
         std::uint16_t first_x, first_y;
@@ -171,6 +220,8 @@ private:
         bool solid;
         std::uint8_t solid_colour;
         bool map_sample{};
+        bool affine_map{};
+        std::int32_t map_y_q9{}, map_dy_dx_q8{};
     };
     struct Bg2PlanKey {
         std::uint8_t background_mode{}, mosaic{}, main_screen{}, bg2_screen_size{};
@@ -196,14 +247,18 @@ private:
         std::uint16_t character, std::uint8_t palette_bank);
     [[nodiscard]] bool draw_bg2_quads(const render::Palette256& palette);
     [[nodiscard]] bool build_bg2_map(const simulation::SnesPpuState& ppu,
-        const render::Palette256& palette);
-    void remember_bg2_map_source(const simulation::SnesPpuState& ppu) noexcept;
+        std::uint64_t ppu_vram_revision, const render::Palette256& palette);
+    void remember_bg2_map_source(const simulation::SnesPpuState& ppu,
+        std::uint64_t ppu_vram_revision) noexcept;
     [[nodiscard]] bool present_cpu(const render::Framebuffer& indexed,
         const render::Palette256& palette, bool reuse_source);
     void upload_right(const render::Framebuffer& frame,
         const render::Palette256& palette, bool foreground, bool reuse_source);
     static void bg2_plan_worker_main(void* argument);
     void wait_for_bg2_plan() noexcept;
+    bool draw_bottom_panel(const char* title, const char* stage,
+        const char* amount, const char* first_footer,
+        const char* second_footer, unsigned percent);
     [[nodiscard]] bool consume_bg2_plan(
         const simulation::SnesPpuState& ppu,
         std::uint64_t ppu_vram_revision,
@@ -213,6 +268,9 @@ private:
     static constexpr std::uint32_t texture_height_ = 256U;
     std::uint16_t *linear_pixels_{};
     std::uint16_t *linear_overlay_{};
+    // Which rows of linear_overlay_ are known to be empty. Every writer of
+    // that buffer goes through expand_foreground_rows.
+    ForegroundRows overlay_rows_{};
     std::uint16_t *linear_right_{};
     C3D_Tex texture_{};
     C3D_Tex overlay_texture_{};
@@ -261,6 +319,8 @@ private:
     std::array<std::uint16_t, 256U> cached_frame_colours_{};
     std::array<std::uint16_t, 256U> cached_cpu_colours_{};
     std::array<std::uint16_t, 256U> cached_overlay_colours_{};
+    // The foreground the overlay texture was last filled from.
+    std::uint32_t overlay_revision_{};
     std::uint16_t cached_frame_width_{}, cached_frame_height_{};
     std::uint16_t cached_cpu_width_{}, cached_cpu_height_{};
     std::uint32_t cached_frame_draw_scale_{}, cached_cpu_draw_scale_{};
@@ -268,6 +328,8 @@ private:
     bool frame_texture_valid_{};
     bool cpu_frame_valid_{};
     bool overlay_texture_valid_{};
+    bool native_textures_valid_{};
+    std::uint32_t native_background_revision_{}, native_foreground_revision_{};
     bool right_texture_valid_{}, right_overlay_valid_{}, cached_frame_stereo_{};
     std::array<std::uint16_t, 256U> cached_right_colours_{};
     std::array<std::uint16_t, 256U> cached_right_overlay_colours_{};

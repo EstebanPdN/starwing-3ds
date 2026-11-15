@@ -1,9 +1,11 @@
 #include "asset_stage.h"
 #include "asset_stage.hpp"
 #include "audio_3ds.hpp"
+#include "deferred_apu_sync.hpp"
 #include "apt_audio_3ds.hpp"
 #include "controls_3ds_art.hpp"
 #include "display_3ds.hpp"
+#include "gpu_self_test.hpp"
 #include "gpu_lifetime_3ds.h"
 #include "diagnostics_3ds.hpp"
 #include "frame_3ds.hpp"
@@ -13,9 +15,11 @@
 #include "input_3ds.hpp"
 #include "launch_selection.hpp"
 #include "screen_transfer.hpp"
+#include "test_build_label.hpp"
 #include "memory_3ds.hpp"
 #include "performance_history.hpp"
 #include "save_storage_3ds.hpp"
+#include "test_mode_3ds.hpp"
 #include "updater_3ds.hpp"
 #include "options_menu_3ds.hpp"
 #include "rom_probe.h"
@@ -92,9 +96,17 @@ const char* autosave_path(bool ex) noexcept {
     return ex?autosave_ex:autosave_original;
 }
 
+// `bottom_damage` is for the retained level HUD: what its owner rewrote in
+// `pixels` since the HUD was last presented. Without it the bottom image is
+// taken as a new picture and converted whole.
 bool present_menu_pixels(const std::vector<std::uint32_t>& pixels,
     gfxScreen_t screen, starfox::platform_3ds::Display3ds& display,
-    std::uint8_t brightness=15U) {
+    std::uint8_t brightness=15U,
+    const starfox::platform_3ds::ScreenDamage* bottom_damage=nullptr) {
+    // What each of the bottom screen's two framebuffers still shows. Told of
+    // every bottom presentation, also one that finds no framebuffer.
+    static starfox::platform_3ds::BottomScreenTransfer bottom_transfer;
+    if(screen==GFX_BOTTOM) bottom_transfer.note(bottom_damage);
     u16 physical_width{},physical_height{};
     auto* output=screen==GFX_TOP
         ? starwing_cpu_top_framebuffer(&physical_width,&physical_height)
@@ -110,9 +122,12 @@ bool present_menu_pixels(const std::vector<std::uint32_t>& pixels,
         display.note_top_framebuffer(output);
     } else {
         auto* words=reinterpret_cast<std::uint32_t*>(output);
-        starfox::platform_3ds::transfer_rgba_screen(
-            pixels.data(), words, 320, brightness);
-        GSPGPU_FlushDataCache(output,320U*240U*4U);
+        // Converts what this framebuffer is behind by (all of it for a new
+        // picture or brightness) and draws the build badge where needed.
+        const auto written=bottom_transfer.transfer(pixels.data(),words,brightness);
+        if(!written.empty())
+            GSPGPU_FlushDataCache(output+written.first*4U,
+                (written.last-written.first)*4U);
         display.note_bottom_framebuffer(output);
     }
     if (screen==GFX_TOP) starwing_swap_cpu_top();
@@ -162,6 +177,21 @@ void prepare_directory() {
         throw std::runtime_error("Cannot create /3ds on SD");
     if (mkdir(app_dir, 0777) != 0 && errno != EEXIST)
         throw std::runtime_error("Cannot create Starwing on SD");
+}
+
+void write_build_info(bool new_3ds, const char* launch_path) {
+    // Record the executable actually launched, including Homebrew Launcher
+    // paths: installing a CIA does not replace a separate .3dsx on the SD.
+    if (FILE* log = std::fopen("sdmc:/3ds/Starwing/build-info.txt", "wb")) {
+        std::fprintf(log,
+            "build=%s\ncia=%d\nhuella=%s\nmodelo=%s\n"
+            "lanzamiento=%s\nruta=%s\n",
+            build_version, static_cast<int>(STARWING_CIA_VERSION),
+            build_fingerprint, new_3ds ? "New 3DS" : "Old 3DS",
+            envIsHomebrew() ? "3DSX" : "CIA",
+            launch_path ? launch_path : "");
+        std::fclose(log);
+    }
 }
 
 std::vector<std::string> retail_roms() {
@@ -263,11 +293,16 @@ struct RunRequest {std::string rom_path; bool ex{};};
 
 // One line per presentation recovery, kept for player bug reports.
 void write_gpu_recovery(const char* stage, const char* flow,
-    unsigned begin_failures, unsigned fallbacks) {
+    unsigned begin_failures, unsigned fallbacks,
+    const starfox::platform_3ds::Display3ds& display) {
     if (FILE* log = std::fopen("sdmc:/3ds/Starwing/gpu-recovery.txt", "ab")) {
-        std::fprintf(log, "build=%s stage=%s flow=%s session_ms=%llu begin_failures=%u fallbacks=%u\n",
+        const auto& gpu=display.native_engine_stats();
+        std::fprintf(log, "build=%s stage=%s flow=%s os_ms=%llu begin_failures=%u fallbacks=%u "
+            "fingerprint=%s last_world_vertices=%lu last_world_draws=%lu last_cmd_buffer_pct=%.2f\n",
             build_version, stage, flow, static_cast<unsigned long long>(osGetTime()),
-            begin_failures, fallbacks);
+            begin_failures, fallbacks,STARWING_BUILD_FINGERPRINT,
+            static_cast<unsigned long>(gpu.vertices),static_cast<unsigned long>(gpu.draws),
+            double(C3D_GetCmdBufUsage())*100.0);
         std::fclose(log);
     }
 }
@@ -332,7 +367,8 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
     auto owned_display = std::make_unique<starfox::platform_3ds::Display3ds>();
     auto& display = *owned_display;
     static_cast<void>(display.open());
-    renderer.set_native_engine(profile.pica_world && display.gpu_active() && display.open_native_engine());
+    renderer.set_native_engine(profile.pica_world && display.gpu_active() && display.open_native_engine(), true);
+    renderer.set_retained_mode1_layers(display.retained_mode1_available());
     auto owned_audio = std::make_unique<starfox::platform_3ds::Audio3ds>();
     auto& audio = *owned_audio;
     static_cast<void>(audio.open());
@@ -370,7 +406,7 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
     const auto available_for_catalog = heap_capacity > heap_used + runtime_reserve
         ? heap_capacity - heap_used - runtime_reserve : 0ULL;
     const auto catalog_budget = std::min<std::uint64_t>(available_for_catalog,
-        (preload_new_3ds ? 12U : 6U) * 1024U * 1024U);
+        (preload_new_3ds ? 12U : 3U) * 1024U * 1024U);
     allocation_failure.operation = "preload_catalog";
     const auto catalog = renderer.preload_catalog(catalog_budget,
         [](void*, unsigned, unsigned) { return aptMainLoop(); });
@@ -396,6 +432,14 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
     starfox::platform_3ds::FramePacing pacing{SYSCLOCK_ARM11};
     unsigned save_clock = 0U;
     starfox::platform_3ds::Diagnostics3ds diagnostics;
+    // Automatic hardware test tour: START+SELECT (hold R for the long one).
+    // Once it starts, this session no longer holds the player's game, so
+    // nothing is saved from it and it ends by restarting the session.
+    starfox::platform_3ds::TestMode3ds test_mode;
+    bool test_chord_latched = false;
+    bool test_session_touched = false;
+    bool test_finished = false;
+    std::vector<std::uint8_t> test_ex_ram;
     auto owned_performance = std::make_unique<PerformanceHistory>();
     auto& performance = *owned_performance;
 #ifdef STARWING_AUTOPILOT
@@ -423,6 +467,7 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
     unsigned dashboard_gpu_submissions = 0U;
     unsigned dashboard_gpu_begin_failures = 0U;
     unsigned audio_video_phases = 0U;
+    std::uint32_t effective_held=0U;
     std::vector<starfox::simulation::ApuPortWrite> pending_audio_writes;
     pending_audio_writes.reserve(64U);
     bool last_gpu_bg2 = false;
@@ -504,6 +549,28 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
     };
 
     std::optional<RunRequest> next_game;
+    // The test tour replaces the simulation: keep what the player had first.
+    const auto save_before_test = [&] {
+        if (menu->auto_save()) {
+            if (audio.pending()) {
+                static_cast<void>(audio.finish_update());
+                game.synchronize_apu_output_ports(audio.output_ports());
+            }
+            if (!pending_audio_writes.empty()) {
+                audio.begin_update(pending_audio_writes);
+                pending_audio_writes.clear();
+                if (audio.pending()) {
+                    static_cast<void>(audio.finish_update());
+                    game.synchronize_apu_output_ports(audio.output_ports());
+                }
+            }
+            const auto flow = game.flow_state();
+            if (flow == starfox::simulation::GameFlowState::gameplay
+                || flow == starfox::simulation::GameFlowState::training)
+                static_cast<void>(write_autosave(autosave_file.c_str(), rom, game, audio));
+        }
+        if (ex) write_ex_save(game.ex_save_ram(), ex_save_file.c_str());
+    };
     const auto present_new_overlay=[&] {
         last_bottom_hud=false;
         starfox::platform_3ds::OverlayMetrics metrics{};
@@ -546,7 +613,7 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
     std::vector<u8> frozen_options_top;
     std::uint64_t options_audio_ms=0;
     unsigned update_notes_revision=~0U;
-    starfox::platform_3ds::PresentationLimit presentation_limit(SYSCLOCK_ARM11);
+    starfox::platform_3ds::PhasePresentationLimit presentation_limit;
     bool render_changed=true;
     // Continuous top-screen presentation failure since this time (0 = none).
     std::uint64_t top_failing_since_ms = 0U;
@@ -558,14 +625,14 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
         if (starwing_gpu_abandoned() && display.gpu_active()) {
             display.use_cpu_presentation();
             write_gpu_recovery("suspend_queue_timeout", flow_label(game.flow_state()),
-                dashboard_gpu_begin_failures, dashboard_fallback);
+                dashboard_gpu_begin_failures, dashboard_fallback,display);
         }
 #ifdef STARWING_AUTOPILOT
         if (autopilot.finished()) { autopilot.event("end"); break; }
         if (autopilot.take_home_due()) {
             // Same preparation and libctru call as a real HOME press.
             autopilot.event("home jump");
-            audio.stop_playback();
+            audio.silence_for_suspend();
             static_cast<void>(display.wait_gpu_idle(500U));
             aptJumpToHomeMenu();
             autopilot.event("home returned");
@@ -574,7 +641,8 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
         if (apt_audio_pause.take_resumed()) {
             // Returning from HOME/sleep: no catch-up burst, full redraw.
             // Sleep leaves the old ring looping; restart it from silence.
-            audio.stop_playback();
+            audio.stop_playback_no_wait();
+            audio.reapply_cpu_quota();
             previous_ticks = svcGetSystemTick();
             pacing.reset(); presentation_metrics->reset_epoch();
             render_changed = true;
@@ -597,8 +665,73 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
             last_bottom_hud=false;
         input.reserve_select_for_overlay(menu->overlay_enabled());
         input.sample_display_frame();
-        const auto keys_down = hidKeysDown();
-        const auto keys_held = hidKeysHeld() | keys_down;
+        const auto raw_keys_down = hidKeysDown();
+        const auto raw_keys_held = hidKeysHeld() | raw_keys_down;
+        constexpr u32 test_chord = KEY_START | KEY_SELECT;
+        const bool test_chord_held = (raw_keys_held & test_chord) == test_chord;
+        if (!test_mode.running() && test_chord_held && !test_chord_latched
+            && !menu->open() && !menu->confirming()) {
+            save_before_test();
+            const auto& test_audio = audio.diagnostics();
+            char test_header[960]{};
+            std::snprintf(test_header, sizeof(test_header),
+                "%s - Starwing 3DS\n"
+                "build=%s cia=%d huella=%s\n"
+                "lanzamiento=%s ruta=%.255s\n"
+                "modelo=%s experiencia=%s\n"
+                "audio_nucleo=%d cuota_original=%lu cuota_efectiva=%lu "
+                "intentos_nucleo1=%u cuota_set=%08lx cuota_verificar=%08lx csnd=%08lx\n"
+                "gpu_activa=%d gpu_abandonada=%d mundo_pica=%d motor_pica=%d ancho=%d "
+                "velocidad_original=%d\n"
+                "speedup_init=%08lx speedup_config=%08lx\n"
+                "cambios=interprete_compacto rutinas_nativas puente_por_marcas cola_audio hud_incremental mundo_empaquetado fondos_retenidos mundo_mode1_pica diagnosticos_v3\n",
+                build_version, build_version, static_cast<int>(STARWING_CIA_VERSION),
+                STARWING_BUILD_FINGERPRINT,
+                envIsHomebrew() ? "3DSX" : "CIA", launch_path ? launch_path : "",
+                profile.name, ex ? "EX" : "Original",
+                test_audio.selected_core,
+                static_cast<unsigned long>(test_audio.original_quota),
+                static_cast<unsigned long>(test_audio.effective_quota),
+                test_audio.core1_attempts,
+                static_cast<unsigned long>(test_audio.quota_set_result),
+                static_cast<unsigned long>(test_audio.quota_verify_result),
+                static_cast<unsigned long>(test_audio.csnd_result),
+                display.gpu_active() ? 1 : 0, starwing_gpu_abandoned() ? 1 : 0,
+                profile.pica_world && !gpu_world_disabled ? 1 : 0,
+                display.native_engine_ready() ? 1 : 0,
+                menu->wide() ? 1 : 0, menu->original_speed() ? 1 : 0,
+                static_cast<unsigned long>(speedup_init_result),
+                static_cast<unsigned long>(speedup_config_result));
+            if (test_mode.start(app_dir, (raw_keys_held & KEY_R) != 0U, test_header)) {
+                test_session_touched = true;
+                overlay_visible = false;
+                if (ex) {
+                    const auto ram = game.ex_save_ram();
+                    test_ex_ram.assign(ram.begin(), ram.end());
+                }
+                // The tour runs unattended, also with the lid closed.
+                aptSetSleepAllowed(false);
+                (void)audio.finish_update();
+                audio.stop_playback_no_wait();
+                starfox::platform_3ds::run_gpu_self_test(display,test_mode.folder(),menu->wide());
+                // The synthetic 1536x512 atlas fixtures are not a game cache.
+                // Their 8 MiB GPU textures and 2 MiB index copies must not
+                // remain resident while loading the first real scene.
+                (void)display.discard_test_atlases();
+                previous_ticks=svcGetSystemTick();
+                pacing.reset(); presentation_metrics->reset_epoch();
+                last_bottom_hud=false;
+                bottom_presentation=BottomPresentation::unknown;
+            }
+        } else if (test_mode.running() && !test_chord_latched
+            && (raw_keys_down & KEY_START) != 0U) {
+            test_mode.cancel();
+        }
+        test_chord_latched = test_chord_latched
+            ? (raw_keys_held & test_chord) != 0U : test_chord_held;
+        // The tour owns the controller: no menu, overlay or dump shortcut.
+        const auto keys_down = test_mode.running() ? u32{0} : raw_keys_down;
+        const auto keys_held = test_mode.running() ? u32{0} : raw_keys_held;
         bool capture_requested = false;
         auto capture_kind = diagnostics.poll_shortcut(keys_down,
             keys_held, capture_requested);
@@ -607,6 +740,7 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
         if (clear_requested) capture_requested = false;
         touchPosition touch{};
         hidTouchRead(&touch);
+        if (test_mode.running()) touch = {};
         const auto flow_before_menu=game.flow_state();
         const bool controls_screen=flow_before_menu
             ==starfox::simulation::GameFlowState::controls_type
@@ -703,7 +837,8 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
             : starfox::simulation::TimingMode::unlocked_20_fps);
         renderer.set_top_hud_visible(menu->top_hud());
         renderer.set_native_engine(profile.pica_world && !gpu_world_disabled
-            && display.gpu_active() && display.native_engine_ready());
+            && display.gpu_active() && display.native_engine_ready(), true);
+        renderer.set_retained_mode1_layers(display.retained_mode1_available());
         if(main_menu_transition==MainMenuTransition::black_hold) {
             if(osGetTime()<black_until_ms) {
                 menu->draw_black();
@@ -791,7 +926,85 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
             capture_requested = true;
             capture_kind = starfox::platform_3ds::DiagnosticKind3ds::full;
         }
+        bool test_capture = false;
+        bool pixel_comparison_ready=false;
+        std::unique_ptr<starfox::simulation::SnesPpuState> captured_presentation_ppu;
+        int captured_scroll_x=0,captured_scroll_y=0;
+        bool captured_native=false;
+        double pixel_comparison_alpha=1.0;
+        starfox::render::Palette256 pixel_comparison_palette{};
+        const char* pixel_comparison_backend="unknown";
+        switch (test_mode.poll(osGetTime())) {
+        case starfox::platform_3ds::TestMode3ds::Request::enter_map: {
+            // A fresh simulation at the level entry, built as a new game
+            // builds it, replaces the running one in place.
+            std::string test_error;
+            bool test_entered = false;
+            allocation_failure.operation = "test_mode_enter_map";
+            try {
+                if (audio.pending()) static_cast<void>(audio.finish_update());
+                pending_audio_writes.clear();
+                auto fresh = std::make_unique<starfox::simulation::GameSimulation>(
+                    rom, symbols, test_mode.map(),
+                    ex ? std::span<const std::uint8_t>{test_ex_ram}
+                       : std::span<const std::uint8_t>{}, true);
+                if (ex) fresh->set_experience(starfox::simulation::Experience::starfox_ex);
+                fresh->set_timing_mode(menu->original_speed()
+                    ? starfox::simulation::TimingMode::original_speed
+                    : starfox::simulation::TimingMode::unlocked_20_fps);
+                fresh->set_presentation_fps(60U);
+                fresh->set_god_mode(true);
+                audio.restart_spc();
+                static_cast<void>(audio.prime_upload_sequence(
+                    fresh->map().take_apu_port_writes()));
+                game.swap_state(*fresh);
+                game.synchronize_apu_output_ports(audio.output_ports());
+                renderer.capture_after_tick(game);
+                static_cast<void>(renderer.preload_active_shapes(game));
+                test_entered = true;
+            } catch (const std::exception& error) {
+                test_error = error.what();
+            } catch (...) {
+                test_error = "error desconocido";
+            }
+            test_mode.map_entered(test_entered, test_error, osGetTime());
+            input.reset();
+            render_changed = true;
+            bottom_presentation = BottomPresentation::unknown;
+            last_bottom_hud = false;
+            last_overlay_metrics.reset();
+            previous_ticks = svcGetSystemTick();
+            pacing.reset(); presentation_metrics->reset_epoch();
+            break;
+        }
+        case starfox::platform_3ds::TestMode3ds::Request::capture:
+            capture_requested = true;
+            capture_kind = starfox::platform_3ds::DiagnosticKind3ds::quick;
+            test_capture = true;
+            break;
+        case starfox::platform_3ds::TestMode3ds::Request::finish: {
+            audio.stop_playback();
+            aptSetSleepAllowed(true);
+            if (display.show_test_status(test_mode.cancelled()
+                    ? "PRUEBA CANCELADA" : "PRUEBA FINALIZADA", "PULSA START", 100U))
+                gspWaitForVBlank();
+            while (apt_audio_pause.main_loop([&] { return display.wait_gpu_idle(500U); })) {
+                hidScanInput();
+                if ((hidKeysDown() & KEY_START) != 0U) break;
+                gspWaitForVBlank();
+            }
+            // Back to a normal game: a new session from the title screen.
+            next_game = RunRequest{selected_rom, ex};
+            test_finished = true;
+            break;
+        }
+        default:
+            break;
+        }
+        if (test_finished) break;
         const auto loop_begin = svcGetSystemTick();
+        const auto audio_wait_before=audio.diagnostics().wait_total_us;
+        std::uint32_t loop_instructions=0U;
         const auto now_ticks = svcGetSystemTick();
         pacing.advance(now_ticks - previous_ticks);
         previous_ticks = now_ticks;
@@ -809,16 +1022,10 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
             ++video_phases;
             ++dashboard_phases;
             if (game.logic_tick_ready()) {
-                // A previous audio job must publish its APU ports before the
-                // next source tick can read them. Usually the job already
-                // completed after the preceding video render below.
-                if (audio.pending()) {
-                    const auto audio_wait_begin = osGetTime();
-                    static_cast<void>(audio.finish_update());
-                    dashboard_audio_ms += osGetTime() - audio_wait_begin;
-                    game.synchronize_apu_output_ports(audio.output_ports());
-                }
+                // Independent setup can run beside the previous SPC packet.
+                // Fence at the first APU output read or bank-upload write.
                 auto controls = input.consume_game_tick();
+                if (test_mode.running()) controls = test_mode.controls();
 #ifdef STARWING_AUTOPILOT
                 autopilot.apply(controls, flow_label(game.flow_state()));
 #endif
@@ -834,12 +1041,24 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                     controls.pressed |= starfox::input::start;
                     launch_from_pregame = false;
                 }
-                const auto dashboard_tick_start = osGetTime();
                 const auto dashboard_tick_start_tick = svcGetSystemTick();
+                const auto tick_audio_wait_before=audio.diagnostics().wait_total_us;
                 const auto previous_flow = game.flow_state();
                 allocation_failure.operation = "simulation_tick";
                 allocation_failure.flow = flow_label(game.flow_state());
-                const auto result = game.tick(controls);
+                effective_held=controls.held;
+                const auto result = [&] {
+                    starfox::platform_3ds::DeferredApuSync fence{game.map(),audio};
+                    try {
+                        auto tick=game.tick(controls);
+                        fence.check_failure();
+                        return tick;
+                    } catch(...) {
+                        fence.check_failure();
+                        throw;
+                    }
+                }();
+                loop_instructions+=result.prelude_instructions+result.strategies.instructions;
                 allocation_failure.operation = "capture_tick";
                 allocation_failure.flow = flow_label(game.flow_state());
                 // This frontend plays SPC only. Scene scripts still write
@@ -868,9 +1087,13 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                 }
 #endif
                 renderer.capture_after_tick(game);
-                dashboard_game_ms += osGetTime() - dashboard_tick_start;
-                dashboard_tick_work_us += ticks_to_microseconds(
-                    svcGetSystemTick() - dashboard_tick_start_tick);
+                const auto tick_wall_us=ticks_to_microseconds(
+                    svcGetSystemTick()-dashboard_tick_start_tick);
+                const auto tick_wait_us=audio.diagnostics().wait_total_us-tick_audio_wait_before;
+                const auto tick_work_us=tick_wall_us-std::min<std::uint64_t>(tick_wall_us,tick_wait_us);
+                dashboard_game_ms+=tick_work_us/1000U;
+                dashboard_tick_work_us+=tick_work_us;
+                dashboard_audio_ms+=tick_wait_us/1000U;
                 ++dashboard_ticks;
                 logic_advanced = true;
                 presentation_changed = presentation_changed
@@ -895,7 +1118,7 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                     gpu_world_disabled = false;
                     ++gpu_world_retries;
                     write_gpu_recovery("retry_gpu_world", flow_label(flow),
-                        dashboard_gpu_begin_failures, dashboard_fallback);
+                        dashboard_gpu_begin_failures, dashboard_fallback,display);
                 }
                 if (flow != previous_flow
                     && (flow == starfox::simulation::GameFlowState::gameplay
@@ -916,7 +1139,7 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                     previous_ticks = svcGetSystemTick();
                     pacing.reset(); presentation_metrics->reset_epoch();
                 }
-                if (ex && ++save_clock >= 20U) {
+                if (ex && !test_session_touched && ++save_clock >= 20U) {
                     save_clock = 0U;
                     const auto current = game.ex_save_ram();
                     if (current.size() == save.size()
@@ -927,36 +1150,46 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                     }
                 }
             }
-            // The SPC produces one 50 ms packet per three video phases. It
-            // must keep its own 20 Hz cadence when source logic deliberately
-            // slows or a render misses a display deadline; APU writes from
-            // intervening game ticks are applied to this packet in order.
-            if (++audio_video_phases >= 3U) {
-                if (audio.pending()) {
-                    const auto audio_wait_begin = osGetTime();
-                    static_cast<void>(audio.finish_update());
-                    dashboard_audio_ms += osGetTime() - audio_wait_begin;
+            ++audio_video_phases;
+        }
+        // The SPC produces one 50 ms packet per three video phases. It
+        // must keep its own 20 Hz cadence when source logic deliberately
+        // slows or a render misses a display deadline; APU writes from
+        // intervening game ticks are applied to this packet in order.
+        // Start it after this presentation's ticks, so it runs on its core
+        // during the render. Started between two phases of one batch, the
+        // next tick of the same batch waited for the whole packet: about
+        // 20 ms per frame on Old 3DS, where every batch has three phases.
+        // A tick still reads the ports of the packet holding the previous
+        // tick's writes, as before.
+        while (audio_video_phases >= 3U) {
+            // The packets queue behind the one being rendered: nothing here
+            // waits for it. A tick that reads the sound ports still waits
+            // for the ports of the last packet handed over.
+            if (audio.pending()) {
+                const auto audio_wait_begin = osGetTime();
+                if (audio.collect())
                     game.synchronize_apu_output_ports(audio.output_ports());
-                }
-                const auto audio_begin = osGetTime();
-                audio.begin_update(pending_audio_writes);
-                dashboard_audio_ms += osGetTime() - audio_begin;
-                pending_audio_writes.clear();
-                audio_video_phases -= 3U;
-                ++dashboard_audio_batches;
+                dashboard_audio_ms += osGetTime() - audio_wait_begin;
             }
+            const auto audio_begin = osGetTime();
+            audio.begin_update(pending_audio_writes);
+            dashboard_audio_ms += osGetTime() - audio_begin;
+            pending_audio_writes.clear();
+            audio_video_phases -= 3U;
+            ++dashboard_audio_batches;
         }
         render_changed=render_changed||presentation_changed;
-        const auto render_now = svcGetSystemTick();
+        const bool cadence_due=presentation_limit.accept(video_phases,menu->fps_limit());
         // While the simulation is behind real time, an interpolated image
         // between two source ticks only delays the next tick and audio
         // packet. Present source ticks first; in-between images resume as
         // soon as the loop keeps up again.
         const bool catching_up = pacing.ready() && !logic_advanced;
-        const bool render_due = video_phases!=0U && !catching_up
-            && presentation_limit.accept(render_now,menu->fps_limit());
+        const bool render_due = test_capture || (video_phases!=0U && !catching_up
+            && cadence_due);
         if (render_due) {
-            dashboard_coalesced_phases += video_phases - 1U;
+            dashboard_coalesced_phases += video_phases ? video_phases - 1U : 0U;
             const auto dashboard_render_tick = svcGetSystemTick();
             const auto dashboard_draw_start = osGetTime();
             const auto flow = game.flow_state();
@@ -1123,14 +1356,19 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
             } else {
                 display_reuse_checked = !gpu_bg2 && reuse && !controls_art;
                 if (display_reuse_checked) ++dashboard_display_reuse_checks;
-                presented = renderer.native_scene() && !gpu_bg2
-                    ? display.present_native(renderer.native_background(),indexed,palette,*renderer.native_scene())
+                presented = renderer.mode1_layers() && renderer.native_scene()
+                    ? display.present_mode1_layers(*renderer.mode1_layers(),indexed,palette,
+                        *renderer.native_scene(),renderer.wide_frame_revision())
+                    : renderer.native_scene() && !gpu_bg2
+                    ? display.present_native(renderer.native_background(),indexed,palette,*renderer.native_scene(),
+                        renderer.native_background_revision(), renderer.wide_frame_revision())
                     : gpu_bg2
                     ? display.present_mode2(presentation_ppu,
                         game.map().ppu_vram_revision(), scroll_x, scroll_y,
                         indexed, palette, reuse,
                         renderer.stereo_active() ? &renderer.right_frame() : nullptr,
-                        renderer.native_scene(),renderer.stereo_strength())
+                        renderer.native_scene(),renderer.stereo_strength(),
+                        renderer.wide_frame_revision())
                     : display.present(*presented_frame, palette,
                         reuse&&!controls_art,
                         renderer.stereo_active() ? &renderer.right_frame() : nullptr);
@@ -1142,7 +1380,13 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
 #ifdef STARWING_AUTOPILOT
             if (autopilot.force_gpu_failure() && display.gpu_active()) presented = false;
 #endif
-            if ((gpu_bg2 || renderer.native_scene()) && !presented) {
+            if ((gpu_bg2 || renderer.native_scene()) && !presented
+                && !display.last_frame_timing().gpu_begin_failed) {
+                // NONBLOCK acquisition failure means the previous frame is
+                // still in flight. Keep it displayed and count this attempt
+                // as missed; rebuilding it on the CPU adds load precisely
+                // when presentation is already behind. The watchdog below
+                // still recovers if submissions stop for a sustained period.
                 // A tile-atlas limit or temporary PICA failure must not
                 // strand a foreground-only frame on the top screen. The
                 // failed path may have submitted work: the replacement waits
@@ -1150,12 +1394,14 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                 ++dashboard_fallback;
                 last_gpu_bg2 = false;
                 const auto fallback_draw_start = osGetTime();
+                allocation_failure.operation = "fallback_render_frame";
                 renderer.set_native_engine(false);
                 const auto& fallback_frame = renderer.draw(game, false,
                     interpolation_alpha, &presentation_ppu);
                 fallback_draw_ms = osGetTime() - fallback_draw_start;
                 dashboard_draw_ms += fallback_draw_ms;
                 add_draw_breakdown();
+                allocation_failure.operation = "fallback_present_frame";
                 presented = display.present(fallback_frame, palette, false,
                     renderer.stereo_active() ? &renderer.right_frame() : nullptr, true);
 #ifdef STARWING_AUTOPILOT
@@ -1189,6 +1435,18 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
             dashboard_upload_ms += osGetTime() - dashboard_upload_start
                 - fallback_draw_ms;
             if (presented) {
+                if (capture_requested && !renderer.stereo_active()
+                    && (flow==starfox::simulation::GameFlowState::gameplay
+                        || flow==starfox::simulation::GameFlowState::training)) {
+                    captured_presentation_ppu=std::make_unique<starfox::simulation::SnesPpuState>(presentation_ppu);
+                    captured_scroll_x=scroll_x;captured_scroll_y=scroll_y;
+                    captured_native=renderer.native_scene()!=nullptr;
+                    pixel_comparison_ready=true;
+                    pixel_comparison_alpha=interpolation_alpha;
+                    pixel_comparison_palette=palette;
+                    pixel_comparison_backend=!display.gpu_active()?"cpu"
+                        :renderer.native_scene()?"gpu_world":"gpu_reference";
+                }
                 ++dashboard_presented;
                 const auto submitted_tick = svcGetSystemTick();
                 const auto& ppu = presentation_ppu;
@@ -1197,7 +1455,9 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                         | (static_cast<unsigned>(ppu.vram[address + 1U]) << 8U));
                 };
                 const auto& dt = display.last_frame_timing();
-                presentation_metrics->append({
+                // The explicit capture frame is outside the measured window;
+                // always render it, but do not inflate measured submission FPS.
+                if (!test_capture) presentation_metrics->append({
                     session_microseconds(submitted_tick - session_start_tick),
                     0U, ticks_to_microseconds(submitted_tick - loop_begin),
                     ticks_to_microseconds(dashboard_presentation_tick - dashboard_render_tick),
@@ -1207,7 +1467,18 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                     dt.plan_us, dt.plan_wait_us, scroll_x, scroll_y,
                     word_at(0x2fa0U * 2U), word_at(0x2fbfU * 2U),
                     static_cast<std::uint16_t>(interpolation_alpha * 1000.0),
-                    last_gpu_bg2, dt.plan_cache_hit, game.paused()});
+                    last_gpu_bg2, dt.plan_cache_hit, game.paused(),
+                    effective_held,test_mode.running()?test_mode.scripted_tick():0U,loop_instructions,
+                    static_cast<std::uint32_t>(audio.diagnostics().wait_total_us-audio_wait_before),
+                    audio.diagnostics().spc_compute_last_us,audio.diagnostics().worker_queue_last_us,
+                    reuse?0U:renderer.last_draw_breakdown().world_record_us,
+                    reuse?0U:renderer.last_draw_breakdown().scene_compile_us,
+                    renderer.native_scene()?static_cast<std::uint32_t>(renderer.native_scene()->stats().source_commands):0U,
+                    renderer.native_scene()?static_cast<std::uint32_t>(renderer.native_scene()->rectangles().size()):0U,
+                    renderer.native_scene()?static_cast<std::uint32_t>(renderer.native_scene()->stats().sampled_pixels):0U,
+                    renderer.mode1_layers()?static_cast<std::uint32_t>(renderer.mode1_layers()->rectangle_count()):0U,
+                    dt.mode1_layer_quads,dt.mode1_layer_upload_bytes,renderer.mode1_layers()!=nullptr,
+                    dt.mode1_layer_converted_bytes});
                 if (last_gpu_bg2) {
                     ++dashboard_gpu;
                     dashboard_bg2_fragments += display.bg2_fragment_count();
@@ -1262,7 +1533,7 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                         ||flow==starfox::simulation::GameFlowState::training) {
                         const auto brightness=bottom_brightness;
                         if(last_bottom_hud&&!logic_advanced
-                            &&last_hud_fps==snapshot.fps
+                            &&(!menu->show_fps()||last_hud_fps==snapshot.fps)
                             &&last_hud_brightness==brightness
                             &&last_hud_show_fps==menu->show_fps()) {
                             // The 20 Hz cartridge state is unchanged. Keep
@@ -1273,9 +1544,16 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                             ++dashboard_hud_reused;
                         } else {
                             const auto hud_build_begin = svcGetSystemTick();
-                            menu->draw_level_hud(game,palette,snapshot.fps);
+                            // Whatever else was on this screen since the HUD
+                            // was last presented is in both framebuffers.
+                            if(!last_bottom_hud) menu->discard_level_hud_presentation();
+                            const bool changed=menu->draw_level_hud(game,palette,snapshot.fps);
                             dashboard_hud_build_us += ticks_to_microseconds(
                                 svcGetSystemTick() - hud_build_begin);
+                            if (!changed && last_bottom_hud && last_hud_brightness==brightness) {
+                                present_bottom=false;
+                                ++dashboard_hud_reused;
+                            }
                             last_bottom_hud=true;
                             last_hud_fps=snapshot.fps;
                             last_hud_brightness=brightness;
@@ -1334,6 +1612,13 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                                 last_continue_bottom_brightness =
                                     bottom_brightness;
                             }
+                        } else if(last_bottom_hud) {
+                            // The level HUD drawn above: refresh only what
+                            // changed since each framebuffer was last filled.
+                            const auto damage=menu->take_level_hud_damage();
+                            if(present_menu_pixels(menu->bottom_pixels(),GFX_BOTTOM,display,
+                                    reveal_brightness(source_bottom_brightness),&damage))
+                                bottom_presentation=BottomPresentation::dynamic;
                         } else {
                             present_bottom_pixels(menu->bottom_pixels(),
                                 source_bottom_brightness);
@@ -1356,14 +1641,14 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                     gpu_world_disabled = true;
                     renderer.set_native_engine(false);
                     write_gpu_recovery("reference_renderer", flow_label(flow),
-                        dashboard_gpu_begin_failures, dashboard_fallback);
+                        dashboard_gpu_begin_failures, dashboard_fallback,display);
 #ifdef STARWING_AUTOPILOT
                     autopilot.event("gpu recovery: reference renderer");
 #endif
                 } else if (display.gpu_active()) {
                     display.use_cpu_presentation();
                     write_gpu_recovery("cpu_framebuffer", flow_label(flow),
-                        dashboard_gpu_begin_failures, dashboard_fallback);
+                        dashboard_gpu_begin_failures, dashboard_fallback,display);
 #ifdef STARWING_AUTOPILOT
                     autopilot.event("gpu recovery: cpu framebuffer");
 #endif
@@ -1375,15 +1660,15 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
         // Do not block a 60 Hz video frame while the independent SPC core is
         // still producing its packet. The next game tick waits for the ports
         // when necessary; a completed packet is submitted immediately here.
-        if (audio.update_ready()) {
+        if (audio.pending()) {
             const auto audio_wait_begin = osGetTime();
-            static_cast<void>(audio.finish_update());
+            if (audio.collect())
+                game.synchronize_apu_output_ports(audio.output_ports());
             dashboard_audio_ms += osGetTime() - audio_wait_begin;
-            game.synchronize_apu_output_ports(audio.output_ports());
         }
         const auto autosave_now=osGetTime();
         const auto autosave_flow=game.flow_state();
-        if(menu->auto_save()&&!audio.pending()
+        if(menu->auto_save()&&!test_session_touched&&!audio.pending()
             &&pending_audio_writes.empty()
             &&autosave_now-last_autosave_ms>=30'000U
             &&(autosave_flow==starfox::simulation::GameFlowState::gameplay
@@ -1405,6 +1690,10 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                 (svcGetSystemTick() - loop_begin) * (1000.0 / SYSCLOCK_ARM11));
         dashboard_loop_work_us += ticks_to_microseconds(
             svcGetSystemTick() - loop_begin);
+        if (video_phases != 0U)
+            test_mode.note_frame(
+                (svcGetSystemTick() - session_start_tick) * 1'000'000ULL / SYSCLOCK_ARM11,
+                ticks_to_microseconds(svcGetSystemTick() - loop_begin), logic_advanced);
         const auto dashboard_vblank_start = osGetTime();
         // Sleep until the next 60 Hz phase, which may precede the next VBlank.
         // Keep the CSV's legacy vblank_wait name for this pacing sleep.
@@ -1601,6 +1890,7 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                     presentation_interval.over_25_ms, presentation_interval.over_50_ms,
                     presentation_interval.held_or, presentation_interval.moving_frames);
             performance.append(row);
+            test_mode.note_second(snapshot.fps, snapshot.logic_hz);
 #ifdef STARWING_AUTOPILOT
             autopilot.row(row, starfox::platform_3ds::Autopilot3ds::lit_samples(display.top_framebuffer()),
                 game.map().ppu_state().background_mode);
@@ -1687,7 +1977,9 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
             previous_ticks = svcGetSystemTick();
             pacing.reset(); presentation_metrics->reset_epoch();
         } else if (capture_requested) {
+            allocation_failure.operation = "diagnostic_prepare";
             bottom_presentation = BottomPresentation::unknown;
+            last_bottom_hud=false;
             last_overlay_metrics.reset();
             const auto capture_begin = osGetTime();
             // Diagnostic I/O already pauses the frame clock. Settle any
@@ -1708,7 +2000,9 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
             const auto capture_linear_free = linearSpaceFree();
             const auto profile_capture_system_tick = svcGetSystemTick();
             const auto profile_capture_session_ms = osGetTime() - session_start_ms;
-            char runtime[2400]{}, renderer_info[2400]{}, audio_info[1800]{};
+            char runtime[2800]{}, renderer_info[2400]{}, audio_info[1800]{};
+            const auto native_counts=game.map().native_execution_counts();
+            const auto dispatch_counts=game.map().native_dispatch_counts();
             std::snprintf(runtime, sizeof(runtime),
                 "{\"schema\":2,\"build\":\"%s\",\"build_fingerprint\":\"%s\",\"experience\":\"%s\",\"session_ms\":%llu,"
                 "\"flow\":\"%s\",\"new_3ds\":%s,\"speedup_init_result\":%ld,"
@@ -1716,6 +2010,11 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                 "\"hardware_profile\":\"%s\",\"presentation_target_hz\":%u,\"interpolation\":%s,"
                 "\"timing_mode\":\"%s\",\"audio_ready\":%s,\"audio_core\":%d,\"cpu_quota_percent\":%lu,\"bg2_plan_worker\":%s,\"bg2_plan_worker_core\":%d,"
                 "\"world_backend\":\"%s\",\"native_rectangles\":%zu,\"native_vertices\":%lu,\"spc_native_blocks\":%llu,"
+                "\"native_clear_calls\":%llu,\"native_clear_instructions\":%llu,\"native_collision_calls\":%llu,\"native_collision_instructions\":%llu,"
+                "\"compiled_calls\":%llu,\"compiled_instructions\":%llu,\"interpreted_instructions\":%llu,"
+                "\"compiled_missing_entries\":%llu,\"compiled_code_rejections\":%llu,\"compiled_short_budgets\":%llu,"
+                "\"audio_sync\":\"first_apu_read_or_upload_ports\",\"tick_subphases_include_audio_wait\":true,"
+                "\"audio_ports_engine\":\"guarded_spc_cpu_then_ordered_dsp_replay\","
                 "\"stereo_active\":%s,\"stereo_strength\":%u,\"stereo_direction\":\"inward_only\","
                 "\"gpu_buffer_flush_bytes\":%zu,\"gpu_buffer_flush_fallbacks\":%lu,"
                 "\"heap_used_kib\":%u,\"heap_arena_kib\":%u,\"heap_peak_kib\":%u,"
@@ -1737,6 +2036,16 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                 renderer.native_scene()?renderer.native_scene()->rectangles().size():0U,
                 static_cast<unsigned long>(display.native_engine_stats().vertices),
                 static_cast<unsigned long long>(audio.spc().native_blocks_executed()),
+                static_cast<unsigned long long>(native_counts[0]),
+                static_cast<unsigned long long>(native_counts[1]),
+                static_cast<unsigned long long>(native_counts[2]),
+                static_cast<unsigned long long>(native_counts[3]),
+                static_cast<unsigned long long>(dispatch_counts[0]),
+                static_cast<unsigned long long>(dispatch_counts[1]),
+                static_cast<unsigned long long>(dispatch_counts[2]),
+                static_cast<unsigned long long>(dispatch_counts[3]),
+                static_cast<unsigned long long>(dispatch_counts[4]),
+                static_cast<unsigned long long>(dispatch_counts[5]),
                 renderer.stereo_active() ? "true" : "false", unsigned(renderer.stereo_strength()),
                 C2D_GetFrameCacheFlushBytes(), static_cast<unsigned long>(C2D_GetFrameCacheFlushFallbacks()),
                 snapshot.heap_used_kib, snapshot.heap_total_kib, snapshot.heap_peak_kib,
@@ -1788,7 +2097,8 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                 "late_frames=%llu\nrate_adjust_frames=%llu\ndropped_packets=%llu\nplayback_starts=%llu\n"
                 "cache_flush_failures=%llu\nmax_lead_frames=%lu\n"
                 "spc_compute_last_ms=%lu\nspc_compute_total_ms=%llu\n"
-                "spc_compute_max_ms=%lu\nspc_compute_packets=%lu\n",
+                "spc_compute_max_ms=%lu\nspc_compute_packets=%lu\n"
+                "ports_ready_last_us=%lu\nports_wait_last_us=%lu\n",
                 profile.name, audio.spc().routing()==starfox::audio::Spc700Audio::Routing::cartridge
                     ? "cartridge_single" : "split_stems",
                 static_cast<unsigned long long>(audio.spc().native_blocks_executed()),
@@ -1813,7 +2123,9 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                 static_cast<unsigned long>(audio_diagnostics.spc_compute_last_ms),
                 static_cast<unsigned long long>(audio_diagnostics.spc_compute_total_ms),
                 static_cast<unsigned long>(audio_diagnostics.spc_compute_max_ms),
-                static_cast<unsigned long>(audio_diagnostics.spc_compute_packets));
+                static_cast<unsigned long>(audio_diagnostics.spc_compute_packets),
+                static_cast<unsigned long>(audio_diagnostics.ports_ready_last_us),
+                static_cast<unsigned long>(audio_diagnostics.ports_wait_last_us));
             const auto renderer_info_length = std::strlen(renderer_info);
             std::snprintf(renderer_info + renderer_info_length,
                 sizeof(renderer_info) - renderer_info_length,
@@ -1849,6 +2161,7 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                 "display_quad_capacity_bytes=%zu\ndisplay_plan_capacity_bytes=%zu\ndisplay_worker_plan_capacity_available=%u\n"
                 "display_worker_plan_capacity_bytes=%zu\ndisplay_linear_staging_bytes=%zu\nbg2_raster_vram_bytes=%zu\n"
                 "bg2_map_linear_bytes=%zu\nbg2_presentation_fixed_bytes=%zu\n"
+                "mode1_retained_texture_linear_bytes=%zu\nmode1_layer_plan_capacity_bytes=%zu\nmode1_index_cache_heap_bytes=%zu\n"
                 "audio_pcm_linear_bytes=%zu\nmain_pending_apu_capacity_bytes=%zu\nfrozen_options_top_capacity_bytes=%zu\n"
                 "rom_payload_bytes=%zu\ntelemetry_ring_storage_bytes=%zu\ntelemetry_retained_rows_count=%u\ntelemetry_truncated_rows_count=%u\n"
                 "active_object_count=%zu\nobject_pool_capacity_count=%zu\n"
@@ -1878,6 +2191,7 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                 unsigned(display_memory.worker_plan_available), display_memory.worker_plan_capacity_bytes,
                 display_memory.linear_staging_bytes, display.bg2_raster_cache_bytes(),
                 display.bg2_map_texture_bytes(), frame_memory.bg2_presentation_fixed_bytes,
+                display_memory.mode1_texture_bytes,frame_memory.mode1_layer_plan_capacity_bytes,display_memory.mode1_index_cache_bytes,
                 audio.pcm_ring_bytes(), pending_audio_writes.capacity() * sizeof(pending_audio_writes[0]),
                 frozen_options_top.capacity() * sizeof(frozen_options_top[0]),
                 rom.bytes().size(), sizeof(performance), performance.count, performance.truncated_rows,
@@ -1997,7 +2311,8 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
             report.flow_profile_text = flow_profile_info;
             std::vector<u8> top_snapshot;
             std::vector<u8> bottom_snapshot;
-            if (capture_kind == starfox::platform_3ds::DiagnosticKind3ds::full
+            if ((capture_kind == starfox::platform_3ds::DiagnosticKind3ds::full
+                    || test_capture)
                 && report.top_framebuffer && report.bottom_framebuffer
                 && gfxGetScreenFormat(GFX_TOP) == GSP_RGB565_OES
                 && gfxGetScreenFormat(GFX_BOTTOM) == GSP_RGBA8_OES) {
@@ -2014,17 +2329,62 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                     report.top_framebuffer = top_snapshot.data();
                     report.bottom_framebuffer = bottom_snapshot.data();
                     report.framebuffer_snapshots = true;
-                    report.progress_context = &display;
-                    report.progress_callback = [](void* context, const char* stage,
-                        u64 written, u64 total) {
-                        static_cast<void>(static_cast<starfox::platform_3ds::Display3ds*>(
-                            context)->show_full_dump_progress(stage, written, total));
-                    };
-                    if (display.show_full_dump_progress("PREPARING", 0, 0))
-                        gspWaitForVBlank();
+                    if (test_capture) {
+                        // The saved images are the copies above; the lower
+                        // screen shows where the tour is while the SD works.
+                        const auto test_total = static_cast<unsigned>(
+                            starfox::platform_3ds::TestMode3ds::scenarios.size());
+                        char test_stage[32]{}, test_detail[32]{};
+                        std::snprintf(test_stage, sizeof(test_stage), "ESCENARIO %02u/%02u",
+                            test_mode.scenario_number(), test_total);
+                        std::snprintf(test_detail, sizeof(test_detail), "VENTANA %u/%u",
+                            test_mode.window_number(), test_mode.window_count());
+                        if (display.show_test_status(test_stage, test_detail,
+                                test_mode.scenario_number() * 100U / test_total))
+                            gspWaitForVBlank();
+                    } else {
+                        report.progress_context = &display;
+                        report.progress_callback = [](void* context, const char* stage,
+                            u64 written, u64 total) {
+                            static_cast<void>(static_cast<starfox::platform_3ds::Display3ds*>(
+                                context)->show_full_dump_progress(stage, written, total));
+                        };
+                        if (display.show_full_dump_progress("PREPARING", 0, 0))
+                            gspWaitForVBlank();
+                    }
                 }
             }
-            static_cast<void>(diagnostics.capture(capture_kind, report));
+            const auto capture_result = diagnostics.capture(capture_kind, report);
+            if(capture_result.ok && captured_presentation_ppu)
+                starfox::platform_3ds::write_presentation_snapshot(capture_result.path,
+                    *captured_presentation_ppu,captured_scroll_x,captured_scroll_y,
+                    pixel_comparison_alpha,renderer.native_commands(),captured_native);
+            if (capture_result.ok && pixel_comparison_ready
+                && (capture_frame || !display.gpu_active()) && !top_snapshot.empty()) {
+                // Same source tick, palette, camera history and interpolation
+                // as the submitted frame. Compare after saving the normal
+                // diagnostics so reference work cannot contaminate timings.
+                renderer.set_native_engine(false);
+                const auto& reference=renderer.draw(game,false,pixel_comparison_alpha,captured_presentation_ppu.get());
+                starfox::platform_3ds::write_game_pixel_comparison(capture_result.path,
+                    reference,pixel_comparison_palette,top_snapshot,wide_view,
+                    pixel_comparison_backend,pixel_comparison_alpha);
+                render_changed=true;
+            } else if(capture_result.ok) {
+                starfox::platform_3ds::write_pixel_comparison_skipped(capture_result.path,
+                    !pixel_comparison_ready?"no_matching_mono_gameplay_presentation":
+                    top_snapshot.empty()?"framebuffer_snapshot_unavailable":"gpu_readback_fence_unavailable");
+            }
+            if (test_capture) {
+                const auto test_flow = game.flow_state();
+                test_mode.capture_written(capture_result.ok, capture_result.path,
+                    flow_label(test_flow),
+                    test_flow == starfox::simulation::GameFlowState::gameplay
+                        || test_flow == starfox::simulation::GameFlowState::training,
+                    osGetTime());
+                if(capture_result.ok) starfox::platform_3ds::append_diagnostic_hashes(
+                    capture_result.path,{"prueba.txt","cuadros.csv"});
+            }
             if (capture_frame) C3D_FrameEnd(GX_CMDLIST_FLUSH);
             // Dumps intentionally pause gameplay; exclude all I/O from pacing.
             const auto capture_end = osGetTime();
@@ -2033,7 +2393,8 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
             pacing.reset(); presentation_metrics->reset_epoch();
         }
     }
-    if(menu->auto_save()) {
+    // After a test tour the simulation is not the player's game.
+    if(menu->auto_save()&&!test_session_touched) {
         if(audio.pending()) {
             static_cast<void>(audio.finish_update());
             game.synchronize_apu_output_ports(audio.output_ports());
@@ -2051,7 +2412,8 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
             ||flow==starfox::simulation::GameFlowState::training)
             static_cast<void>(write_autosave(autosave_file.c_str(),rom,game,audio));
     }
-    if (ex) write_ex_save(game.ex_save_ram(),ex_save_file.c_str());
+    if (ex && !test_session_touched)
+        write_ex_save(game.ex_save_ram(),ex_save_file.c_str());
     return next_game;
 }
 
@@ -2077,6 +2439,7 @@ int main(int argc, char** argv) {
     try {
         if (!romfs_ready) throw std::runtime_error("Cannot open CIA resources");
         prepare_directory();
+        write_build_info(new_3ds, argc > 0 ? argv[0] : "");
         std::remove("sdmc:/3ds/Starwing/last-error.txt");
         const auto files = retail_roms();
         const auto saved = starfox::platform_3ds::read_launch_selection(

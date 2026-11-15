@@ -129,6 +129,38 @@ public:
         std::uint32_t address, std::span<std::uint8_t> output) const noexcept;
     [[nodiscard]] bool write_mapped_wram_block(
         std::uint32_t address, std::span<const std::uint8_t> input) noexcept;
+    // The bytes of a block that maps entirely to one WRAM region, or null.
+    // Looking at them is not a bus access: open bus keeps its value.
+    [[nodiscard]] const std::uint8_t* mapped_wram(
+        std::uint32_t address, std::size_t length) const noexcept;
+    // Change marks for a block of work RAM (the object tables), so that its
+    // mirror need not compare all of it. Stores leave a mark on the 64-byte
+    // chunk they land in; a writer that cannot leave marks voids them all
+    // until the next clear.
+    //
+    // Whether these bytes lie inside the block that is marked.
+    [[nodiscard]] bool wram_block_watched(std::uint32_t address, std::size_t length) const noexcept;
+    // True when every store to these bytes since clear_wram_marks() left one.
+    [[nodiscard]] bool wram_marks_cover(std::uint32_t address, std::size_t length) const noexcept;
+    // The caller compared everything and found it as it was at the last
+    // clear: the marks that were there before a writer voided them stand.
+    void revalidate_wram_marks() const noexcept;
+    // Whether a mark reaches these bytes. Needs wram_marks_cover().
+    [[nodiscard]] bool wram_marked(std::uint32_t address, std::size_t length) const noexcept;
+    // Whether the marked parts of these bytes still equal `reference`, a copy
+    // of them as they were at the last clear. Needs wram_marks_cover().
+    [[nodiscard]] bool wram_marked_equal(
+        std::uint32_t address, std::span<const std::uint8_t> reference) const noexcept;
+    // Brings such a copy up to date. Needs wram_marks_cover().
+    void wram_copy_marked(std::uint32_t address, std::span<std::uint8_t> reference) const noexcept;
+    void clear_wram_marks() noexcept;
+    // A checkpoint keeps the old bytes of whatever is stored to after it, so
+    // that read_wram_checkpoint() can give them back. False when this
+    // processor cannot keep one; the caller then copies what it needs.
+    [[nodiscard]] bool open_wram_checkpoint() noexcept;
+    void close_wram_checkpoint() noexcept;
+    [[nodiscard]] bool read_wram_checkpoint(
+        std::uint32_t address, std::span<std::uint8_t> output) const noexcept;
     [[nodiscard]] bool load_cartridge_ram(
         std::span<const std::uint8_t> bytes) noexcept;
     [[nodiscard]] std::span<const std::uint8_t> cartridge_ram() const noexcept;
@@ -140,6 +172,11 @@ public:
     void set_apu_clock_offset(std::uint32_t clocks) noexcept;
     void set_apu_output_ports(
         const std::array<std::uint8_t, 4>& ports) noexcept;
+    // One-shot main-thread dependency: output reads and IPL latch changes
+    // need prior audio. Callbacks and their context are never serialized.
+    // Connected driver writes merely queue input and do not invoke the fence.
+    using ApuAccessFence = void (*)(void*) noexcept;
+    void set_apu_access_fence(ApuAccessFence fence, void* context) noexcept;
     [[nodiscard]] const SnesPpuState& ppu_state() const noexcept;
     // Changes whenever PPU VRAM, CGRAM, or OAM is written. This lets the
     // renderer validate a cached foreground without comparing 65 KiB of VRAM
@@ -148,6 +185,10 @@ public:
     [[nodiscard]] std::uint64_t ppu_vram_revision() const noexcept;
     [[nodiscard]] const NativeModelDrawState& native_model_draw() const noexcept;
     void set_native_model_draw(const NativeModelDrawState& state) noexcept;
+    [[nodiscard]] std::array<std::uint64_t,4> native_execution_counts() const noexcept;
+    // Compiled calls/instructions, interpreted instructions, missing entries,
+    // rejected code bytes and short budgets; diagnostics, never serialized.
+    [[nodiscard]] std::array<std::uint64_t,6> native_dispatch_counts() const noexcept;
     [[nodiscard]] const std::vector<std::uint32_t>& unknown_superfx_launches()
         const noexcept;
     [[nodiscard]] std::uint64_t apu_upload_generation() const noexcept;
@@ -168,6 +209,7 @@ public:
     // ENDSEQ's SEQSCROLL runs once per raster, independently of CPU tasks.
     void tick_ending_video_phase();
     void tick_background_video_phase();
+    [[nodiscard]] std::optional<bool> dialogue_speaking(bool alternate) const noexcept;
     void refresh_background_metadata();
     void draw_planet_sphere(std::uint16_t sprite);
     void set_bg2_vertical_offsets_enabled(bool enabled) noexcept;
@@ -224,7 +266,7 @@ private:
     friend class MapVm;
     [[nodiscard]] std::uint8_t open_bus() const noexcept;
     void restore_open_bus(std::uint8_t value) noexcept;
-    template<bool CollisionCall, bool AccelerateTransferCall> std::size_t call_impl(
+    template<bool AccelerateTransferCall> std::size_t call_impl(
         std::uint32_t address, Wdc65816Registers& registers,
         std::size_t instruction_limit, bool service_transfer_flag, bool long_return);
     std::size_t call(

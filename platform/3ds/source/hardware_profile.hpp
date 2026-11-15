@@ -10,6 +10,6 @@ struct HardwareProfile {
 };
 constexpr HardwareProfile hardware_profile(bool new_3ds) noexcept {
     return new_3ds ? HardwareProfile{false, true, true, 60U, true, "New 3DS"}
-                   : HardwareProfile{true, true, true, 60U, true, "Old 3DS"};
+                   : HardwareProfile{true, true, true, 30U, true, "Old 3DS"};
 }
 } // namespace starfox::platform_3ds

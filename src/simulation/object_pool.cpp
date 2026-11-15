@@ -59,7 +59,10 @@ void ObjectPool::load_state(std::span<const std::uint8_t> bytes) {
     }
     if (restored.next_generation_==std::numeric_limits<std::uint64_t>::max())
         throw std::runtime_error{"exhausted object-pool generation counter"};
+    const auto epoch = list_epoch_;
     *this=std::move(restored);
+    touched_.fill(true);
+    list_epoch_ = epoch + 1U;
 }
 
 ObjectPool::ObjectPool(std::size_t capacity, ObjectMemoryLayout layout)
@@ -71,6 +74,8 @@ ObjectPool::ObjectPool(std::size_t capacity, ObjectMemoryLayout layout)
 }
 
 void ObjectPool::reset() noexcept {
+    touched_.fill(true);
+    ++list_epoch_;
     slots_ = {};
     free_next_ = {};
     first_active_ = 0;
@@ -93,6 +98,8 @@ ObjectHandle ObjectPool::allocate_after(ObjectHandle previous) noexcept {
     auto& slot = slots_[handle];
     slot = {};
     slot.active = true;
+    touched_[handle] = true;
+    ++list_epoch_;
     generations_[handle] = ++next_generation_;
 
     if (previous == 0) {
@@ -119,11 +126,15 @@ bool ObjectPool::remove(ObjectHandle handle) noexcept {
     }
     for (auto current = first_active_; current != 0; current = slots_[current].next) {
         auto& object = slots_[current].object;
+        if (object.attached == handle || object.immune_object == handle
+            || object.collision_object == handle || object.fire_object == handle) touched_[current] = true;
         if (object.attached == handle) object.attached = 0;
         if (object.immune_object == handle) object.immune_object = 0;
         if (object.collision_object == handle) object.collision_object = 0;
         if (object.fire_object == handle) object.fire_object = 0;
     }
+    touched_[handle] = true;
+    ++list_epoch_;
 
     auto& slot = slots_[handle];
     if (slot.previous == 0) {
@@ -165,6 +176,7 @@ GameObject& ObjectPool::at(ObjectHandle handle) {
     if (!is_active(handle)) {
         throw std::out_of_range{"inactive object handle " + std::to_string(handle)};
     }
+    touched_[handle] = true;
     return slots_[handle].object;
 }
 
@@ -247,6 +259,8 @@ void ObjectPool::restore_lists(
     };
     validate(active);
     validate(free);
+    touched_.fill(true);
+    ++list_epoch_;
 
     for (ObjectHandle handle = 1; handle <= capacity_; ++handle) {
         const auto was_active = slots_[handle].active;

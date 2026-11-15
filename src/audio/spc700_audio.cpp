@@ -87,6 +87,7 @@ struct Spc700Audio::Impl {
     };
 
     SNES_SPC* spc{spc_new()};
+    std::unique_ptr<SNES_SPC> pipeline;
     SPC_Filter* filter{spc_filter_new()};
     std::array<std::uint8_t, kSpcRamSize> aram{};
     std::array<std::uint8_t, 4> cpu_ports{};
@@ -269,12 +270,36 @@ struct Spc700Audio::Impl {
         std::vector<std::int16_t>& output,
         bool split_upload_restarts = false,
         std::size_t* rendered_frames = nullptr,
-        CommandStream command_stream = CommandStream::music) {
+        CommandStream command_stream = CommandStream::music,
+        OutputPortsReady ports_ready = nullptr, void* ports_context = nullptr) {
+        // A running cartridge driver usually needs no DSP-generated data.
+        // Prove that for this packet, publish its ports, then replay recorded
+        // RAM/DSP events while the main game thread is free to continue.
+        bool ports_published=false;
+        if(ports_ready&&command_stream==CommandStream::cartridge&&loaded&&!uploading
+            &&!std::any_of(writes.begin(),writes.end(),[](const auto& write){return write.port==0U&&write.value==0xffU;})) {
+            try {
+                if(!pipeline)pipeline=std::make_unique<SNES_SPC>();
+                pipeline->prepare_port_pipeline(*spc);
+                int clock=0;
+                for(const auto& write:writes) {
+                    clock=std::clamp(int(write.clock_offset),clock,kClocksPerLogicTick);
+                    pipeline->write_port(clock,write.port,write.value);
+                }
+                std::array<std::uint8_t,4> ports{};
+                for(unsigned i=0;i<4;++i)ports[i]=static_cast<std::uint8_t>(pipeline->read_port(kClocksPerLogicTick,i));
+                ports_ready(ports_context,ports);ports_published=true;
+            }catch(const SNES_SPC::PortPipelineUnavailable&) {
+                // Dependencies on DSP registers or echo RAM require the
+                // ordinary interleaved path. No output was published yet.
+            }
+        }
         output.assign(Spc700Audio::stereo_frames_per_logic_tick * 2U, 0);
         if (loaded) {
             spc_set_output(spc, output.data(), static_cast<int>(output.size()));
         }
         int last_clock = 0;
+        bool driver_loaded_in_batch = false;
         auto finish_frame = [&] {
             if (!loaded) return;
             spc_end_frame(spc, kClocksPerLogicTick);
@@ -286,11 +311,15 @@ struct Spc700Audio::Impl {
             last_clock = 0;
         };
 
+        if(ports_published)spc->finish_port_pipeline(*pipeline);
         // A fresh sound bank begins with the source driver's explicit $ff
         // restart command. The subsequent writes are another IPL upload.
-        for (const auto& write : writes) {
+        if(!ports_published)for (const auto& write : writes) {
             if (!uploading && write.port == 0U && write.value == 0xffU) {
-                if (split_upload_restarts) finish_frame();
+                // A batch can contain cumulative banks. Execute each newly
+                // uploaded driver's initialization before the next restart.
+                if (split_upload_restarts || driver_loaded_in_batch) finish_frame();
+                driver_loaded_in_batch = false;
                 begin_upload();
             }
             const auto was_loaded = loaded;
@@ -323,6 +352,7 @@ struct Spc700Audio::Impl {
                 last_clock = clock;
             }
             if (!was_loaded && loaded) {
+                driver_loaded_in_batch = true;
                 // Loading an SPC state resets the library's output buffer.
                 // Attach this tick's buffer immediately so initialization and
                 // later timestamped port traffic are rendered, not discarded.
@@ -331,7 +361,21 @@ struct Spc700Audio::Impl {
             }
         }
 
-        if (!loaded) return;
+        if (!loaded) {
+            if (ports_ready) ports_ready(ports_context, {});
+            return;
+        }
+        if (ports_ready&&!ports_published) {
+            // run_until via read_port advances exactly the same SPC CPU
+            // timeline that end_frame would. Timers/DSP are still serviced
+            // by every emulated I/O access. Only the trailing DSP work is
+            // independent of the now-final output-port bytes.
+            std::array<std::uint8_t, 4> ports{};
+            for (unsigned port=0; port<ports.size(); ++port)
+                ports[port] = static_cast<std::uint8_t>(
+                    spc_read_port(spc, kClocksPerLogicTick, port));
+            ports_ready(ports_context, ports);
+        }
         spc_end_frame(spc, kClocksPerLogicTick);
         if (rendered_frames != nullptr) ++*rendered_frames;
         const auto generated = std::clamp(spc_sample_count(spc), 0,
@@ -505,6 +549,19 @@ void Spc700Audio::render_logic_tick(
             static_cast<std::int32_t>(std::numeric_limits<std::int16_t>::min()),
             static_cast<std::int32_t>(std::numeric_limits<std::int16_t>::max())));
     }
+}
+
+void Spc700Audio::render_logic_tick_with_ports(
+    std::span<const simulation::ApuPortWrite> writes,
+    std::vector<std::int16_t>& output, OutputPortsReady callback, void* context) {
+    if (routing_ != Routing::cartridge || callback == nullptr) {
+        render_logic_tick(writes, output);
+        if (callback) callback(context, output_ports());
+        return;
+    }
+    music_impl_->render(writes, last_music_samples_, false, nullptr,
+        Impl::CommandStream::cartridge, callback, context);
+    output.assign(last_music_samples_.begin(), last_music_samples_.end());
 }
 
 std::size_t Spc700Audio::prime_upload_sequence(

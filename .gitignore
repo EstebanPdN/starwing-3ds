@@ -52,6 +52,7 @@ AGENTS.md
 /assets/localization/*dialogue.json
 /assets/localization/ex-translations.tsv
 /assets/localization/spanish-original.txt
+/platform/3ds/assets/*.png
 /platform/3ds/assets/*.rgb
 /platform/3ds/assets/*.bnr
 /platform/3ds/assets/*.wav

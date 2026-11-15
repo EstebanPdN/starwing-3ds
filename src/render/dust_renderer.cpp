@@ -1,6 +1,8 @@
 #include "starfox/render/stereo_projection.hpp"
 #include "starfox/render/dust_renderer.hpp"
 #include "starfox/render/grid_projection.hpp"
+#include "starfox/render/point_plotter.hpp"
+#include "starfox/render/word_math.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -43,6 +45,23 @@ double source_word_difference(double value, double origin) noexcept {
     if (difference > 32'767.0) difference -= 65'536.0;
     else if (difference < -32'768.0) difference += 65'536.0;
     return difference;
+}
+
+// source_word_difference for an origin that is a whole number: the
+// subtraction, the remainder (fmod of two integers is the truncating integer
+// remainder) and the wrap are then exact integer arithmetic, and the library
+// call per coordinate is gone.
+double whole_word_difference(std::int16_t value, std::int32_t origin) noexcept {
+    auto difference = (static_cast<std::int32_t>(value) - origin) % 65'536;
+    if (difference > 32'767) difference -= 65'536;
+    else if (difference < -32'768) difference += 65'536;
+    return static_cast<double>(difference);
+}
+
+// A whole number small enough that an int16 minus it cannot overflow.
+bool whole_origin(double value) noexcept {
+    return value >= -1'000'000'000.0 && value <= 1'000'000'000.0
+        && static_cast<double>(static_cast<std::int32_t>(value)) == value;
 }
 
 std::uint32_t rom_symbol(
@@ -153,46 +172,70 @@ void DustRenderer::draw(
     // so it opts out of 2D presentation filtering and keeps its crisp
     // block-replicated specks.
     const ScopedLayer layer{target, PixelLayer::world_geometry};
+    const PointPlotter plotter{target};
     const auto put = [&](std::int32_t x, std::int32_t y, std::uint8_t colour) {
-        if (x < exclude_left || x >= exclude_right) target.set(x, y, colour);
+        if (x < exclude_left || x >= exclude_right) plotter.set(x, y, colour);
     };
     constexpr auto q15 = 32'768.0;
     active_count = std::min(active_count, dust.points().size());
+    // The raster extent is a division by the draw scale each time it is
+    // asked; it cannot change while the points are plotted.
+    const auto width = plotter.width();
+    const auto height = plotter.height();
+    const auto half_width = static_cast<std::int32_t>(target.width() / 2U);
+    const auto half_height = static_cast<std::int32_t>(target.height() / 2U);
+    // A cartridge camera stands on whole source units.
+    const bool whole_camera = whole_origin(camera.x) && whole_origin(camera.y)
+        && whole_origin(camera.z);
+    const auto origin_x = whole_camera ? static_cast<std::int32_t>(camera.x) : 0;
+    const auto origin_y = whole_camera ? static_cast<std::int32_t>(camera.y) : 0;
+    const auto origin_z = whole_camera ? static_cast<std::int32_t>(camera.z) : 0;
+    // STAR_COLS has 64 entries; each is read from the ROM at most once per
+    // pass, when a point first needs it, instead of once per plotted point.
+    std::array<std::uint8_t, 64> star_colour;
+    std::uint64_t star_colour_read = 0U;
     std::size_t index = 0;
     for (const auto& point : std::span{dust.points()}.first(active_count)) {
-        const auto x = source_word_difference(point.x, camera.x);
-        const auto y = source_word_difference(point.y, camera.y);
-        const auto z = source_word_difference(point.z, camera.z);
-        const auto camera_x = (x * view_matrix[0] + y * view_matrix[3]
-            + z * view_matrix[6]) / q15;
-        const auto camera_y = (x * view_matrix[1] + y * view_matrix[4]
-            + z * view_matrix[7]) / q15;
+        const auto x = whole_camera ? whole_word_difference(point.x, origin_x)
+            : source_word_difference(point.x, camera.x);
+        const auto y = whole_camera ? whole_word_difference(point.y, origin_y)
+            : source_word_difference(point.y, camera.y);
+        const auto z = whole_camera ? whole_word_difference(point.z, origin_z)
+            : source_word_difference(point.z, camera.z);
         const auto camera_z = (x * view_matrix[2] + y * view_matrix[5]
             + z * view_matrix[8]) / q15;
         if (camera_z < 256.0) {
             ++index;
             continue;
         }
+        const auto camera_x = (x * view_matrix[0] + y * view_matrix[3]
+            + z * view_matrix[6]) / q15;
+        const auto camera_y = (x * view_matrix[1] + y * view_matrix[4]
+            + z * view_matrix[7]) / q15;
         const auto clipped_z = std::min(camera_z, 4'095.0);
-        const auto screen_x = static_cast<std::int32_t>(target.width() / 2U)
+        const auto screen_x = half_width
             + projection_offset_x
             + inward_stereo_shift(eye_offset, camera_z)
             + static_cast<std::int32_t>(
                 std::trunc(camera_x * 256.0 / clipped_z));
-        const auto screen_y = static_cast<std::int32_t>(target.height() / 2U)
+        const auto screen_y = half_height
             + projection_offset_y
             + static_cast<std::int32_t>(
                 std::trunc(camera_y * 256.0 / clipped_z));
-        if (screen_x < 0 || screen_x >= static_cast<std::int32_t>(target.width())
-            || screen_y < 0 || screen_y >= static_cast<std::int32_t>(target.height())) {
+        if (screen_x < 0 || screen_x >= width
+            || screen_y < 0 || screen_y >= height) {
             ++index;
             continue;
         }
         const auto depth = static_cast<std::uint8_t>(
             std::clamp(static_cast<int>(clipped_z) >> 8, 0, 15));
         const auto remaining = active_count - index;
-        const auto colour = rom_->read8(star_colours_
-            + static_cast<std::uint32_t>((remaining & 3U) * 16U + depth));
+        const auto entry = static_cast<std::uint32_t>((remaining & 3U) * 16U + depth);
+        if ((star_colour_read & (std::uint64_t{1} << entry)) == 0U) {
+            star_colour[entry] = rom_->read8(star_colours_ + entry);
+            star_colour_read |= std::uint64_t{1} << entry;
+        }
+        const auto colour = star_colour[entry];
         put(screen_x, screen_y,
             static_cast<std::uint8_t>(7U * 16U + colour));
         if (camera_z < 1'024.0) {
@@ -209,12 +252,13 @@ void DustRenderer::draw_grid(
     Framebuffer& target, std::int32_t eye_offset,
     std::int32_t projection_offset_x) const noexcept {
     const ScopedLayer layer{target, PixelLayer::world_geometry};
+    const PointPlotter plotter{target};
     const auto camera_x = camera_word(camera.x);
     const auto camera_y = camera_word(camera.y);
     const auto camera_z = camera_word(camera.z);
-    auto row = simulation::transform_q15(view_matrix, {
+    auto row = word::transform_q15(view_matrix, {
         grid_start(camera_x),
-        simulation::wrap16(-static_cast<std::int32_t>(camera_y)),
+        word::wrap16(-static_cast<std::int32_t>(camera_y)),
         grid_start(camera_z),
     });
 
@@ -228,6 +272,12 @@ void DustRenderer::draw_grid(
         matrix_grid_step(view_matrix[7]),
         matrix_grid_step(view_matrix[8]),
     };
+    // The raster extent and centre: divisions by the draw scale, constant
+    // for the pass.
+    const auto width = target.width();
+    const auto height = target.height();
+    const auto centre_x = width / 2U + projection_offset_x;
+    const auto centre_y = static_cast<std::int16_t>(height / 2U);
 
     for (std::int16_t grid_z = 0; grid_z < kGridSize; ++grid_z) {
         auto point = row;
@@ -236,29 +286,34 @@ void DustRenderer::draw_grid(
             if (original_z > 256) {
                 const auto depth = std::min<std::int16_t>(
                     original_z, kMaximumReciprocalDepth - 1);
-                const auto screen_x = simulation::add16(
-                    grid_projection(point[0], depth),
-                    static_cast<std::int16_t>(target.width() / 2U
-                        + projection_offset_x + inward_stereo_shift(eye_offset, original_z)));
-                const auto screen_y = simulation::add16(
-                    grid_projection(point[1], depth),
-                    static_cast<std::int16_t>(target.height() / 2U));
-                if (static_cast<std::uint16_t>(screen_x) < target.width()
-                    && static_cast<std::uint16_t>(screen_y) < target.height()) {
+                // grid_projection divides for the same reciprocal on both
+                // axes: one division per dot.
+                const auto even_depth = static_cast<std::int16_t>(
+                    static_cast<std::uint16_t>(depth) & 0xfffeU);
+                const auto reciprocal = static_cast<std::int16_t>(
+                    (32'767 * 256) / even_depth);
+                const auto screen_x = word::add16(
+                    word::multiply_q15(point[0], reciprocal),
+                    static_cast<std::int16_t>(centre_x
+                        + inward_stereo_shift(eye_offset, original_z)));
+                const auto screen_y = word::add16(
+                    word::multiply_q15(point[1], reciprocal), centre_y);
+                if (static_cast<std::uint16_t>(screen_x) < width
+                    && static_cast<std::uint16_t>(screen_y) < height) {
                     constexpr auto colour = static_cast<std::uint8_t>(
                         7U * 16U + 14U);
-                    target.set(screen_x, screen_y, colour);
+                    plotter.set(screen_x, screen_y, colour);
                     if (original_z < 512) {
-                        target.set(screen_x - 1, screen_y + 1, colour);
+                        plotter.set(screen_x - 1, screen_y + 1, colour);
                     }
                 }
             }
             for (std::size_t axis = 0; axis < 3U; ++axis) {
-                point[axis] = simulation::add16(point[axis], x_step[axis]);
+                point[axis] = word::add16(point[axis], x_step[axis]);
             }
         }
         for (std::size_t axis = 0; axis < 3U; ++axis) {
-            row[axis] = simulation::add16(row[axis], z_step[axis]);
+            row[axis] = word::add16(row[axis], z_step[axis]);
         }
     }
 }

@@ -97,7 +97,7 @@ std::size_t NativeStrategyScheduler::tick_object(
     } catch (const std::exception& error) {
         native_state_->abort_strategy_batch();
         std::ostringstream message;
-        const auto& state = objects_->at(object);
+        const auto& state = objects_->get(object);
         const auto stratmem = static_cast<std::uint16_t>(state.extended[48])
             | (static_cast<std::uint16_t>(state.extended[49]) << 8U);
         message << "native strategy dispatch failed for object " << object

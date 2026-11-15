@@ -94,6 +94,9 @@ public:
     [[nodiscard]] const std::vector<std::uint8_t>& messages() const noexcept { return messages_; }
     void clear_messages() noexcept { messages_.clear(); }
     void tick_video_phase();
+    [[nodiscard]] std::optional<bool> dialogue_speaking(bool alternate) const noexcept {
+        return cpu_.dialogue_speaking(alternate);
+    }
     void refresh_background_metadata();
     void complete_background_request();
     // Import WORLD.ASM interpreter registers after an original routine such
@@ -101,6 +104,12 @@ public:
     void restore_map_state_from_native();
     void write_native_byte(std::uint32_t address, std::uint8_t value);
     [[nodiscard]] std::uint8_t read_native_byte(std::uint32_t address) const noexcept;
+    [[nodiscard]] std::array<std::uint64_t,4> native_execution_counts() const noexcept {
+        return cpu_.native_execution_counts();
+    }
+    [[nodiscard]] std::array<std::uint64_t,6> native_dispatch_counts() const noexcept {
+        return cpu_.native_dispatch_counts();
+    }
     [[nodiscard]] std::uint16_t read_native_word(std::uint32_t address) const noexcept;
     [[nodiscard]] std::optional<std::uint8_t> peek_ram_byte(std::uint32_t address) const noexcept {
         return cpu_.peek_ram8(address);
@@ -131,6 +140,9 @@ public:
     void set_apu_output_ports(
         const std::array<std::uint8_t, 4>& ports) noexcept {
         cpu_.set_apu_output_ports(ports);
+    }
+    void set_apu_access_fence(Wdc65816::ApuAccessFence fence, void* context) noexcept {
+        cpu_.set_apu_access_fence(fence,context);
     }
     [[nodiscard]] const SnesPpuState& ppu_state() const noexcept {
         return cpu_.ppu_state();
@@ -361,7 +373,45 @@ private:
     std::vector<ObjectHandle> object_bridge_active_;
     std::vector<ObjectHandle> object_bridge_active_scratch_;
     std::vector<ObjectHandle> object_bridge_free_scratch_;
+    // The two list heads and every pool slot's link word as they were when
+    // the scratch lists above were last walked. Never serialized.
+    std::vector<std::uint16_t> object_list_links_;
+    std::vector<std::uint16_t> object_list_links_scratch_;
+    bool object_list_links_valid_{};
     bool object_pool_needs_native_sync_{};
+    bool object_bridge_memory_valid_{};
+    std::vector<std::uint8_t> object_bridge_memory_base_, object_bridge_memory_extended_;
+    std::uint16_t object_bridge_memory_active_{}, object_bridge_memory_free_{};
+    bool object_bridge_unchanged() const;
+    void remember_object_bridge();
+    // The bridge mirrors the two object tables of work RAM. The processor
+    // marks the 64-byte chunks its stores land in and the pool marks the
+    // objects it hands out for writing, so the bridge compares and copies
+    // only those. When the marks cannot be trusted it compares everything.
+    [[nodiscard]] bool object_tables_marked() const noexcept;
+    [[nodiscard]] bool object_tables_unchanged() const noexcept;
+    [[nodiscard]] bool object_slot_unmarked(ObjectHandle handle) const noexcept;
+    // The pool's list epoch at which its lists last equalled the scratch
+    // lists above; mutable because finding that out is a const question.
+    mutable std::uint64_t object_bridge_list_epoch_{~std::uint64_t{0}};
+    // The checkpoint of the strategy batch is kept by the processor (the old
+    // bytes of what the call stores to) instead of being copied here.
+    bool strategy_checkpoint_marked_{};
+    std::size_t strategy_checkpoint_size_{};
+#ifdef STARFOX_VERIFY_BRIDGE
+    // Verification build: the comparisons the marks replace are made as well,
+    // and any disagreement throws.
+    [[nodiscard]] bool object_bridge_unchanged_reference() const;
+    void verify_strategy_checkpoint() const;
+    std::vector<std::uint8_t> verify_checkpoint_base_, verify_checkpoint_extended_;
+    bool verify_checkpoint_open_{};
+public:
+    struct BridgeVerifyStats {
+        std::uint64_t checks, shortcuts, missed_shortcuts, skipped_slots, checkpoints;
+    };
+    [[nodiscard]] static BridgeVerifyStats bridge_verify_stats() noexcept;
+private:
+#endif
     // Scheduler-private hint only, never serialized. Native WRAM remains
     // authoritative during the batch; lists/generations are imported at each
     // boundary. The bounded raw checkpoint preserves pre-call error recovery.

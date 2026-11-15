@@ -18,14 +18,16 @@ int main() {
     m.append({.session_us=2'000'000U});
     i=m.finish_interval();
     check(i.gaps==0U && i.gap_max_ms==0.0F);
-    for (unsigned n=1U;n<=600U;++n)
+    for (unsigned n=1U;n<=2200U;++n)
         m.append({.session_us=2'000'000U+16'667U*n});
     const auto csv=m.csv();
     unsigned lines{}; for(char c:csv) if(c=='\n') ++lines;
-    check(lines==513U && csv.find("session_us,gap_us,")==0U);
-    check(csv.find("3483363,16667,")!=std::string::npos);
+    check(lines==2049U && csv.find("session_us,gap_us,")==0U);
+    check(csv.find("4550051,16667,")!=std::string::npos);
     i=m.finish_interval();
-    check(i.gaps==600U && i.over_25_ms==0U);
+    check(i.gaps==2200U && i.over_25_ms==0U);
     check(i.gap_p95_ms>16.66F && i.gap_p95_ms<16.68F);
+    check(i.gap_p99_ms==i.gap_p95_ms);
+    check(csv.find("effective_held,scripted_tick,logic_instructions,audio_wait_us")!=std::string::npos);
     std::puts("Presentation intervals: unequal gaps, reset and bounded history passed");
 }

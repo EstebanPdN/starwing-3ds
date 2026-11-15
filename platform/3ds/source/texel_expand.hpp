@@ -78,4 +78,77 @@ inline void expand_frame(const render::Framebuffer& frame, const Colours16& colo
     }
 }
 
+// The same expansion for one rectangle of the frame; texels outside it keep
+// what an earlier expansion left in the staging buffer. For a frame that
+// Frame3ds::wide_frame_patch() says differs from the staged one only inside
+// `bounds`, this brings the staging buffer to what expand_frame() produces.
+inline void expand_frame_area(const render::Framebuffer& frame, const Colours16& colours,
+    bool foreground, std::uint16_t* out, std::uint32_t stride,
+    std::uint32_t x, std::uint32_t y, std::uint32_t width, std::uint32_t height) noexcept {
+    const auto frame_width = frame.width();
+    const auto* pixels = frame.pixels().data();
+    const auto coverage = frame.write_coverage();
+    const auto* mask = coverage.size() == frame.pixels().size()
+        ? coverage.data() : pixels;
+    for (std::uint32_t row = y; row < y + height; ++row) {
+        const auto source = static_cast<std::size_t>(row) * frame_width + x;
+        auto* target = out + static_cast<std::size_t>(row) * stride + x;
+        if (foreground)
+            expand_masked_row(pixels + source, mask + source, colours, target, width);
+        else
+            expand_opaque_row(pixels + source, colours, target, width);
+    }
+}
+
+// What a foreground staging buffer is known to hold, row by row: the number
+// of leading texels known to be zero. A new buffer is unknown (zero).
+struct ForegroundRows {
+    std::array<std::uint16_t, 256U> zero_texels{};
+    void forget() noexcept { zero_texels.fill(0U); }
+};
+
+// expand_frame(frame, colours, true, out, stride) for a staging buffer whose
+// rows are tracked. A gameplay foreground is mostly empty rows; the plain
+// expansion still reads and rewrites every one of them on each upload. Here
+// a row without a covered pixel is recognised by its coverage words alone
+// and, when the buffer row already holds that many zeros, is left as it is.
+// Every other row is expanded as before. The buffer contents afterwards are
+// those of expand_frame. Returns the number of rows written. One shared copy
+// (three presenters call it), so the row loop stays in the instruction cache.
+__attribute__((noinline)) inline std::uint32_t expand_foreground_rows(const render::Framebuffer& frame,
+    const Colours16& colours, std::uint16_t* out, std::uint32_t stride,
+    ForegroundRows& rows) noexcept {
+    const auto width = frame.width();
+    const auto height = frame.height();
+    if (height > rows.zero_texels.size() || width > 0xffffU) {
+        rows.forget();
+        expand_frame(frame, colours, true, out, stride);
+        return height;
+    }
+    const auto* pixels = frame.pixels().data();
+    const auto coverage = frame.write_coverage();
+    const auto* mask = coverage.size() == frame.pixels().size()
+        ? coverage.data() : pixels;
+    std::uint32_t written = 0U;
+    for (std::uint32_t y = 0U; y < height; ++y) {
+        const auto source = static_cast<std::size_t>(y) * width;
+        const auto* row_mask = mask + source;
+        std::uint32_t any = 0U;
+        unsigned x = 0U;
+        for (; x + 4U <= width; x += 4U) any |= load_word(row_mask + x);
+        for (; x < width; ++x) any |= row_mask[x];
+        auto* row_out = out + static_cast<std::size_t>(y) * stride;
+        if (any == 0U) {
+            if (rows.zero_texels[y] >= width) continue;
+            std::memset(row_out, 0, static_cast<std::size_t>(width) * sizeof(std::uint16_t));
+            rows.zero_texels[y] = static_cast<std::uint16_t>(width);
+        } else {
+            expand_masked_row(pixels + source, row_mask, colours, row_out, width);
+            rows.zero_texels[y] = 0U;
+        }
+        ++written;
+    }
+    return written;
+}
+
 } // namespace starfox::platform_3ds

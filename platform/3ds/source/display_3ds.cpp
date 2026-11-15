@@ -1,4 +1,6 @@
+#include "test_build_label.hpp"
 #include "display_3ds.hpp"
+#include "screen_transfer.hpp"
 #include "cache_3ds.h"
 #include "texel_expand.hpp"
 #include "stereo_3ds.hpp"
@@ -9,6 +11,7 @@
 #include <array>
 #include <cstdio>
 #include <cstring>
+#include <new>
 
 namespace starfox::platform_3ds {
 namespace {
@@ -165,7 +168,7 @@ void Display3ds::use_cpu_presentation() noexcept {
     native_engine_.abandon();
     cpu_fallback_ = true;
     gpu_active_ = false;
-    frame_texture_valid_ = cpu_frame_valid_ = false;
+    frame_texture_valid_ = cpu_frame_valid_ = native_textures_valid_ = false;
     overlay_texture_valid_ = tile_cache_valid_ = false;
     right_texture_valid_ = right_overlay_valid_ = false;
     // The screens may still be in stereo mode for the PICA path.
@@ -230,7 +233,7 @@ void Display3ds::prepare_mode2_plan(
     if (bg2_plan_pending_) wait_for_bg2_plan();
     if (!eligible_mode2(ppu)) return;
     if (bg2_map_texture_.data != nullptr && !ppu.bg2_tile_size_16)
-        remember_bg2_map_source(ppu);
+        remember_bg2_map_source(ppu, ppu_vram_revision);
     if (bg2_plan_worker_ == nullptr || !core2_available) return;
     const bool reuse_plan = tile_cache_valid_
         && cached_tile_scroll_x_ == scroll_x
@@ -304,6 +307,7 @@ bool Display3ds::open() {
         close();
         return false;
     }
+    overlay_rows_.forget();
     std::memset(linear_pixels_, 0,
         texture_width_ * texture_height_ * sizeof(std::uint16_t));
     if (linear_right_) std::memset(linear_right_, 0,
@@ -403,6 +407,7 @@ void Display3ds::close() noexcept {
         C3D_FrameEnd(GX_CMDLIST_FLUSH);
     }
     native_engine_.close();
+    release_mode1_layers();
     if (bg2_plan_pending_) wait_for_bg2_plan();
     if (bg2_plan_worker_ != nullptr) {
         stop_bg2_plan_worker_.store(true, std::memory_order_release);
@@ -446,6 +451,7 @@ void Display3ds::close() noexcept {
     tile_slot_count_ = 0U;
     tile_cache_valid_ = false;
     frame_texture_valid_ = false;
+    native_textures_valid_ = false;
     cpu_frame_valid_ = false;
     overlay_texture_valid_ = false;
     right_texture_valid_ = right_overlay_valid_ = false;
@@ -457,6 +463,30 @@ void Display3ds::close() noexcept {
 
 bool Display3ds::show_full_dump_progress(const char* stage,
     std::uint64_t written, std::uint64_t total) {
+    const unsigned percent = total ? static_cast<unsigned>(
+        std::min<std::uint64_t>(100U, written * 100U / total)) : 0U;
+    char amount[64]{};
+    if (total) {
+        std::snprintf(amount, sizeof(amount), "%u%%  %llu/%llu MB", percent,
+            static_cast<unsigned long long>(written / (1024U * 1024U)),
+            static_cast<unsigned long long>(
+                (total + 1024U * 1024U - 1U) / (1024U * 1024U)));
+    } else {
+        std::snprintf(amount, sizeof(amount), "PLEASE WAIT");
+    }
+    return draw_bottom_panel("FULL MEMORY DUMP", stage ? stage : "PREPARING",
+        amount, "WRITING MEMORY", "DO NOT POWER OFF", percent);
+}
+
+bool Display3ds::show_test_status(const char* stage, const char* detail,
+    unsigned percent) {
+    return draw_bottom_panel(test_build_label.data(), stage, detail,
+        "RESULTADOS EN LA SD", "3DS/STARWING/PRUEBA", std::min(percent, 100U));
+}
+
+bool Display3ds::draw_bottom_panel(const char* title, const char* stage,
+    const char* amount, const char* first_footer, const char* second_footer,
+    unsigned percent) {
     u16 physical_width = 0, physical_height = 0;
     auto* framebuffer = reinterpret_cast<std::uint32_t*>(
         gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT,
@@ -498,17 +528,6 @@ bool Display3ds::show_full_dump_progress(const char* stage,
                             scale, scale, color);
         }
     };
-    const unsigned percent = total ? static_cast<unsigned>(
-        std::min<std::uint64_t>(100U, written * 100U / total)) : 0U;
-    char amount[64]{};
-    if (total) {
-        std::snprintf(amount, sizeof(amount), "%u%%  %llu/%llu MB", percent,
-            static_cast<unsigned long long>(written / (1024U * 1024U)),
-            static_cast<unsigned long long>(
-                (total + 1024U * 1024U - 1U) / (1024U * 1024U)));
-    } else {
-        std::snprintf(amount, sizeof(amount), "PLEASE WAIT");
-    }
     const auto steel = rgba(98U, 139U, 145U);
     const auto shade = rgba(25U, 46U, 58U);
     auto panel = [&](int x, int y, int w, int h) {
@@ -523,15 +542,16 @@ bool Display3ds::show_full_dump_progress(const char* stage,
     panel(8,8,304,28);
     panel(8,43,304,133);
     panel(8,184,304,48);
-    centered("FULL MEMORY DUMP", 18, 1, ivory);
-    centered(stage ? stage : "PREPARING", 63, 1, blue);
+    centered(title, 18, 1, ivory);
+    centered(stage, 63, 1, blue);
     panel(23,91,274,25);
     rect(29,97,262,13,shade);
     rect(29,97,static_cast<int>(262U*percent/100U),13,steel);
     rect(29,97,static_cast<int>(262U*percent/100U),3,blue);
     centered(amount, 136, 2, ivory);
-    centered("WRITING MEMORY", 195, 1, blue);
-    centered("DO NOT POWER OFF", 215, 1, ivory);
+    centered(first_footer, 195, 1, blue);
+    centered(second_footer, 215, 1, ivory);
+    draw_test_build_label(framebuffer);
     starwing_clean_device_cache(framebuffer, 320U * 240U * 4U);
     last_bottom_framebuffer_ = reinterpret_cast<const u8*>(framebuffer);
     gfxScreenSwapBuffers(GFX_BOTTOM, false);
@@ -577,6 +597,7 @@ void Display3ds::upload_right(const render::Framebuffer& frame,
 bool Display3ds::present(const render::Framebuffer& indexed,
     const render::Palette256& palette, bool reuse_source,
     const render::Framebuffer* right, bool wait_for_gpu) {
+    native_textures_valid_ = false;
     frame_timing_ = {};
     if (!gpu_active_) {
         return present_cpu(indexed, palette, reuse_source);
@@ -771,17 +792,17 @@ std::int16_t Display3ds::decode_tile(
 }
 
 void Display3ds::remember_bg2_map_source(
-    const simulation::SnesPpuState& ppu) noexcept {
-    if (bg2_map_source_cache_.matches(ppu)) return;
+    const simulation::SnesPpuState& ppu,
+    std::uint64_t ppu_vram_revision) noexcept {
     // Updating the source certificate must invalidate its GPU image too.
     // A fresh certificate alone does not mean old texture bytes are current.
-    bg2_map_valid_ = false;
-    bg2_map_source_cache_.remember(ppu);
+    if (bg2_map_source_cache_.ensure(ppu, ppu_vram_revision))
+        bg2_map_valid_ = false;
 }
 
 bool Display3ds::build_bg2_map(const simulation::SnesPpuState& ppu,
-    const render::Palette256& palette) {
-    remember_bg2_map_source(ppu);
+    std::uint64_t ppu_vram_revision, const render::Palette256& palette) {
+    remember_bg2_map_source(ppu, ppu_vram_revision);
     if (bg2_map_valid_
         && std::memcmp(bg2_map_palette_.data(), palette.data(), sizeof(bg2_map_palette_)) == 0)
         return true;
@@ -843,13 +864,14 @@ bool Display3ds::build_mode2_quads(
     }
     tile_dirty_begin_ = tile_slot_count_;
     if (bg2_map_texture_.data != nullptr && !ppu.bg2_tile_size_16
-        && !build_bg2_map(ppu, palette)) return false;
+        && !build_bg2_map(ppu, ppu_vram_revision, palette)) return false;
     for (const auto& rectangle : bg2_plan_) {
         if (rectangle.map_sample) {
             tile_quads_.push_back({rectangle.x, rectangle.y,
                 rectangle.width, rectangle.height, 0U,
                 rectangle.source_x, rectangle.source_y, false, false,
-                false, 0U, true});
+                false, 0U, true, rectangle.affine_map, rectangle.map_y_q9,
+                rectangle.map_dy_dx_q8});
             continue;
         }
         if (rectangle.solid) {
@@ -951,6 +973,20 @@ bool Display3ds::draw_bg2_quads(const render::Palette256& palette) {
             }
             continue;
         }
+        if (quad.affine_map) {
+            const float left = quad.first_x / 512.0F;
+            const float right = (quad.first_x + quad.width) / 512.0F;
+            const float sy = quad.map_y_q9 / 512.0F;
+            const float dy = quad.map_dy_dx_q8 * quad.width / 256.0F;
+            const C2D_TextureVertex vertices[4] = {
+                {float(quad.x), float(quad.y), left, 1.0F-sy/512.0F},
+                {float(quad.x+quad.width), float(quad.y), right, 1.0F-(sy+dy)/512.0F},
+                {float(quad.x), float(quad.y+quad.height), left, 1.0F-(sy+quad.height)/512.0F},
+                {float(quad.x+quad.width), float(quad.y+quad.height), right, 1.0F-(sy+dy+quad.height)/512.0F},
+            };
+            if (!C2D_DrawTextureQuad(&bg2_map_texture_, vertices)) return false;
+            continue;
+        }
         const auto slot_x = quad.map_sample ? 0U : static_cast<std::uint32_t>(quad.slot % 128U) * 8U;
         const auto slot_y = quad.map_sample ? 0U : static_cast<std::uint32_t>(quad.slot / 128U) * 8U;
         const auto uv_x = slot_x + quad.first_x
@@ -980,9 +1016,207 @@ bool Display3ds::draw_bg2_quads(const render::Palette256& palette) {
     return true;
 }
 
+void Display3ds::release_mode1_layers() noexcept {
+    for (auto& layer:mode1_textures_) {
+        for (auto& tex:layer.textures) {
+            if (tex.data) C3D_TexDelete(&tex);
+            tex={};
+        }
+        layer={};
+    }
+}
+
+bool Display3ds::prepare_mode1_layer(const Mode1LayerPlan& plan,unsigned layer,
+    const render::Palette256& palette,bool& reused) {
+    const auto& source=plan.source(layer);
+    if (!source.frame) return true;
+    auto& cache=mode1_textures_[layer];
+    std::array<std::uint32_t,256> colours{};
+    for (unsigned i=1;i<256U;++i) {
+        const auto c=palette[i];
+        const unsigned r=c.r>>3U,b=c.b>>3U;
+        const unsigned g=plan.above_world(layer)?c.g>>3U:c.g>>2U;
+        // Match the previous two-plane presenter: RGB565 below the world,
+        // RGB5A1 above it. Store the expanded result in RGBA8 so transparent
+        // atlas texels retain that same colour precision in either position.
+        const unsigned red=(r<<3U)|(r>>2U),blue=(b<<3U)|(b>>2U);
+        const unsigned green=plan.above_world(layer)?(g<<3U)|(g>>2U):(g<<2U)|(g>>4U);
+        colours[i]=(red<<24U)|(green<<16U)|(blue<<8U)|255U;
+    }
+    const bool same_source=cache.valid && cache.source==source.frame
+        && cache.revision==source.revision && cache.width==source.width && cache.height==source.height;
+    std::array<bool,256> changed_colours{};
+    bool same_colours=true;
+    for(unsigned i=1;i<256U;++i)if(cache.updates.used(i) && colours[i]!=cache.colours[i]) {
+        changed_colours[i]=true;same_colours=false;
+    }
+    if(same_source && same_colours){cache.colours=colours;return true;}
+    reused=false;
+    const bool was_valid=cache.valid;
+    cache.valid=false;
+    if(!cache.updates.update(*source.frame,source.width,source.height,!same_source,changed_colours))return false;
+    // A failed prior cache clean must be retried even if source bytes now
+    // match the retained indices. Never promote unflushed GPU data to valid.
+    if(!was_valid)cache.updates.mark_all();
+    cache.empty=cache.updates.empty();
+    if (cache.empty || cache.width!=source.width || cache.height!=source.height) {
+        for (auto& tex:cache.textures) {
+            if (tex.data) C3D_TexDelete(&tex);
+            tex={};
+        }
+    }
+    if (!cache.empty) for (unsigned part=0;part<2U && part*1024U<source.width;++part) {
+        auto& tex=cache.textures[part];
+        const unsigned width=std::min(1024U,source.width-part*1024U);
+        const bool allocated=!tex.data;
+        if (!tex.data && !C3D_TexInit(&tex,width,source.height,GPU_RGBA8)) {
+            // Stop selecting this optional path after an allocation failure;
+            // the caller presents the established complete CPU fallback.
+            mode1_layers_available_=false;
+            release_mode1_layers();
+            return false;
+        }
+        C3D_TexSetFilter(&tex,GPU_NEAREST,GPU_NEAREST);
+        C3D_TexSetWrap(&tex,GPU_CLAMP_TO_EDGE,GPU_CLAMP_TO_EDGE);
+        auto* destination=static_cast<std::uint32_t*>(tex.data);
+        // Write the final Morton layout directly, without staging a screen
+        // texture or queuing a display transfer for every scroll position.
+        unsigned first_dirty=width*source.height/64U,last_dirty=0U;
+        for (unsigned by=0;by<source.height;by+=8U)
+            for (unsigned bx=0;bx<width;bx+=8U) {
+                if(!allocated && !cache.updates.dirty(part*128U+bx/8U,by/8U))continue;
+                const unsigned tile_index=by/8U*(width/8U)+bx/8U;
+                first_dirty=std::min(first_dirty,tile_index);last_dirty=tile_index+1U;
+                auto* tile=destination+tile_index*64U;
+                for (unsigned y=0;y<8U;++y) {
+                    const auto* input=cache.updates.row(by+y)+part*1024U+bx;
+                    for (unsigned x=0;x<8U;++x) tile[tile_morton[y*8U+x]]=colours[input[x]];
+                }
+                frame_timing_.mode1_layer_converted_bytes+=256U;
+            }
+        if(!last_dirty)continue;
+        // One bounded cache clean per texture, including any unchanged
+        // blocks between the first and last dirty blocks. Avoid a syscall
+        // per tile when animation changes several separated regions.
+        const auto bytes=(last_dirty-first_dirty)*256U;
+        const auto begin=svcGetSystemTick();
+        const bool cleaned=R_SUCCEEDED(starwing_clean_device_cache(destination+first_dirty*64U,bytes));
+        frame_timing_.flush_us+=ticks_to_microseconds(svcGetSystemTick()-begin);
+        if (!cleaned) return false;
+        frame_timing_.mode1_layer_upload_bytes+=bytes;
+    }
+    cache.source=source.frame;cache.revision=source.revision;
+    cache.width=source.width;cache.height=source.height;cache.colours=colours;
+    cache.valid=true;return true;
+}
+
+bool Display3ds::draw_mode1_layer(const Mode1LayerPlan& plan,unsigned layer) {
+    const auto& cache=mode1_textures_[layer];
+    for (const auto& r:plan.rectangles(layer)) {
+        if (r.solid) {
+            // Tunnel side fill can exist even when both atlas planes are
+            // completely transparent. It must not be skipped with them.
+            const auto c=cache.colours[r.colour];
+            if (!C2D_DrawRectSolid(r.x,r.y,0,r.width,r.height,
+                C2D_Color32(c>>24U,(c>>16U)&255U,(c>>8U)&255U,255))) return false;
+        } else {
+            if (cache.empty) continue;
+            const auto* tex=&cache.textures[r.source_x/1024U];
+            const auto sx=r.source_x%1024U;
+            const Tex3DS_SubTexture sub{r.width,r.height,
+                float(sx)/tex->width,1.0F-float(r.source_y)/tex->height,
+                float(sx+r.source_width)/tex->width,
+                1.0F-float(r.source_y+r.source_height)/tex->height};
+            const C2D_Image image{const_cast<C3D_Tex*>(tex),&sub};
+            const C2D_DrawParams params{{float(r.x),float(r.y),float(r.width),float(r.height)},
+                {0,0},0,0};
+            if (!C2D_DrawImage(image,&params,nullptr)) return false;
+        }
+        ++frame_timing_.mode1_layer_quads;
+    }
+    return true;
+}
+
+bool Display3ds::present_mode1_layers(const Mode1LayerPlan& plan,
+    const render::Framebuffer& foreground,const render::Palette256& palette,
+    const native_engine::Scene& scene,std::uint32_t foreground_revision) {
+    frame_timing_={};
+    if (!retained_mode1_available() || !plan.valid() || foreground.width()!=400U
+        || foreground.height()!=240U || foreground.write_coverage().size()!=96000U
+        || plan.rectangle_count()+scene.rectangles().size()+8U>16384U) return false;
+    auto begin=svcGetSystemTick();
+    if (!C3D_FrameBegin(C3D_FRAME_NONBLOCK)) {
+        frame_timing_.gpu_begin_failed=true;return false;
+    }
+    frame_timing_.acquire_us=ticks_to_microseconds(svcGetSystemTick()-begin);
+    bool reused=true;
+    begin=svcGetSystemTick();
+    try {
+        for (unsigned layer=0;layer<Mode1LayerPlan::layer_count;++layer)
+            if (!prepare_mode1_layer(plan,layer,palette,reused)) {
+                C3D_FrameEnd(GX_CMDLIST_FLUSH);frame_timing_.gpu_submitted=true;return false;
+            }
+    } catch (const std::bad_alloc&) {
+        // Retained indices are an optional acceleration, not game state.
+        // Free their heap and GPU storage before asking the caller for the
+        // complete reference frame. Do not retry this allocation each frame.
+        mode1_layers_available_=false;
+        release_mode1_layers();
+        C3D_FrameEnd(GX_CMDLIST_FLUSH);
+        frame_timing_.gpu_submitted=true;
+        return false;
+    }
+    frame_timing_.build_us=ticks_to_microseconds(svcGetSystemTick()-begin)-frame_timing_.flush_us;
+    std::array<std::uint16_t,256> colours{};
+    for (unsigned i=0;i<256U;++i) colours[i]=rgba5551(palette[i]);
+    const bool same_foreground=foreground_revision!=0U && foreground_revision==overlay_revision_
+        && overlay_texture_valid_ && colours==cached_overlay_colours_;
+    if (!same_foreground) {
+        begin=svcGetSystemTick();
+        expand_foreground_rows(foreground,colours,linear_overlay_,texture_width_,overlay_rows_);
+        frame_timing_.build_us+=ticks_to_microseconds(svcGetSystemTick()-begin);
+        begin=svcGetSystemTick();
+        starwing_clean_device_cache(linear_overlay_,texture_width_*texture_height_*2U);
+        frame_timing_.flush_us+=ticks_to_microseconds(svcGetSystemTick()-begin);
+        begin=svcGetSystemTick();
+        queue_display_transfer(reinterpret_cast<u32*>(linear_overlay_),GX_BUFFER_DIM(512,256),
+            reinterpret_cast<u32*>(overlay_texture_.data),GX_BUFFER_DIM(512,256),
+            GX_TRANSFER_FLIP_VERT(0)|GX_TRANSFER_OUT_TILED(1)|GX_TRANSFER_RAW_COPY(0)
+            |GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGB5A1)|GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB5A1)
+            |GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
+        frame_timing_.transfer_us+=ticks_to_microseconds(svcGetSystemTick()-begin);
+        overlay_revision_=foreground_revision;cached_overlay_colours_=colours;overlay_texture_valid_=true;
+    }
+    native_textures_valid_=false;frame_texture_valid_=false;
+    frame_timing_.reuse_hit=reused && same_foreground;
+    begin=svcGetSystemTick();
+    bool drawn=native_engine_.draw(scene,palette);
+    if (drawn) {
+        C2D_TargetClear(top_,C2D_Color32(0,0,0,255));begin_top_scene(top_,400,240,wide_);
+        const auto backdrop=rgb565(palette[0]);
+        const unsigned r=backdrop>>11U,g=(backdrop>>5U)&63U,b=backdrop&31U;
+        drawn=C2D_DrawRectSolid(0,0,0,400,240,C2D_Color32((r<<3U)|(r>>2U),
+            (g<<2U)|(g>>4U),(b<<3U)|(b>>2U),255));
+        for (unsigned layer:{0U,1U,2U})
+            if (!plan.above_world(layer)) drawn=draw_mode1_layer(plan,layer)&&drawn;
+        const Tex3DS_SubTexture sub{400,240,0,1,400.0F/512,1.0F-240.0F/256};
+        const C2D_DrawParams params{{0,0,400,240},{0,0},0,0};
+        const C2D_Image world{native_engine_.texture(),&sub},hud{&overlay_texture_,&sub};
+        drawn=C2D_DrawImage(world,&params,nullptr)&&drawn;
+        drawn=draw_mode1_layer(plan,Mode1LayerPlan::bg2_high)&&drawn;
+        if (plan.high_priority()) drawn=draw_mode1_layer(plan,Mode1LayerPlan::bg3_high)&&drawn;
+        drawn=C2D_DrawImage(hud,&params,nullptr)&&drawn;
+    }
+    last_top_framebuffer_=gfxGetFramebuffer(GFX_TOP,GFX_LEFT,nullptr,nullptr);
+    C3D_FrameEnd(GX_CMDLIST_FLUSH);frame_timing_.gpu_submitted=true;
+    frame_timing_.submit_us=ticks_to_microseconds(svcGetSystemTick()-begin);
+    return drawn;
+}
+
 bool Display3ds::present_native(const render::Framebuffer& background,
     const render::Framebuffer& foreground,const render::Palette256& palette,
-    const native_engine::Scene& scene) {
+    const native_engine::Scene& scene, std::uint32_t background_revision,
+    std::uint32_t foreground_revision) {
     frame_timing_={};
     if (!gpu_active_ || !native_engine_.ready() || background.width()!=400
         || background.height()!=240 || foreground.width()!=400
@@ -996,9 +1230,14 @@ bool Display3ds::present_native(const render::Framebuffer& background,
     for(unsigned i=0;i<256;++i) {
         back_colours[i]=rgb565(palette[i]);front_colours[i]=rgba5551(palette[i]);
     }
+    const bool reuse_background = native_textures_valid_ && background_revision != 0U
+        && native_background_revision_ == background_revision && cached_frame_colours_ == back_colours;
+    const bool reuse_foreground = native_textures_valid_ && foreground_revision != 0U
+        && native_foreground_revision_ == foreground_revision && cached_overlay_colours_ == front_colours;
+    frame_timing_.reuse_hit = reuse_background && reuse_foreground;
     begin=svcGetSystemTick();
-    expand_frame(background,back_colours,false,linear_pixels_,texture_width_);
-    expand_frame(foreground,front_colours,true,linear_overlay_,texture_width_);
+    if (!reuse_background) expand_frame(background,back_colours,false,linear_pixels_,texture_width_);
+    if (!reuse_foreground) expand_foreground_rows(foreground,front_colours,linear_overlay_,texture_width_,overlay_rows_);
     frame_timing_.build_us=ticks_to_microseconds(svcGetSystemTick()-begin);
     const auto transfer=[&](std::uint16_t* source,C3D_Tex& target,bool alpha) {
         begin=svcGetSystemTick();
@@ -1013,7 +1252,11 @@ bool Display3ds::present_native(const render::Framebuffer& background,
             |GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
         frame_timing_.transfer_us+=ticks_to_microseconds(svcGetSystemTick()-begin);
     };
-    transfer(linear_pixels_,texture_,false);transfer(linear_overlay_,overlay_texture_,true);
+    if (!reuse_background) transfer(linear_pixels_,texture_,false);
+    if (!reuse_foreground) transfer(linear_overlay_,overlay_texture_,true);
+    cached_frame_colours_ = back_colours; cached_overlay_colours_ = front_colours;
+    native_background_revision_ = background_revision; native_foreground_revision_ = foreground_revision;
+    native_textures_valid_ = true;
     begin=svcGetSystemTick();
     bool drawn=native_engine_.draw(scene,palette);
     if(drawn) {
@@ -1037,7 +1280,9 @@ bool Display3ds::present_mode2(
     std::int32_t scroll_x, std::int32_t scroll_y,
     const render::Framebuffer& foreground,
     const render::Palette256& palette, bool reuse_source,
-    const render::Framebuffer* right, const native_engine::Scene* scene, std::uint8_t stereo_strength) {
+    const render::Framebuffer* right, const native_engine::Scene* scene, std::uint8_t stereo_strength,
+    std::uint32_t foreground_revision) {
+    native_textures_valid_ = false;
     frame_timing_ = {};
     if ((right && (!top_right_ || !bg2_target_)) || !eligible_mode2(ppu) || foreground.width() != 400U
         || foreground.height() != 240U || foreground.draw_scale() != 1U) {
@@ -1074,10 +1319,11 @@ bool Display3ds::present_mode2(
         if (!frame_timing_.bg2_plan_worker_used) {
             const auto plan_begin = svcGetSystemTick();
             const bool use_map = bg2_map_texture_.data != nullptr && !ppu.bg2_tile_size_16;
-            if (use_map) remember_bg2_map_source(ppu);
+            if (use_map) remember_bg2_map_source(ppu, ppu_vram_revision);
             planned = plan_bg2_rects(ppu, scroll_x, scroll_y, bg2_plan_,
                     16383U, 400U, 240U, 72, 8, true, use_map,
-                    use_map && bg2_map_source_cache_.all_opaque());
+                    use_map && bg2_map_source_cache_.all_opaque(),
+                    use_map ? &bg2_map_source_cache_ : nullptr, ppu_vram_revision);
             frame_timing_.plan_us += ticks_to_microseconds(
                 svcGetSystemTick() - plan_begin);
         }
@@ -1147,10 +1393,16 @@ bool Display3ds::present_mode2(
     std::array<std::uint16_t, 256U> colours{};
     for (std::uint32_t index = 0U; index < 256U; ++index)
         colours[index] = rgba5551(palette[index]);
-    if (!reuse_source || !overlay_texture_valid_
+    // Between two source ticks only the world moves: the foreground then
+    // arrives under the name the overlay texture was filled from.
+    const bool same_foreground = reuse_source || (foreground_revision != 0U
+        && foreground_revision == overlay_revision_);
+    if (!same_foreground || !overlay_texture_valid_
         || colours != cached_overlay_colours_) {
+        overlay_revision_ = foreground_revision;
         stage_begin = svcGetSystemTick();
-        expand_frame(foreground, colours, true, linear_overlay_, texture_width_);
+        expand_foreground_rows(foreground, colours, linear_overlay_,
+            texture_width_, overlay_rows_);
         frame_timing_.build_us += ticks_to_microseconds(
             svcGetSystemTick() - stage_begin);
         stage_begin = svcGetSystemTick();
@@ -1188,6 +1440,7 @@ bool Display3ds::present_mode2(
             palette[0].r, palette[0].g, palette[0].b, 255));
         C2D_SceneBegin(bg2_target_);
         C2D_ViewReset();
+        C3D_SetScissor(GPU_SCISSOR_DISABLE,0,0,texture_width_,texture_height_);
         // This colour-only target has no depth attachment. Citro2D's default
         // GEQUAL test would read address zero; every BG2 quad uses painter order.
         C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
@@ -1295,20 +1548,8 @@ bool Display3ds::present_cpu(const render::Framebuffer& indexed,
         frame_timing_.reuse_hit = true;
         return true;
     }
-    std::array<unsigned,240> source_rows{};
-    for (unsigned y=view.y; y<view.y+view.height; ++y) source_rows[y]=view.sample_y(y);
-    for (std::uint32_t x = 0U; x < 400U; ++x) {
-        auto* column = screen + x * 240U;
-        if (x < view.x || x >= view.x + view.width) {
-            std::fill_n(column, 240U, std::uint16_t{0});
-            continue;
-        }
-        const auto source_x = view.sample_x(x);
-        for (std::uint32_t y = 0U; y < 240U; ++y) {
-            column[239U - y] = y >= view.y && y < view.y + view.height
-                ? colours[indexed.get(source_x, source_rows[y])] : 0U;
-        }
-    }
+    transfer_indexed_screen(indexed.pixels().data(),indexed.stored_width(),
+        indexed.draw_scale(),view,colours.data(),screen);
     last_top_framebuffer_ = reinterpret_cast<const u8*>(screen);
     GSPGPU_FlushDataCache(screen, 400U * 240U * sizeof(std::uint16_t));
     starwing_swap_cpu_top();

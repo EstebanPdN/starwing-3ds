@@ -1,5 +1,6 @@
 #include "starfox/render/stereo_projection.hpp"
 #include "starfox/render/particle_renderer.hpp"
+#include "starfox/render/point_plotter.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -20,19 +21,28 @@ double interpolate_word(std::int16_t from, std::int16_t to, double alpha) noexce
     return from + delta * alpha;
 }
 
-Point project(double x, double y, double z, const Framebuffer& target,
+// The raster extent of one particle pass. Framebuffer derives it with a
+// division by the draw scale each time it is asked; a pass asks once.
+struct Extent {
+    int half_width{};
+    int half_height{};
+    int width{};
+    int height{};
+};
+
+Point project(double x, double y, double z, const Extent& extent,
     std::int32_t eye) {
     if (z < 256.0) return {};
-    const auto screen_x = static_cast<int>(target.width() / 2U)
+    const auto screen_x = extent.half_width
         + inward_stereo_shift(eye, z)
         + static_cast<int>(std::trunc((x + eye) * 256.0 / z));
-    const auto screen_y = static_cast<int>(target.height() / 2U)
+    const auto screen_y = extent.half_height
         + static_cast<int>(std::trunc(y * 256.0 / z));
     // MPART.MC clips against mrightclp-1 and mbotclp-1.
     return {screen_x, screen_y,
         screen_x >= 0 && screen_y >= 0
-            && screen_x < static_cast<int>(target.width()) - 1
-            && screen_y < static_cast<int>(target.height()) - 1};
+            && screen_x < extent.width - 1
+            && screen_y < extent.height - 1};
 }
 
 bool inside_effect_clip(const RenderPose& pose, int x) noexcept {
@@ -41,7 +51,7 @@ bool inside_effect_clip(const RenderPose& pose, int x) noexcept {
 }
 
 void set_effect_pixel(
-    Framebuffer& target,
+    const PointPlotter& target,
     const RenderPose& pose,
     int x,
     int y,
@@ -50,7 +60,7 @@ void set_effect_pixel(
 }
 
 void draw_line(
-    Framebuffer& target,
+    const PointPlotter& target,
     const RenderPose& pose,
     Point a,
     Point b,
@@ -103,6 +113,10 @@ void ParticleRenderer::draw_particles(std::span<const simulation::ParticleState>
     Framebuffer& target,std::uint8_t colour_index_base) {
     // Particles are world-space geometry; see DustRenderer::draw.
     const ScopedLayer layer{target, PixelLayer::three_d};
+    const PointPlotter plotter{target};
+    const Extent extent{static_cast<int>(target.width() / 2U),
+        static_cast<int>(target.height() / 2U),
+        static_cast<int>(target.width()), static_cast<int>(target.height())};
     const auto alpha = std::clamp(interpolation_alpha, 0.0, 1.0);
     for (const auto& particle : particles) {
         if (particle.life == 0U || particle.owner != owner) continue;
@@ -113,7 +127,7 @@ void ParticleRenderer::draw_particles(std::span<const simulation::ParticleState>
         const auto z = interpolate_word(
             particle.previous_z, particle.z, alpha);
         const auto point = project(
-            owner_pose.x + x, owner_pose.y + y, owner_pose.z + z, target,
+            owner_pose.x + x, owner_pose.y + y, owner_pose.z + z, extent,
             owner_pose.stereo_eye_offset);
         if (!point.visible) continue;
         const auto colour = static_cast<std::uint8_t>(
@@ -121,18 +135,18 @@ void ParticleRenderer::draw_particles(std::span<const simulation::ParticleState>
         if ((particle.flags & 0x04U) != 0U) {
             const auto previous = project(owner_pose.x + particle.previous_x,
                 owner_pose.y + particle.previous_y,
-                owner_pose.z + particle.previous_z, target,
+                owner_pose.z + particle.previous_z, extent,
                 owner_pose.stereo_eye_offset);
             if (previous.visible) {
-                draw_line(target, owner_pose, previous, point, colour);
+                draw_line(plotter, owner_pose, previous, point, colour);
             }
             continue;
         }
         // PLOT increments R1; the source's two PLOT pairs form a 2x2 dot.
-        set_effect_pixel(target, owner_pose, point.x, point.y, colour);
-        set_effect_pixel(target, owner_pose, point.x + 1, point.y, colour);
-        set_effect_pixel(target, owner_pose, point.x, point.y + 1, colour);
-        set_effect_pixel(target, owner_pose, point.x + 1, point.y + 1, colour);
+        set_effect_pixel(plotter, owner_pose, point.x, point.y, colour);
+        set_effect_pixel(plotter, owner_pose, point.x + 1, point.y, colour);
+        set_effect_pixel(plotter, owner_pose, point.x, point.y + 1, colour);
+        set_effect_pixel(plotter, owner_pose, point.x + 1, point.y + 1, colour);
     }
 }
 

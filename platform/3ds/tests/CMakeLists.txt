@@ -7,9 +7,6 @@ set(STARWING_CITRO2D_LIBRARY "" CACHE FILEPATH "Matching libstarwing_citro2d.a f
 if(NOT EXISTS "${STARWING_CITRO2D_LIBRARY}")
     message(FATAL_ERROR "Supply the matching Citro2D archive")
 endif()
-ctr_add_shader_library(span_shader OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/span.shbin"
-    "${STARFOX_SOURCE_ROOT}/platform/3ds/source/native_engine/span.v.pica")
-dkp_add_embedded_binary_library(span_binary span_shader)
 if(EXISTS "${STARWING_REPLAY_FIXTURES}/cases.txt")
 add_executable(native_gpu_replay "${STARFOX_SOURCE_ROOT}/tests/native_gpu_replay.cpp"
     "${STARFOX_SOURCE_ROOT}/platform/3ds/source/native_engine/scene.cpp"
@@ -18,12 +15,14 @@ target_include_directories(native_gpu_replay PRIVATE "${STARFOX_SOURCE_ROOT}/inc
     "${STARFOX_SOURCE_ROOT}/platform/3ds/source"
     "${STARFOX_SOURCE_ROOT}/platform/3ds/vendor/citro2d/include")
 target_compile_options(native_gpu_replay PRIVATE -O3 -ffunction-sections -fdata-sections)
-target_link_libraries(native_gpu_replay PRIVATE "${STARWING_CITRO2D_LIBRARY}" span_binary citro3d ctru m)
+target_link_libraries(native_gpu_replay PRIVATE "${STARWING_CITRO2D_LIBRARY}" citro3d ctru m)
 ctr_create_3dsx(native_gpu_replay-3dsx TARGET native_gpu_replay
     OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/native-gpu-replay.3dsx" ROMFS "${STARWING_REPLAY_FIXTURES}")
 
 endif()
 add_executable(display_gpu_replay "${STARFOX_SOURCE_ROOT}/tests/display_gpu_replay.cpp"
+    "${STARFOX_SOURCE_ROOT}/src/render/background_renderer.cpp"
+    "${STARFOX_SOURCE_ROOT}/platform/3ds/source/gpu_self_test.cpp"
     "${STARFOX_SOURCE_ROOT}/platform/3ds/source/display_3ds.cpp"
     "${STARFOX_SOURCE_ROOT}/platform/3ds/source/bg2_plan.cpp"
     "${STARFOX_SOURCE_ROOT}/platform/3ds/source/gpu_lifetime_3ds.c"
@@ -33,9 +32,24 @@ target_include_directories(display_gpu_replay PRIVATE "${STARFOX_SOURCE_ROOT}/in
     "${STARFOX_SOURCE_ROOT}/platform/3ds/source"
     "${STARFOX_SOURCE_ROOT}/platform/3ds/vendor/citro2d/include")
 target_compile_options(display_gpu_replay PRIVATE -O3 -ffunction-sections -fdata-sections)
+set(STARWING_GPU_TEST_OUTPUT_DIR "sdmc:/display-gpu-test" CACHE STRING "Probe report directory on SD")
+target_compile_definitions(display_gpu_replay PRIVATE STARWING_GPU_TEST_OUTPUT_DIR="${STARWING_GPU_TEST_OUTPUT_DIR}")
 target_link_options(display_gpu_replay PRIVATE -Wl,--gc-sections
     -Wl,--wrap=GX_BindQueue -Wl,--wrap=C3Di_RenderQueueWaitDone
     -Wl,--wrap=gxCmdQueueRun -Wl,--wrap=gxCmdQueueWait)
-target_link_libraries(display_gpu_replay PRIVATE "${STARWING_CITRO2D_LIBRARY}" span_binary citro3d ctru m)
+target_link_libraries(display_gpu_replay PRIVATE "${STARWING_CITRO2D_LIBRARY}" citro3d ctru m)
 ctr_create_3dsx(display_gpu_replay-3dsx TARGET display_gpu_replay
     OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/display-gpu-replay.3dsx")
+
+set(STARWING_DIAGNOSTICS_TEST_SOURCE "${STARFOX_SOURCE_ROOT}/platform/3ds/source/diagnostics_3ds.cpp"
+    CACHE FILEPATH "Diagnostic implementation to check under allocation failures")
+add_executable(diagnostic_capture_test "${STARFOX_SOURCE_ROOT}/tests/diagnostic_capture_3ds_test.cpp"
+    "${STARWING_DIAGNOSTICS_TEST_SOURCE}"
+    "${STARFOX_SOURCE_ROOT}/platform/3ds/source/memory_3ds.cpp")
+target_include_directories(diagnostic_capture_test PRIVATE
+    "${STARFOX_SOURCE_ROOT}/platform/3ds/source")
+target_compile_options(diagnostic_capture_test PRIVATE -O2 -ffunction-sections -fdata-sections)
+target_link_options(diagnostic_capture_test PRIVATE -Wl,--gc-sections)
+target_link_libraries(diagnostic_capture_test PRIVATE ctru m)
+ctr_create_3dsx(diagnostic_capture_test-3dsx TARGET diagnostic_capture_test
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/diagnostic-capture-test.3dsx")

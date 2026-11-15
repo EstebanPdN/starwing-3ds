@@ -1,6 +1,6 @@
 # Verification status
 
-Current development version: **1.2-E2**; CIA internal title version: **90**.
+Current development version: **1.2-E3** (unreleased); CIA internal title version: **103**.
 
 > ⚠️ **Experimental release — known HOME Menu freeze**
 >

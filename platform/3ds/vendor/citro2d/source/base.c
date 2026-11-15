@@ -470,6 +470,65 @@ bool C2D_DrawImage(C2D_Image img, const C2D_DrawParams* params, const C2D_ImageT
 	return true;
 }
 
+size_t C2D_QuadsAvailable(void)
+{
+	C2Di_Context* ctx = C2Di_GetContext();
+	if (!(ctx->flags & C2DiF_Active)) return 0;
+	size_t vertices = (ctx->vtxBufSize - ctx->vtxBufPos) / 4;
+	size_t indices = (ctx->idxBufSize - ctx->idxBufPos) / 6;
+	return vertices < indices ? vertices : indices;
+}
+
+bool C2D_DrawTextureQuad(C3D_Tex* texture, const C2D_TextureVertex vertices[4])
+{
+    C2Di_Context* ctx = C2Di_GetContext();
+    if (!(ctx->flags & C2DiF_Active) || !texture || !C2Di_CheckBufSpace(ctx, 6, 4)) return false;
+    C2Di_SetMode(C2DiF_Mode_ImageSolid);
+    C2Di_SetTex(texture);
+    C2Di_Update();
+    C2Di_AppendQuad();
+    for (unsigned i=0; i<4; ++i)
+        C2Di_AppendVtx(vertices[i].x, vertices[i].y, 0, vertices[i].u, vertices[i].v,
+            0, 0, 0xff000000U);
+    return true;
+}
+
+bool C2D_DrawDitherQuad(C3D_Tex* texture, const C2D_DitherVertex vertices[4])
+{
+	C2Di_Context* ctx = C2Di_GetContext();
+	if (!(ctx->flags & C2DiF_Active) || !texture || !C2Di_CheckBufSpace(ctx, 6, 4))
+		return false;
+	C2Di_SetMode(C2DiF_Mode_Dither);
+	C2Di_SetTex(texture);
+	C2Di_Update();
+	C2Di_AppendQuad();
+	for (unsigned i = 0; i < 4; ++i)
+		C2Di_AppendVtx(vertices[i].x, vertices[i].y, 0,
+			vertices[i].u, vertices[i].v, vertices[i].checker_u, vertices[i].checker_v, vertices[i].colour);
+	return true;
+}
+
+C2D_Vertex* C2D_ReserveDitherQuads(C3D_Tex* texture, size_t count)
+{
+    C2Di_Context* ctx = C2Di_GetContext();
+    if (!(ctx->flags & C2DiF_Active) || !texture || !count
+        || count > (ctx->vtxBufSize-ctx->vtxBufPos)/4
+        || count > (ctx->idxBufSize-ctx->idxBufPos)/6) return NULL;
+    C2Di_SetMode(C2DiF_Mode_Dither);
+    C2Di_SetTex(texture);
+    C2Di_Update();
+    C2D_Vertex* result = &ctx->vtxBuf[ctx->vtxBufPos];
+    u16* indices = &ctx->idxBuf[ctx->idxBufPos];
+    unsigned base = ctx->vtxBufPos;
+    for (size_t i=0; i<count; ++i, base+=4) {
+        *indices++=base; *indices++=base+2; *indices++=base+1;
+        *indices++=base+1; *indices++=base+2; *indices++=base+3;
+    }
+    ctx->vtxBufPos+=count*4;
+    ctx->idxBufPos+=count*6;
+    return result;
+}
+
 bool C2D_DrawTriangle(float x0, float y0, u32 clr0, float x1, float y1, u32 clr1, float x2, float y2, u32 clr2, float depth)
 {
 	C2Di_Context* ctx = C2Di_GetContext();
@@ -620,6 +679,15 @@ void C2Di_Update(void)
 
 	if (flags & C2DiF_DirtyMode) switch (mode)
 	{
+		case C2DiF_Mode_Dither:
+		{
+			env = C3D_GetTexEnv(0);
+			C3D_TexEnvInit(env);
+			C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0, GPU_PRIMARY_COLOR, GPU_TEXTURE1);
+			C3D_TexEnvFunc(env, C3D_Both, GPU_INTERPOLATE);
+			for (int i = 1; i < 4; ++i) C3D_TexEnvInit(C3D_GetTexEnv(i));
+			break;
+		}
 		case C2DiF_Mode_Solid:
 		{
 			// Plain ol' passthrough of vertex color.
@@ -808,11 +876,14 @@ void C2Di_Update(void)
 		}
 	}
 
-	if (proctex && proctex != (ctx->flags & C2DiF_ProcTex_Mask))
+	if ((flags & C2DiF_DirtyMode) && proctex != (ctx->flags & C2DiF_ProcTex_Mask))
 	{
 		ctx->flags = (ctx->flags &~ C2DiF_ProcTex_Mask) | proctex;
 		switch (proctex)
 		{
+			case C2DiF_ProcTex_None:
+				C3D_ProcTexBind(0, NULL);
+				break;
 			case C2DiF_ProcTex_Blend:
 				C3D_ProcTexBind(1, &ctx->ptBlend);
 				C3D_ProcTexLutBind(GPU_LUT_ALPHAMAP, &ctx->ptBlendLut);

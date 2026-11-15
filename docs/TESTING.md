@@ -4,6 +4,10 @@ Verification is scoped to the environment and workload actually executed.
 Host tests, ARM compilation, emulator execution, and physical-console tests
 are separate evidence. Current status is in [STATUS.md](STATUS.md).
 
+The local **Prueba 4** candidate adds a production-path GPU self-test and
+per-capture gameplay pixel comparisons. See [its guide](PRUEBA-4.md) for output
+paths, scope and the still-pending physical acceptance criteria.
+
 ## ROM-free public suite
 
 ```sh

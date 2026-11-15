@@ -241,11 +241,11 @@ void PathVm::detach(ObjectHandle object) noexcept {
 
 bool PathVm::is_attached(ObjectHandle object) const noexcept {
     return objects_->is_active(object)
-        && objects_->at(object).strategy_address == path_strategy_address_;
+        && objects_->get(object).strategy_address == path_strategy_address_;
 }
 
 std::uint16_t PathVm::path_offset(ObjectHandle object) const {
-    return std::bit_cast<std::uint16_t>(objects_->at(object).scratch_words[1]);
+    return std::bit_cast<std::uint16_t>(objects_->get(object).scratch_words[1]);
 }
 
 void PathVm::set_path_offset(ObjectHandle object, std::uint16_t offset) {
@@ -478,7 +478,7 @@ void PathVm::tick(ObjectHandle handle) {
                     if (candidate == object.attached) after_current = true;
                     continue;
                 }
-                const auto& other = objects_->at(candidate);
+                const auto& other = objects_->get(candidate);
                 if (other.shape == wanted_shape
                     && std::abs(static_cast<int>(subtract16(other.world_z, object.world_z))) < 7000) {
                     found = candidate;
@@ -506,7 +506,7 @@ void PathVm::tick(ObjectHandle handle) {
         case 29: set_object_flag(kFlagHelicopter, false); advance(1); continue;
         case 30: {
             const auto distance = std::abs(static_cast<int>(subtract16(
-                object.world_z, objects_->at(player_).world_z)));
+                object.world_z, objects_->get(player_).world_z)));
             auto condition = distance < static_cast<int>(read16(pc + 1U));
             if (state.if_not) { condition = !condition; state.if_not = false; }
             if (condition) jump(read16(pc + 3U)); else advance(5);
@@ -516,7 +516,7 @@ void PathVm::tick(ObjectHandle handle) {
             auto condition = false;
             if (objects_->is_active(object.attached)) {
                 condition = std::abs(static_cast<int>(subtract16(
-                    object.world_z, objects_->at(object.attached).world_z)))
+                    object.world_z, objects_->get(object.attached).world_z)))
                     < static_cast<int>(read16(pc + 1U));
             }
             if (state.if_not) { condition = !condition; state.if_not = false; }
@@ -557,7 +557,7 @@ void PathVm::tick(ObjectHandle handle) {
             continue;
         }
         case 44: case 45: case 46: case 47: case 122: {
-            const auto& player = objects_->at(player_);
+            const auto& player = objects_->get(player_);
             bool condition{};
             if (opcode == 44) condition = player.world_x < object.world_x;
             if (opcode == 45) condition = player.world_x >= object.world_x;

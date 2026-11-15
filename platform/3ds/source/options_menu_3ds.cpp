@@ -35,6 +35,94 @@ std::uint32_t symbol(const assets::SymbolMap& map,const char* name) {
     const auto& found=map.find(name);
     return found.empty()?0U:found.front();
 }
+void fill_rect(std::vector<std::uint32_t>& target,int width,
+    int x,int y,int w,int h,std::uint32_t color) {
+    if(w<=0||h<=0) return;
+    const int x0=std::clamp(x,0,width),x1=std::clamp(x+w,0,width);
+    const int y0=std::clamp(y,0,240),y1=std::clamp(y+h,0,240);
+    for(int yy=y0;yy<y1;++yy)
+        std::fill(target.begin()+yy*width+x0,target.begin()+yy*width+x1,color);
+}
+// The level HUD's fixed picture: the authored panel with its two screens
+// made truly black, the caption sockets and their captions. Everything else
+// on the level HUD is drawn over it, each part inside its own area below.
+const std::vector<std::uint32_t>& level_hud_backdrop() {
+    static const auto backdrop=[] {
+        std::vector<std::uint32_t> decoded(320U*240U);
+        std::size_t cursor=0;
+        for(const auto run:bottom_hud_runs) {
+            const auto color=bottom_hud_colors[run>>12U];
+            const auto count=std::size_t(run&0x0fffU);
+            std::fill_n(decoded.begin()+cursor,count,color);
+            cursor+=count;
+        }
+        // The source HUD art has two very dark blue empty screens. Keep every
+        // outline pixel, but make the portrait and message interiors truly black.
+        for(auto& pixel:decoded)
+            if(pixel==rgb(12,22,36)) pixel=black;
+        // Pixel-sampled from the cartridge FONT0, with equal 8-pixel height and
+        // centered in the separate 45/40-pixel label sockets.
+        // Solid sockets and a fixed 5x7 bitmap keep these short captions crisp;
+        // shrinking FONT0 by point sampling loses the B and S strokes.
+        fill_rect(decoded,320,34,191,47,11,black);
+        fill_rect(decoded,320,210,191,44,11,black);
+        const auto fixed_label=[&](const char* value,int center_x) {
+            const int length=int(std::strlen(value));
+            int x=center_x-(length*6-1)/2;
+            for(const char* p=value;*p;++p,x+=6) {
+                std::array<unsigned char,7> rows{};
+                switch(*p) {
+                case 'S': rows={15,16,16,14,1,1,30};break;
+                case 'H': rows={17,17,17,31,17,17,17};break;
+                case 'I': rows={31,4,4,4,4,4,31};break;
+                case 'E': rows={31,16,16,30,16,16,31};break;
+                case 'L': rows={16,16,16,16,16,16,31};break;
+                case 'D': rows={30,17,17,17,17,17,30};break;
+                case 'B': rows={30,17,17,30,17,17,30};break;
+                case 'O': rows={14,17,17,17,17,17,14};break;
+                case 'M': rows={17,27,21,21,17,17,17};break;
+                default:break;
+                }
+                for(int row=0;row<7;++row)
+                    for(int col=0;col<5;++col)
+                        if(rows[unsigned(row)]&(1U<<(4-col)))
+                            fill_rect(decoded,320,x+col,193+row,1,1,white);
+            }
+        };
+        fixed_label("SHIELD",57);
+        fixed_label("BOMBS",231);
+        fill_rect(decoded,320,251,192,1,9,steel);
+        fill_rect(decoded,320,252,193,1,7,muted);
+        return decoded;
+    }();
+    return backdrop;
+}
+// Where each part of the level HUD draws. No two of them share a pixel, so
+// a part is redrawn by restoring its area of the backdrop and painting it.
+constexpr auto lives_area=screen_rect(19,14,25,8);
+constexpr auto bombs_area=screen_rect(256,193,40,8);
+constexpr auto shield_area=screen_rect(27,210,59,7);
+constexpr auto boost_area=screen_rect(219,210,59,7);
+constexpr auto portrait_area=screen_rect(128,127,64,80);
+constexpr auto comms_meter_area=screen_rect(134,113,52,8);
+constexpr auto message_area=screen_rect(29,48,260,45);
+constexpr int fps_panel_rows=[] {
+    int pixels=0;
+    for(const auto run:fps_panel_runs) pixels+=run&0x0fffU;
+    return (pixels+76)/77;
+}();
+constexpr auto fps_panel_area=screen_rect(227,8,77,fps_panel_rows);
+// The FPS label is centred on x=265 in rows 13..24 and may be wider than its
+// panel: at most 23 characters of at most 16+1 pixels reach x=70..460.
+constexpr auto fps_widest_area=bounding_rect(fps_panel_area,screen_rect(70,13,391,12));
+static_assert([] {
+    constexpr std::array areas{lives_area,bombs_area,shield_area,boost_area,
+        portrait_area,comms_meter_area,message_area,fps_widest_area};
+    for(std::size_t i=0;i<areas.size();++i)
+        for(std::size_t j=i+1;j<areas.size();++j)
+            if(areas[i].intersects(areas[j])) return false;
+    return true;
+}());
 }
 
 OptionsMenu3ds::OptionsMenu3ds(const assets::RomImage& rom,
@@ -60,6 +148,7 @@ void OptionsMenu3ds::load() {
     if (!file) file=std::fopen(config_path,"rb");
     if (!file) return;
     char line[80]{};
+    unsigned stored_fps=fps_limit_,stored_policy=0;
     while (std::fgets(line,sizeof(line),file)) {
         unsigned n{};
         if (std::sscanf(line,"wide=%u",&n)==1) wide_=n!=0;
@@ -70,9 +159,12 @@ void OptionsMenu3ds::load() {
         else if (std::sscanf(line,"overlay=%u",&n)==1) overlay_enabled_=n!=0;
         else if (own_profile && std::sscanf(line,"original_speed=%u",&n)==1) original_speed_=n!=0;
         else if (own_profile && std::sscanf(line,"interpolation=%u",&n)==1) interpolate_=n!=0;
-        else if (own_profile && std::sscanf(line,"fps_limit=%u",&n)==1) fps_limit_=valid_fps_limit(n);
+        else if (own_profile && std::sscanf(line,"fps_limit=%u",&n)==1) stored_fps=n;
+        else if (own_profile && std::sscanf(line,"fps_profile_policy=%u",&n)==1) stored_policy=n;
     }
     std::fclose(file);
+    fps_limit_=profile_fps_limit(fps_limit_,stored_fps,stored_policy);
+    if(own_profile && stored_policy!=fps_profile_policy) save();
 }
 void OptionsMenu3ds::save() const {
     std::FILE* file=std::fopen(config_path_,"wb");
@@ -82,16 +174,12 @@ void OptionsMenu3ds::save() const {
         unsigned(show_fps_),unsigned(overlay_enabled_));
     std::fprintf(file,"original_speed=%u\ninterpolation=%u\n",
         unsigned(original_speed_),unsigned(interpolate_));
-    std::fprintf(file,"fps_limit=%u\n",fps_limit_);
+    std::fprintf(file,"fps_limit=%u\nfps_profile_policy=%u\n",fps_limit_,fps_profile_policy);
     std::fclose(file);
 }
 void OptionsMenu3ds::rect(std::vector<std::uint32_t>& target,int width,
     int x,int y,int w,int h,std::uint32_t color) {
-    if(w<=0||h<=0) return;
-    const int x0=std::clamp(x,0,width),x1=std::clamp(x+w,0,width);
-    const int y0=std::clamp(y,0,240),y1=std::clamp(y+h,0,240);
-    for(int yy=y0;yy<y1;++yy)
-        std::fill(target.begin()+yy*width+x0,target.begin()+yy*width+x1,color);
+    fill_rect(target,width,x,y,w,h,color);
 }
 void OptionsMenu3ds::glyph(std::vector<std::uint32_t>& target,int screen_width,
     char character,int x,int y,int scale,std::uint32_t color) {
@@ -437,6 +525,7 @@ MenuAction OptionsMenu3ds::touch(int x,int y,bool controls_screen) {
     return MenuAction::none;
 }
 void OptionsMenu3ds::draw_entry(bool map_stars,std::uint32_t sky) {
+    hud_cache_.invalidate();
     // Match the actual upper-screen sky for this menu. The old entry path
     // painted black, while the unrelated title starfield also painted black.
     // Both controls and planet selection use this same cartridge sky style.
@@ -560,6 +649,7 @@ void OptionsMenu3ds::draw_title_top(const render::Framebuffer& frame,
 }
 
 void OptionsMenu3ds::draw_space_bottom() {
+    hud_cache_.invalidate();
     std::fill(bottom_.begin(),bottom_.end(),black);
     // Isolated star coordinates and five-pixel crosses from the actual
     // upper title sky in dump 000, mapped to the lower screen width.
@@ -583,6 +673,7 @@ void OptionsMenu3ds::draw_space_bottom() {
 }
 
 void OptionsMenu3ds::draw_game_over_bottom() {
+    hud_cache_.invalidate();
     static const auto stars=[] {
         std::vector<std::uint32_t> result(320U*240U,black);
         for(unsigned y=0;y<240U;++y) for(unsigned x=0;x<320U;++x) {
@@ -600,6 +691,7 @@ void OptionsMenu3ds::draw_game_over_bottom() {
 }
 
 void OptionsMenu3ds::draw_black() {
+    hud_cache_.invalidate();
     std::fill(top_.begin(),top_.end(),black);
     std::fill(bottom_.begin(),bottom_.end(),black);
 }
@@ -611,160 +703,265 @@ void OptionsMenu3ds::draw_title_bottom(std::uint64_t time_ms) {
     centered(bottom_,320,"HOME MENU",160,215,1,steel);
 }
 
-void OptionsMenu3ds::draw_level_hud(
+// A communication alternates between a few portrait frames. Their 32x40
+// indices are a function of the ROM alone, so keep the last four decoded
+// instead of decoding 1280 pixels on every mouth movement. Returns the
+// entry's place; the frame on the picture is never the one replaced.
+int OptionsMenu3ds::decoded_portrait(std::uint8_t frame,bool alternate) {
+    int victim=-1;
+    for(int i=0;i<int(hud_portraits_.size());++i) {
+        auto& entry=hud_portraits_[std::size_t(i)];
+        if(entry.valid&&entry.frame==frame&&entry.alternate==alternate) {
+            entry.last_use=++hud_portrait_clock_;
+            return i;
+        }
+        if(i==hud_portrait_shown_) continue;
+        if(victim<0||!entry.valid||(hud_portraits_[std::size_t(victim)].valid
+                &&entry.last_use<hud_portraits_[std::size_t(victim)].last_use))
+            victim=i;
+    }
+    auto& entry=hud_portraits_[std::size_t(victim)];
+    portrait_frame_.clear(0U);
+    game_text_.draw_face(frame,0,0,portrait_frame_,7U*16U,alternate);
+    std::copy_n(portrait_frame_.pixels().begin(),entry.pixels.size(),entry.pixels.begin());
+    entry.colours={};
+    for(const auto index:entry.pixels)
+        if(index!=0U) BottomHudCache::use(entry.colours,index);
+    entry.frame=frame;
+    entry.alternate=alternate;
+    entry.valid=true;
+    entry.last_use=++hud_portrait_clock_;
+    return victim;
+}
+
+// The picture is retained. Each call finds the parts whose sources changed,
+// restores their areas of the backdrop and paints them again; hud_damage_
+// collects those areas for the presentation. Returns whether a source of the
+// picture changed, the condition under which it is presented again.
+bool OptionsMenu3ds::draw_level_hud(
     const simulation::GameSimulation& game,
     const render::Palette256& palette,float fps) {
-    static const auto background=[] {
-        std::vector<std::uint32_t> decoded(320U*240U);
-        std::size_t cursor=0;
-        for(const auto run:bottom_hud_runs) {
-            const auto color=bottom_hud_colors[run>>12U];
-            const auto count=std::size_t(run&0x0fffU);
-            std::fill_n(decoded.begin()+cursor,count,color);
-            cursor+=count;
-        }
-        // Prepare these interiors once, not on every presented frame.
-        for(auto& pixel:decoded)
-            if(pixel==rgb(12,22,36)) pixel=black;
-        return decoded;
-    }();
-    bottom_=background;
-    // The source HUD art has two very dark blue empty screens. Keep every
-    // outline pixel, but make the portrait and message interiors truly black.
     const auto meter=game.peek_meter_state();
-    hud_status_frame_.clear(0U);
-    hud_sprites_.draw_objects(game.map().ppu_state(),hud_status_frame_,
-        std::nullopt,0,true,false,nullptr,false,&meter,true,true);
-    if(meter.enabled) hud_sprites_.draw_meters(meter,hud_status_frame_);
-    const auto copy_cartridge_status=[&](int source_x,int source_y,
-        int width,int height,int destination_x,int destination_y,int scale=1) {
-        for(int y=0;y<height;++y) for(int x=0;x<width;++x) {
-            const auto index=hud_status_frame_.get(source_x+x,source_y+y);
-            if(index==0U) continue;
-            const auto& c=palette[index];
-            const int dx=destination_x+x*scale,dy=destination_y+y*scale;
-            if(dx>=0&&dx<320&&dy>=0&&dy<240)
-                rect(bottom_,320,dx,dy,scale,scale,rgb(c.r,c.g,c.b));
+    const auto dialogue=game.dialogue_state();
+    const auto& ppu=game.map().ppu_state();
+    const auto revision=game.map().ppu_vram_revision();
+    const char* fps_label="";
+    if (show_fps_) {
+        // The readout moves about once a second and this runs at every
+        // logic tick: format the label when the value's bits change.
+        if(!hud_fps_formatted_||std::memcmp(&hud_fps_value_,&fps,sizeof(fps))!=0) {
+            std::snprintf(hud_fps_label_.data(),hud_fps_label_.size(),"%.1f FPS",fps);
+            hud_fps_value_=fps;
+            hud_fps_formatted_=true;
         }
+        fps_label=hud_fps_label_.data();
+    }
+    const auto sources=BottomHudCache::sources(meter,dialogue,palette,show_fps_,fps_label);
+    const auto stale=hud_cache_.stale(ppu,revision,meter,dialogue,sources,palette);
+    if(!stale.changed) return false;
+    const auto& backdrop=level_hud_backdrop();
+    // Another screen's picture is replaced whole; the HUD's own is patched.
+    const bool whole=!hud_cache_.valid();
+    if(whole) {
+        bottom_=backdrop;
+        hud_damage_.add_everything();
+    }
+    const auto restore=[&](const ScreenRect& area) {
+        if(whole||area.empty()) return;
+        for(int y=area.top;y<area.bottom;++y)
+            std::copy_n(backdrop.begin()+y*320+area.left,area.right-area.left,
+                bottom_.begin()+y*320+area.left);
+        hud_damage_.add(area);
     };
-    // Pixel-sampled from the cartridge FONT0, with equal 8-pixel height and
-    // centered in the separate 45/40-pixel label sockets.
-    // Solid sockets and a fixed 5x7 bitmap keep these short captions crisp;
-    // shrinking FONT0 by point sampling loses the B and S strokes.
-    rect(bottom_,320,34,191,47,11,black);
-    rect(bottom_,320,210,191,44,11,black);
-    const auto fixed_label=[&](const char* value,int center_x) {
-        const int length=int(std::strlen(value));
-        int x=center_x-(length*6-1)/2;
-        for(const char* p=value;*p;++p,x+=6) {
-            std::array<unsigned char,7> rows{};
-            switch(*p) {
-            case 'S': rows={15,16,16,14,1,1,30};break;
-            case 'H': rows={17,17,17,31,17,17,17};break;
-            case 'I': rows={31,4,4,4,4,4,31};break;
-            case 'E': rows={31,16,16,30,16,16,31};break;
-            case 'L': rows={16,16,16,16,16,16,31};break;
-            case 'D': rows={30,17,17,17,17,17,30};break;
-            case 'B': rows={30,17,17,30,17,17,30};break;
-            case 'O': rows={14,17,17,17,17,17,14};break;
-            case 'M': rows={17,27,21,21,17,17,17};break;
-            default:break;
-            }
-            for(int row=0;row<7;++row)
-                for(int col=0;col<5;++col)
-                    if(rows[unsigned(row)]&(1U<<(4-col)))
-                        rect(bottom_,320,x+col,193+row,1,1,white);
-        }
+    const auto begin=[&](BottomHudCache::Element element,const ScreenRect& area) {
+        if((stale.elements&BottomHudCache::bit(element))==0U) return false;
+        restore(area);
+        return true;
     };
-    fixed_label("SHIELD",57);
-    fixed_label("BOMBS",231);
-    rect(bottom_,320,251,192,1,9,steel);
-    rect(bottom_,320,252,193,1,7,muted);
-    const auto& oam=game.map().ppu_state().oam;
-    unsigned bomb_slot=0;
-    for(unsigned object=0;object<128;++object) {
-        const auto base=object*4U;
-        const auto tile=unsigned(oam[base+2U])|((oam[base+3U]&1U)<<8U);
-        if(tile==188U && bomb_slot<5U) {
-            // Isolate each tile; sampling the composite status framebuffer
-            // can pick up a neighbouring glyph on the third bomb.
-            bomb_icon_frame_.clear(0U);
-            hud_sprites_.draw_oam_icon(game.map().ppu_state(),object,
-                bomb_icon_frame_);
-            for(int y=0;y<8;++y) for(int x=0;x<8;++x) {
-                const auto index=bomb_icon_frame_.get(x,y);
-                if(index==0U) continue;
-                const auto& c=palette[index];
-                rect(bottom_,320,256+int(bomb_slot)*8+x,193+y,1,1,
-                    rgb(c.r,c.g,c.b));
-            }
-            ++bomb_slot;
+    std::array<BottomHudCache::Colours,BottomHudCache::element_count> used{};
+    BottomHudCache::Colours scratch_colours{};
+    const auto colour=[&palette](BottomHudCache::Colours& colours,unsigned index) {
+        BottomHudCache::use(colours,index);
+        const auto& c=palette[index];
+        return rgb(c.r,c.g,c.b);
+    };
+    const auto& oam=ppu.oam;
+    if(begin(BottomHudCache::lives,lives_area)) {
+        // The readout samples the cartridge's status layer: its OBJ under
+        // the synthetic meters. Draw that layer again only when one of the
+        // two changed since it was last drawn.
+        if(stale.sprites||!(hud_status_meter_==meter)) {
+            hud_status_frame_.clear(0U);
+            hud_sprites_.draw_objects(ppu,hud_status_frame_,
+                std::nullopt,0,true,false,nullptr,false,&meter,true,true);
+            if(meter.enabled) hud_sprites_.draw_meters(meter,hud_status_frame_);
+            hud_status_meter_=meter;
         }
-        if(tile==189U && object+2U<128U) {
+        auto& colours=used[BottomHudCache::lives];
+        for(unsigned object=0;object+2U<128U;++object) {
+            const auto base=object*4U;
+            const auto tile=unsigned(oam[base+2U])|((oam[base+3U]&1U)<<8U);
+            if(tile!=189U) continue;
             // A one-pixel increase across the 24-pixel life readout is the
             // smallest legible step at native bottom-screen resolution.
             for(int dx=0;dx<25;++dx) {
                 const auto part=unsigned(dx*24/25)/8U;
                 const auto sx=unsigned(dx*24/25)%8U;
                 const auto record=(object+part)*4U;
-                copy_cartridge_status(oam[record]+int(sx),oam[record+1U],
-                    1,8,19+dx,14);
+                for(unsigned y=0;y<8U;++y) {
+                    const auto index=hud_status_frame_.get(oam[record]+sx,oam[record+1U]+y);
+                    if(index==0U) continue;
+                    bottom_[std::size_t(14U+y)*320U+unsigned(19+dx)]=colour(colours,index);
+                }
             }
+        }
+    }
+    if(begin(BottomHudCache::bombs,bombs_area)) {
+        auto& colours=used[BottomHudCache::bombs];
+        unsigned bomb_slot=0;
+        for(unsigned object=0;object<128&&bomb_slot<5U;++object) {
+            const auto base=object*4U;
+            const auto tile=unsigned(oam[base+2U])|((oam[base+3U]&1U)<<8U);
+            if(tile!=188U) continue;
+            // Isolate each tile; sampling the composite status framebuffer
+            // can pick up a neighbouring glyph on the third bomb.
+            bomb_icon_frame_.clear(0U);
+            hud_sprites_.draw_oam_icon(ppu,object,bomb_icon_frame_);
+            for(unsigned y=0;y<8U;++y) for(unsigned x=0;x<8U;++x) {
+                const auto index=bomb_icon_frame_.get(x,y);
+                if(index==0U) continue;
+                bottom_[std::size_t(193U+y)*320U+256U+bomb_slot*8U+x]=colour(colours,index);
+            }
+            ++bomb_slot;
         }
     }
     // The original meter state and palette drive the two authored sockets.
-    const auto health_max=meter.extended?std::max(1,int(meter.player_health_max)):36;
-    const auto& red=palette[meter.shield_up?119U:114U];
-    const auto& blue_meter=palette[118U];
-    rect(bottom_,320,27,210,59*std::clamp(int(meter.damage),0,health_max)/health_max,
-        7,rgb(red.r,red.g,red.b));
-    rect(bottom_,320,219,210,59*std::clamp(int(meter.boost),0,36)/36,
-        7,rgb(blue_meter.r,blue_meter.g,blue_meter.b));
-    const auto dialogue=game.dialogue_state();
-    if(dialogue.active) {
-        portrait_frame_.clear(0U);
-        game_text_.draw_face(dialogue.portrait_frame,0,0,portrait_frame_,
-            7U*16U,dialogue.alternate_portraits);
-        for(int sy=0;sy<40;++sy) for(int sx=0;sx<32;++sx) {
-            const auto index=portrait_frame_.get(sx,sy);
-            if(index==0U) continue;
-            const auto& c=palette[index];
-            rect(bottom_,320,128+sx*2,127+sy*2,2,2,rgb(c.r,c.g,c.b));
+    if(begin(BottomHudCache::shield,shield_area))
+        fill_rect(bottom_,320,27,210,sources.shield.width,7,sources.shield.colour);
+    if(begin(BottomHudCache::boost,boost_area))
+        fill_rect(bottom_,320,219,210,sources.boost.width,7,sources.boost.colour);
+    if((stale.elements&BottomHudCache::bit(BottomHudCache::portrait))!=0U) {
+        if(whole) hud_portrait_shown_=-1;
+        const int shown=hud_portrait_shown_;
+        hud_portrait_shown_=sources.portrait_shown
+            ? decoded_portrait(sources.portrait_frame,sources.alternate_portraits):-1;
+        if(hud_portrait_shown_<0) restore(portrait_area);
+        else {
+            const auto& next=hud_portraits_[std::size_t(hud_portrait_shown_)];
+            // A speaking portrait moves a few rows around the mouth. With the
+            // same colours, repaint only the box in which this frame differs
+            // from the one on the picture.
+            unsigned left=0U,top=0U,right=32U,bottom=40U;
+            if(shown>=0&&(stale.recoloured&BottomHudCache::bit(BottomHudCache::portrait))==0U) {
+                const auto& previous=hud_portraits_[std::size_t(shown)];
+                left=32U;right=0U;top=40U;bottom=0U;
+                for(unsigned sy=0;sy<40U;++sy) {
+                    const auto* a=previous.pixels.data()+sy*32U;
+                    const auto* b=next.pixels.data()+sy*32U;
+                    if(std::memcmp(a,b,32U)==0) continue;
+                    top=std::min(top,sy);bottom=sy+1U;
+                    unsigned first=0U,last=31U;
+                    while(a[first]==b[first]) ++first;
+                    while(a[last]==b[last]) --last;
+                    left=std::min(left,first);right=std::max(right,last+1U);
+                }
+            } else restore(portrait_area);
+            if(left<right) {
+                if(!whole) hud_damage_.add(screen_rect(128+int(left)*2,127+int(top)*2,
+                    int(right-left)*2,int(bottom-top)*2));
+                for(unsigned sy=top;sy<bottom;++sy) {
+                    const auto offset=std::size_t(127U+sy*2U)*320U+128U+left*2U;
+                    auto* out=bottom_.data()+offset;
+                    const auto* under=backdrop.data()+offset;
+                    for(unsigned sx=left;sx<right;++sx,out+=2,under+=2) {
+                        const auto index=next.pixels[sy*32U+sx];
+                        if(index!=0U) out[0]=out[1]=out[320]=out[321]=colour(scratch_colours,index);
+                        else {
+                            out[0]=under[0];out[1]=under[1];
+                            out[320]=under[320];out[321]=under[321];
+                        }
+                    }
+                }
+            }
+            // The part reads every colour of the frame, repainted or not.
+            used[BottomHudCache::portrait]=next.colours;
         }
-        if(dialogue.meter_visible) {
-            rect(bottom_,320,134,113,52,8,steel);
-            rect(bottom_,320,136,115,48,4,dark);
-            rect(bottom_,320,136,115,
-                std::min<int>(48,int(dialogue.meter_health)*48/40),4,
-                rgb(205,40,98));
-        }
-        if(dialogue.text_visible&&dialogue.text_address) {
-            hud_text_frame_.clear(0U);
+    }
+    if(begin(BottomHudCache::comms_meter,comms_meter_area)&&sources.comms_meter_shown) {
+        fill_rect(bottom_,320,134,113,52,8,steel);
+        fill_rect(bottom_,320,136,115,48,4,dark);
+        fill_rect(bottom_,320,136,115,sources.comms_meter_fill,4,rgb(205,40,98));
+    }
+    if((stale.elements&BottomHudCache::bit(BottomHudCache::message))!=0U) {
+        // A message covers the lines it has, not the whole frame: restore
+        // what the previous one covered, then note what this one covers.
+        restore(hud_message_area_);
+        hud_message_area_={};
+        if(sources.message_shown) {
+            auto& colours=used[BottomHudCache::message];
             // Draw original ROM glyphs at source resolution, then point
             // sample them at 5:4. This remains real pixel art and allows
-            // two or three lines inside the shorter message frame.
-            game_text_.draw_game_text(dialogue.text_address,0,0,
+            // two or three lines inside the shorter message frame. The
+            // sampler reads only the first 208x36 pixels: empty those.
+            auto& text_pixels=hud_text_frame_.pixels();
+            for(unsigned y=0;y<36U;++y)
+                std::fill_n(text_pixels.begin()+y*320U,208U,std::uint8_t{});
+            game_text_.draw_game_text(sources.message_address,0,0,
                 hud_text_frame_,7U*16U,std::nullopt,208,72U);
-            for(int dy=0;dy<45;++dy) for(int dx=0;dx<260;++dx) {
-                const auto index=hud_text_frame_.get(dx*4/5,dy*4/5);
-                if(index==0U) continue;
-                const auto& c=palette[index];
-                bottom_[std::size_t(48+dy)*320U+unsigned(29+dx)]=rgb(c.r,c.g,c.b);
+            // The box around the glyphs, in source pixels.
+            unsigned left=208U,top=36U,right=0U,bottom=0U;
+            for(unsigned y=0;y<36U;++y) {
+                const auto* row=text_pixels.data()+y*320U;
+                unsigned first=0U;
+                while(first<208U&&row[first]==0U) ++first;
+                if(first==208U) continue;
+                unsigned last=207U;
+                while(row[last]==0U) --last;
+                left=std::min(left,first);right=std::max(right,last+1U);
+                top=std::min(top,y);bottom=y+1U;
+            }
+            if(left<right) {
+                // Every target pixel that samples a source pixel of the box
+                // (dx*4/5 inside it) lies in these bounds.
+                const unsigned dx0=left*5U/4U,dx1=std::min(260U,(right*5U+3U)/4U);
+                const unsigned dy0=top*5U/4U,dy1=std::min(45U,(bottom*5U+3U)/4U);
+                for(unsigned dy=dy0;dy<dy1;++dy) {
+                    const auto* in=text_pixels.data()+std::size_t(dy*4U/5U)*320U;
+                    auto* out=bottom_.data()+std::size_t(48U+dy)*320U+29U;
+                    for(unsigned dx=dx0;dx<dx1;++dx) {
+                        const auto index=in[dx*4U/5U];
+                        if(index!=0U) out[dx]=colour(colours,index);
+                    }
+                }
+                hud_message_area_=screen_rect(29+int(dx0),48+int(dy0),
+                    int(dx1-dx0),int(dy1-dy0));
+                if(!whole) hud_damage_.add(hud_message_area_);
             }
         }
     }
-    if(show_fps_) {
-        char label[24]{};
-        std::snprintf(label,sizeof(label),"%.1f FPS",fps);
-        std::size_t cursor=0;
-        for(const auto run:fps_panel_runs) {
-            const auto color=fps_panel_colors[run>>12U];
-            for(unsigned n=0;n<(run&0x0fffU);++n,++cursor)
-                if((color&255U)!=0U)
-                    bottom_[(8U+cursor/77U)*320U+227U+cursor%77U]=color;
+    if((stale.elements&BottomHudCache::bit(BottomHudCache::fps))!=0U) {
+        // The label's width follows its digits: restore what the previous
+        // one covered, then note what this one covers.
+        restore(hud_fps_area_);
+        hud_fps_area_={};
+        if(sources.fps_shown) {
+            std::size_t cursor=0;
+            for(const auto run:fps_panel_runs) {
+                const auto color=fps_panel_colors[run>>12U];
+                for(unsigned n=0;n<(run&0x0fffU);++n,++cursor)
+                    if((color&255U)!=0U)
+                        bottom_[(8U+cursor/77U)*320U+227U+cursor%77U]=color;
+            }
+            const auto* label=sources.fps_label.data();
+            centered(bottom_,320,label,265,13,1,ice);
+            const int width=text_width(label);
+            hud_fps_area_=bounding_rect(fps_panel_area,
+                screen_rect(265-width/2,13,width,12));
+            if(!whole) hud_damage_.add(hud_fps_area_);
         }
-        centered(bottom_,320,label,265,13,1,ice);
     }
+    hud_cache_.capture(stale.elements,ppu,revision,meter,dialogue,sources,palette,used);
+    return true;
 }
 void OptionsMenu3ds::set_update_notes(const std::string& notes) {
     update_lines_=update_note_lines(notes,
@@ -778,6 +975,7 @@ void OptionsMenu3ds::page_update_notes(int delta) {
 }
 
 void OptionsMenu3ds::draw_options() {
+    hud_cache_.invalidate();
     std::fill(top_.begin(),top_.end(),bg);
     if(page_==MenuPage::rom_selection||page_==MenuPage::rom_mode) {
         std::fill(top_.begin(),top_.end(),black);
@@ -974,6 +1172,7 @@ void OptionsMenu3ds::draw_options() {
 }
 
 void OptionsMenu3ds::draw_overlay(const OverlayMetrics& metrics) {
+    hud_cache_.invalidate();
     std::fill(bottom_.begin(),bottom_.end(),bg);
     auto frame=[&](int x,int y,int w,int h) {
         rect(bottom_,320,x,y,w,h,muted);

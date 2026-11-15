@@ -129,23 +129,30 @@ add_library(snes_spc_core STATIC
     "${STARFOX_SPC_SOURCE}/SPC_Filter.cpp"
 )
 target_include_directories(snes_spc_core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_compile_features(snes_spc_core PUBLIC cxx_std_17)
 target_include_directories(snes_spc_core SYSTEM PUBLIC
     "${STARFOX_SPC_SOURCE}"
 )
 
 # RetroCPU's top-level build includes an unused legacy host layer that does
 # not compile on modern MinGW. Build only the MIT CPU/bus sources we use.
+include(tools/cmake/RetroCpuFastBus.cmake)
 add_library(retro_cpu_core STATIC
-    "${retro_cpu_SOURCE_DIR}/cpu.cc"
+    "${STARFOX_RETRO_CPU_SOURCE}/cpu.cc"
 )
-target_include_directories(retro_cpu_core SYSTEM PUBLIC "${retro_cpu_SOURCE_DIR}")
+target_include_directories(retro_cpu_core SYSTEM PUBLIC "${STARFOX_RETRO_CPU_SOURCE}")
 target_compile_features(retro_cpu_core PUBLIC cxx_std_17)
 add_library(retro_cpu_65816 STATIC
-    "${retro_cpu_SOURCE_DIR}/cpu/65816/cpu_65c816.cc"
+    "${STARFOX_RETRO_CPU_SOURCE}/cpu/65816/cpu_65c816.cc"
 )
-target_include_directories(retro_cpu_65816 SYSTEM PUBLIC "${retro_cpu_SOURCE_DIR}")
+target_include_directories(retro_cpu_65816 SYSTEM PUBLIC "${STARFOX_RETRO_CPU_SOURCE}")
 target_link_libraries(retro_cpu_65816 PUBLIC retro_cpu_core)
 target_compile_features(retro_cpu_65816 PUBLIC cxx_std_17)
+option(STARFOX_VERIFY_FAST_65816
+    "Compare every instruction of the fast 65C816 loop with RetroCPU (slow)" OFF)
+if(STARFOX_VERIFY_FAST_65816)
+    target_compile_definitions(retro_cpu_core PUBLIC STARFOX_VERIFY_FAST_65816)
+endif()
 if(MINGW)
     target_compile_definitions(retro_cpu_core PUBLIC __FUNCSIG__=__PRETTY_FUNCTION__)
     target_compile_definitions(retro_cpu_65816 PUBLIC __FUNCSIG__=__PRETTY_FUNCTION__)
@@ -206,10 +213,13 @@ add_library(starfox_core
     src/simulation/prng.cpp
     src/simulation/strategy_scheduler.cpp
     src/simulation/wdc65816.cpp
+    src/simulation/wdc65816_kernels.cpp
+    src/simulation/wdc65816_lean.cpp
     src/timing/fixed_step.cpp
 )
 
 target_include_directories(starfox_core PUBLIC include)
+target_include_directories(starfox_core PRIVATE src/simulation)
 set(STARFOX_PRIVATE_INCLUDE_DIR "" CACHE PATH
     "Private generated game-data headers, kept outside the public repository")
 if(STARFOX_PRIVATE_INCLUDE_DIR)
@@ -262,7 +272,27 @@ endif()
 
 
 if(STARFOX_BUILD_TESTS)
+    if(STARFOX_PRIVATE_INCLUDE_DIR)
+        include_directories("${STARFOX_PRIVATE_INCLUDE_DIR}")
+    endif()
     enable_testing()
+    add_executable(starfox_dsp_counter_tests tests/dsp_counter_test.cpp)
+    target_link_libraries(starfox_dsp_counter_tests PRIVATE starfox_core)
+    add_test(NAME starfox_dsp_counter_tests COMMAND starfox_dsp_counter_tests)
+    add_executable(starfox_brr_decode_tests tests/brr_decode_test.cpp)
+    target_link_libraries(starfox_brr_decode_tests PRIVATE starfox_core)
+    add_test(NAME starfox_brr_decode_tests COMMAND starfox_brr_decode_tests)
+    add_executable(starfox_source_sprite_material_tests tests/source_sprite_material_tests.cpp)
+    target_link_libraries(starfox_source_sprite_material_tests PRIVATE starfox_core)
+    if(EXISTS "${STARFOX_ROM_FILE}" AND EXISTS "${STARFOX_SYMBOLS_FILE}")
+        add_test(NAME starfox_source_sprite_material_tests COMMAND starfox_source_sprite_material_tests
+            "${STARFOX_ROM_FILE}" "${STARFOX_SYMBOLS_FILE}")
+    endif()
+    add_executable(starfox_mode2_phase_tests tests/mode2_phase_test.cpp
+        platform/3ds/source/bg2_plan.cpp)
+    target_include_directories(starfox_mode2_phase_tests PRIVATE platform/3ds/source)
+    target_link_libraries(starfox_mode2_phase_tests PRIVATE starfox_core)
+    add_test(NAME starfox_mode2_phase_tests COMMAND starfox_mode2_phase_tests)
     add_executable(starfox_bg2_plan_tests
         tests/bg2_plan_test.cpp
         platform/3ds/source/bg2_plan.cpp)
@@ -355,6 +385,20 @@ if(STARFOX_BUILD_TESTS)
         platform/3ds/source/native_engine/scene.cpp)
     target_include_directories(starfox_3ds_frame_tests PRIVATE tests/3ds_host)
     target_link_libraries(starfox_3ds_frame_tests PRIVATE starfox_core)
+    add_executable(starfox_mode1_bg2_atlas_tests tests/mode1_bg2_atlas_test.cpp)
+    target_link_libraries(starfox_mode1_bg2_atlas_tests PRIVATE starfox_core)
+    add_test(NAME starfox_mode1_bg2_atlas_tests COMMAND starfox_mode1_bg2_atlas_tests)
+    add_executable(starfox_mode1_layer_plan_tests tests/mode1_layer_plan_test.cpp
+        platform/3ds/source/native_canvas.cpp)
+    target_link_libraries(starfox_mode1_layer_plan_tests PRIVATE starfox_core)
+    add_test(NAME starfox_mode1_layer_plan_tests COMMAND starfox_mode1_layer_plan_tests)
+    add_executable(starfox_indexed_atlas_updates_tests tests/indexed_atlas_updates_test.cpp)
+    target_link_libraries(starfox_indexed_atlas_updates_tests PRIVATE starfox_core)
+    add_test(NAME starfox_indexed_atlas_updates_tests COMMAND starfox_indexed_atlas_updates_tests)
+    add_executable(starfox_native_mode1_canvas_tests tests/native_mode1_canvas_test.cpp
+        platform/3ds/source/native_canvas.cpp)
+    target_link_libraries(starfox_native_mode1_canvas_tests PRIVATE starfox_core)
+    add_test(NAME starfox_native_mode1_canvas_tests COMMAND starfox_native_mode1_canvas_tests)
     add_executable(starfox_3ds_stereo_tests tests/stereo_3ds_test.cpp
         platform/3ds/source/frame_3ds.cpp platform/3ds/source/native_canvas.cpp
         platform/3ds/source/native_engine/scene.cpp)
@@ -363,6 +407,31 @@ if(STARFOX_BUILD_TESTS)
     add_test(NAME starfox_3ds_stereo_tests COMMAND starfox_3ds_stereo_tests)
     add_executable(starfox_collision_pair_tests tests/collision_pair_test.cpp)
     target_link_libraries(starfox_collision_pair_tests PRIVATE starfox_core)
+    add_executable(starfox_deferred_apu_sync_tests tests/deferred_apu_sync_test.cpp)
+    target_link_libraries(starfox_deferred_apu_sync_tests PRIVATE starfox_core)
+    target_compile_features(starfox_deferred_apu_sync_tests PRIVATE cxx_std_20)
+    add_test(NAME starfox_deferred_apu_sync_tests COMMAND starfox_deferred_apu_sync_tests)
+    add_executable(starfox_audio_early_ports_tests tests/audio_early_ports_test.cpp)
+    target_link_libraries(starfox_audio_early_ports_tests PRIVATE starfox_core)
+    # This replay takes a locally supplied ROM and symbol map; no cartridge
+    # contents or fixture paths are embedded in the public test binary.
+    add_executable(starfox_native_spc_dsp_copy_tests tests/native_spc_dsp_copy_test.cpp)
+    target_link_libraries(starfox_native_spc_dsp_copy_tests PRIVATE snes_spc_core)
+    target_compile_features(starfox_native_spc_dsp_copy_tests PRIVATE cxx_std_20)
+    add_test(NAME starfox_native_spc_dsp_copy_tests COMMAND starfox_native_spc_dsp_copy_tests)
+    add_executable(starfox_spc_port_pipeline_tests tests/spc_port_pipeline_test.cpp)
+    target_link_libraries(starfox_spc_port_pipeline_tests PRIVATE snes_spc_core)
+    target_compile_features(starfox_spc_port_pipeline_tests PRIVATE cxx_std_20)
+    add_test(NAME starfox_spc_port_pipeline_tests COMMAND starfox_spc_port_pipeline_tests)
+    add_executable(starfox_audio_ports_fence_tests tests/audio_ports_fence_test.cpp
+        platform/3ds/source/audio_3ds.cpp)
+    target_include_directories(starfox_audio_ports_fence_tests PRIVATE
+        tests/audio_3ds_host platform/3ds/source)
+    target_compile_features(starfox_audio_ports_fence_tests PRIVATE cxx_std_20)
+    target_compile_definitions(starfox_audio_ports_fence_tests PRIVATE STARWING_AUDIO_REAL_THREADS)
+    target_link_libraries(starfox_audio_ports_fence_tests PRIVATE Threads::Threads)
+    add_test(NAME starfox_audio_ports_fence_tests COMMAND starfox_audio_ports_fence_tests)
+    set_tests_properties(starfox_audio_ports_fence_tests PROPERTIES TIMEOUT 20)
     add_executable(starfox_collision_accelerator_tests tests/collision_accelerator_tests.cpp)
     target_link_libraries(starfox_collision_accelerator_tests PRIVATE starfox_core retro_cpu_65816)
     add_executable(starfox_transfer_accelerator_tests tests/transfer_accelerator_tests.cpp)
@@ -419,6 +488,9 @@ if(STARFOX_BUILD_TESTS)
     add_executable(starfox_state_tests tests/state_tests.cpp)
     add_executable(starfox_title_logo_check tests/title_logo_tests.cpp)
     target_link_libraries(starfox_title_logo_check PRIVATE starfox_core)
+    if(STARFOX_PRIVATE_INCLUDE_DIR)
+        target_include_directories(starfox_title_logo_check PRIVATE "${STARFOX_PRIVATE_INCLUDE_DIR}")
+    endif()
     add_executable(starfox_background_transition_check tools/check_background_transitions.cpp)
     target_link_libraries(starfox_background_transition_check PRIVATE starfox_core)
     target_link_libraries(starfox_state_tests PRIVATE starfox_core)
@@ -435,6 +507,18 @@ if(STARFOX_BUILD_TESTS)
     add_executable(starfox_face_material_tests tests/face_material_tests.cpp)
     add_executable(starfox_packed_bsp_tests tests/packed_bsp_tests.cpp)
     add_executable(starfox_packed_projection_tests tests/packed_projection_tests.cpp)
+    add_executable(starfox_word_renderer_tests tests/word_renderer_tests.cpp)
+    target_link_libraries(starfox_word_renderer_tests PRIVATE starfox_core)
+    add_test(NAME starfox_word_renderer_tests COMMAND starfox_word_renderer_tests)
+    add_executable(starfox_source_line_runs_tests tests/source_line_runs_test.cpp)
+    target_link_libraries(starfox_source_line_runs_tests PRIVATE starfox_core)
+    add_test(NAME starfox_source_line_runs_tests COMMAND starfox_source_line_runs_tests)
+    add_executable(starfox_source_depth_tables_tests tests/source_depth_tables_test.cpp)
+    target_link_libraries(starfox_source_depth_tables_tests PRIVATE starfox_core)
+    add_test(NAME starfox_source_depth_tables_tests COMMAND starfox_source_depth_tables_tests)
+    add_executable(starfox_bg3_atlas_cache_tests tests/bg3_atlas_cache_test.cpp)
+    target_link_libraries(starfox_bg3_atlas_cache_tests PRIVATE starfox_core)
+    add_test(NAME starfox_bg3_atlas_cache_tests COMMAND starfox_bg3_atlas_cache_tests)
     add_executable(starfox_temporal_projection_tests tests/temporal_projection_tests.cpp)
     target_include_directories(starfox_temporal_projection_tests PRIVATE include)
     target_compile_features(starfox_temporal_projection_tests PRIVATE cxx_std_20)
@@ -490,6 +574,9 @@ if(STARFOX_BUILD_TESTS)
 
     add_executable(starfox_ending_tests tests/ending_tests.cpp)
     target_link_libraries(starfox_ending_tests PRIVATE starfox_core)
+    add_test(NAME starfox_ending_painter_order COMMAND starfox_ending_tests --painter-order-only)
+    add_executable(starfox_credits_restart_tests tests/credits_restart_tests.cpp)
+    target_link_libraries(starfox_credits_restart_tests PRIVATE starfox_core)
     add_executable(starfox_intro_pacing_tests tests/intro_pacing_tests.cpp)
     add_executable(starfox_geometry_pacing_tests tests/geometry_pacing_tests.cpp)
     target_link_libraries(starfox_geometry_pacing_tests PRIVATE starfox_core)

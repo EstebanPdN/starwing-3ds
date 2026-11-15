@@ -9,6 +9,22 @@ for TEST in top_viewport presentation_limit frame_pacing launch_selection screen
   "${TEST_BUILD}/${TEST}_test"
   printf 'PASS: %s\n' "${TEST}"
 done
+for TEST in dsp_counter irq_palette; do
+  "${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -I"${ROOT}/include" \
+    "${ROOT}/tests/${TEST}_test.cpp" -o "${TEST_BUILD}/${TEST}_test"
+  "${TEST_BUILD}/${TEST}_test"
+done
+for TEST in bottom_hud_cache native_material; do
+  "${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -I"${ROOT}/include" \
+    -I"${ROOT}/platform/3ds/source" "${ROOT}/tests/${TEST}_test.cpp" \
+    -o "${TEST_BUILD}/${TEST}_test"
+  "${TEST_BUILD}/${TEST}_test"
+done
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -I"${ROOT}/tests/native_pica_host" \
+  -I"${ROOT}/include" -I"${ROOT}/platform/3ds/source" \
+  "${ROOT}/tests/native_pica_test.cpp" "${ROOT}/platform/3ds/source/native_engine/pica.cpp" \
+  "${ROOT}/platform/3ds/source/native_engine/scene.cpp" -o "${TEST_BUILD}/native_pica_test"
+"${TEST_BUILD}/native_pica_test"
 "${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -I"${ROOT}/include" \
   "${ROOT}/tests/saturate_test.cpp" -o "${TEST_BUILD}/saturate_test"
 "${TEST_BUILD}/saturate_test"
@@ -39,6 +55,20 @@ done
   "${ROOT}/tests/audio_suspend_test.cpp" \
   "${ROOT}/platform/3ds/source/audio_3ds.cpp" -o "${TEST_BUILD}/audio_suspend_test"
 "${TEST_BUILD}/audio_suspend_test"
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -pthread -DSTARWING_AUDIO_REAL_THREADS \
+  -I"${ROOT}/tests/audio_3ds_host" -I"${ROOT}/platform/3ds/source" \
+  "${ROOT}/tests/audio_ports_fence_test.cpp" \
+  "${ROOT}/platform/3ds/source/audio_3ds.cpp" -o "${TEST_BUILD}/audio_ports_fence_test"
+"${TEST_BUILD}/audio_ports_fence_test"
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra \
+  -I"${ROOT}/include" -I"${ROOT}/platform/3ds/source" \
+  "${ROOT}/tests/test_mode_3ds_test.cpp" -o "${TEST_BUILD}/test_mode_3ds_test"
+"${TEST_BUILD}/test_mode_3ds_test"
+"${CC:-cc}" -std=c11 -O2 -Wall -Wextra \
+  -c "${ROOT}/platform/3ds/source/c3d_units_3ds.c" -o "${TEST_BUILD}/c3d_units.o"
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra \
+  "${ROOT}/tests/c3d_units_test.cpp" "${TEST_BUILD}/c3d_units.o" -o "${TEST_BUILD}/c3d_units_test"
+"${TEST_BUILD}/c3d_units_test"
 "${CC:-cc}" -std=c11 -O2 -Wall -Wextra -I"${ROOT}/tests/gpu_3ds_host" \
   -c "${ROOT}/platform/3ds/source/gpu_lifetime_3ds.c" -o "${TEST_BUILD}/gpu_lifetime.o"
 "${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -pthread -I"${ROOT}/tests/gpu_3ds_host" \

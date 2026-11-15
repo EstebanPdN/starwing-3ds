@@ -1,7 +1,8 @@
+#include "starfox/simulation/irq_palette.hpp"
 #include "starfox/simulation/wdc65816.hpp"
 #include "wdc65816_entry.hpp"
-#include "wdc65816_collision.hpp"
 #include "wdc65816_transfer.hpp"
+#include "wdc65816_fast.hpp"
 
 #include "starfox/assets/decrunch.hpp"
 #include "starfox/assets/bps.hpp"
@@ -71,11 +72,39 @@ inline void step_cartridge_cpu(WDC65C816& cpu) {
     // an ARM11 CP15 data barrier for every interpreted instruction.
     const auto pending = state.pending_interrupts.load(
         std::memory_order_relaxed);
-    if (cpu.has_breakpoints || pending + state.interrupts >= 3U)
+    if (cpu.has_breakpoints || pending + state.interrupts >= 3U) {
         cpu.SingleStep();
-    else
+    } else if (!cpu.tracing.addrs.empty()) {
         WDC65C816::EmulateInstruction(&cpu);
+    } else {
+        // The same fetch and dispatch as EmulateInstruction, kept in this
+        // loop: with the bus read inline, an opcode fetch from ROM no longer
+        // leaves the caller. Tracing stays on the library path above.
+        std::uint8_t opcode;
+        cpu.ReadU8(state.GetCanonicalAddress(), opcode);
+        cpu.current_instruction_set[opcode](&cpu);
+        ++cpu.num_emulated_instructions;
+    }
 }
+
+#ifdef STARFOX_VERIFY_FAST_65816
+// Verification build: the library's interpreter executes everything, and each
+// instruction the fast loop would have taken is first run there on a copy.
+inline void step_cartridge_cpu(WDC65C816& cpu,
+    const detail::Fast65816Tables& tables, const detail::Fast65816Call& call) {
+    detail::Fast65816Probe probe;
+    const bool probed = detail::probe_fast_65816(cpu, tables, call, probe);
+    const auto cycle_before = cpu.cpu_state.cycle;
+    detail::begin_fast_65816_reference_step();
+    step_cartridge_cpu(cpu);
+    if (probed) detail::check_fast_65816(probe, cpu, cycle_before);
+}
+#else
+inline void step_cartridge_cpu(WDC65C816& cpu,
+    const detail::Fast65816Tables&, const detail::Fast65816Call&) {
+    step_cartridge_cpu(cpu);
+}
+#endif
 
 std::uint32_t find_rom_symbol(
     const assets::SymbolMap* symbols, const char* name) noexcept {
@@ -125,11 +154,18 @@ struct Wdc65816::Impl {
     SystemBus bus{};
     std::vector<Page> pages{static_cast<std::size_t>(kPageCount)};
     std::uint32_t rom_bank_count{};
+    detail::Fast65816Tables fast;
     std::map<std::uint8_t, std::vector<std::uint8_t>> compatible_rom_banks;
     std::vector<std::uint8_t> wram = std::vector<std::uint8_t>(0x20000U);
     std::array<std::uint8_t, 8> controller{};
     std::array<std::uint8_t, 4> apu_ports{0xaaU, 0xbbU, 0U, 0U};
     bool apu_output_connected{};
+    ApuAccessFence apu_access_fence{};
+    void* apu_access_context{};
+    void synchronize_before_apu_access() noexcept {
+        const auto fence=std::exchange(apu_access_fence,nullptr);
+        if(fence)fence(std::exchange(apu_access_context,nullptr));
+    }
     bool apu_upload_active{};
     std::uint8_t apu_upload_clear_sequence{};
     std::array<std::uint8_t, 0x300> superfx_registers{};
@@ -197,6 +233,11 @@ struct Wdc65816::Impl {
     std::uint32_t mcalc_circle{};
     std::uint32_t mcopyface{};
     std::uint32_t mcopyface2{};
+    std::array<std::uint32_t,2> dialogue_count{}, dialogue_animation{};
+    std::array<std::optional<bool>,2> dialogue_speaking{};
+    std::array<IrqPaletteCycle,3> ex_palette_cycles{};
+    TitlePaletteCycle ex_title_cycle{};
+    std::uint32_t ex_color_trip{};
     std::uint32_t mgprintstr{};
     std::uint32_t mkrisdivu3115{};
     std::uint32_t mcalcperc{};
@@ -309,10 +350,6 @@ struct Wdc65816::Impl {
     std::uint32_t font0wid{};
     std::uint32_t font0fon{};
     std::uint32_t font0trn{};
-    std::uint32_t collision_entry{};
-    std::uint32_t collision_filter{};
-    std::uint32_t collision_next{};
-    std::uint32_t collision_axis{};
     std::uint32_t transfer_boot_loop{};
     std::uint32_t transfer_sboot_loop{};
     std::uint32_t transfer_init_screen{};
@@ -398,6 +435,11 @@ struct Wdc65816::Impl {
                 throw std::runtime_error{"invalid saved MSU register"};
             core.pending_interrupts.store(interrupts,std::memory_order_relaxed);
         }
+        // Append-only CPU snapshot extension: Prueba 4 remains readable.
+        if constexpr (std::same_as<Archive,state::Reader>) {
+            if (!archive.empty()) archive(dialogue_speaking);
+        } else archive(dialogue_speaking);
+
     }
 
     bool service_zero_projection(std::uint32_t pc) {
@@ -419,6 +461,7 @@ struct Wdc65816::Impl {
         // edge directly and continue at the macro's common return label.
         const auto vanish = read_wram16(address(projection_vanish_x));
         const auto result = address(projection_result);
+        fast.watch.untracked();
         wram[result] = static_cast<std::uint8_t>(vanish);
         wram[static_cast<std::uint16_t>(result + 1U)] =
             static_cast<std::uint8_t>(vanish >> 8U);
@@ -460,6 +503,7 @@ struct Wdc65816::Impl {
         } else if (low >= 0x4218U && low <= 0x421fU) {
             *data = self.controller[low - 0x4218U];
         } else if ((low & 0xfffcU) == 0x2140U) {
+            self.synchronize_before_apu_access();
             // Model the SPC boot-ROM acknowledgement protocol: it initially
             // exposes $BBAA and then echoes CPU port writes after each byte.
             *data = self.apu_ports[address & 3U];
@@ -517,6 +561,11 @@ struct Wdc65816::Impl {
             self.controller[low - 0x4218U] = *data;
         } else if ((low & 0xfffcU) == 0x2140U) {
             const auto port = static_cast<std::uint8_t>(address & 3U);
+            // Ordinary driver writes only append to the next input packet.
+            // They do not read or alter the DSP's published output latch.
+            // IPL transfers still synchronize before modifying that latch.
+            if(self.apu_upload_active||!self.apu_output_connected
+                ||(port==0U&&*data==0xffU))self.synchronize_before_apu_access();
             if (port == 0U && *data == 0xffU && !self.apu_upload_active) {
                 // sbootapu sends $ff while the driver is idle to restart the
                 // SPC boot ROM before replacing the level's sound bank. The
@@ -555,6 +604,7 @@ struct Wdc65816::Impl {
         } else if (low >= 0x2100U && low < 0x2140U) {
             self.write_ppu(static_cast<std::uint16_t>(low), *data);
         } else if (low == 0x2180U) {
+            self.fast.watch.store(self.wram.data() + (self.wram_port_address & 0x1ffffU), 1U);
             self.wram[self.wram_port_address & 0x1ffffU] = *data;
             self.wram_port_address = (self.wram_port_address + 1U) & 0x1ffffU;
         } else if (low == 0x2181U) {
@@ -664,6 +714,11 @@ struct Wdc65816::Impl {
           mcalc_circle(find_rom_symbol(symbols, "MCALC_CIRCLE")),
           mcopyface(find_rom_symbol(symbols, "MCOPYFACE")),
           mcopyface2(find_rom_symbol(symbols, "MCOPYFACE2")),
+          dialogue_count{find_symbol(symbols,"MSG_COUNT1"),find_symbol(symbols,"MSG_COUNT12")},
+          dialogue_animation{find_symbol(symbols,"MSG_COUNT2"),find_symbol(symbols,"MSG_COUNT22")},
+          ex_palette_cycles(ex_irq_palette_cycles([&](const std::string& n){return find_symbol(symbols,n.c_str());})),
+          ex_title_cycle(ex_title_palette_cycle([&](const std::string& n){return find_symbol(symbols,n.c_str());})),
+          ex_color_trip(find_symbol(symbols,"COLORTRIP")),
           mgprintstr(find_rom_symbol(symbols, "MGPRINTSTR")),
           mkrisdivu3115(find_rom_symbol(symbols, "MKRISDIVU3115")),
           mcalcperc(find_rom_symbol(symbols, "MCALCPERC")),
@@ -759,10 +814,6 @@ struct Wdc65816::Impl {
           font0wid(find_rom_symbol(symbols, "FONT0WID")),
           font0fon(find_rom_symbol(symbols, "FONT0FON")),
           font0trn(find_rom_symbol(symbols, "FONT0TRN")),
-          collision_entry(find_symbol(symbols, "INIT_STRATS_RAM_L")),
-          collision_filter(find_symbol(symbols, "CHKCOLL0") + 13U),
-          collision_next(find_symbol(symbols, "CHKCOLLNXT")),
-          collision_axis(find_symbol(symbols, "NORMALCOL")),
           transfer_boot_loop(find_rom_symbol(symbols, "BOOT_LOOP")),
           transfer_sboot_loop(find_rom_symbol(symbols, "SBOOT_LOOP")),
           transfer_init_screen(find_rom_symbol(symbols, "INITSCREEN_L")),
@@ -905,13 +956,78 @@ struct Wdc65816::Impl {
         cpu.SingleStep();
         cpu.SingleStep();
         write8(kReturnSentinel, 0xeaU); // NOP; execution stops before this byte.
+
+        // Every program address call_impl and run_task act on between two
+        // instructions, besides the return sentinel of each call.
+        using Tables = detail::Fast65816Tables;
+        using Range = Tables::Range;
+        // By detail::LeanKernels::Kind: the pair loop of the collision pass,
+        // the object loop before it (both run from work RAM) and the loop
+        // that clears the rest of the sprite block.
+        const auto ram_routine = [&](const char* name, std::uint32_t offset) {
+            const auto address = find_symbol(symbols, name);
+            return address != 0U && (address >> 16U) == 0x7eU ? address + offset : 0U;
+        };
+        const auto sprite_clear = find_symbol(symbols, "RESET_SPRITES");
+        const std::array<std::uint32_t, detail::LeanKernels::kinds> kernel_entries{
+            ram_routine("CHKCOLLNXT", 0U), ram_routine("INIT_STRATS_RAM_L", 9U),
+            sprite_clear != 0U ? sprite_clear + 14U : 0U};
+        const std::array stop_ranges{
+            // The original crash handlers.
+            Range{0x1fdc9dU, 0x1fdc9dU, Tables::stop_always},
+            Range{0x1fdcaaU, 0x1fdcaaU, Tables::stop_always},
+            Range{0x1fdcb7U, 0x1fdcb7U, Tables::stop_always},
+            Range{0x1fdcc4U, 0x1fdcc4U, Tables::stop_always},
+            Range{0x1fdcd1U, 0x1fdcd1U, Tables::stop_always},
+            Range{projection_zero_loop, projection_zero_loop, Tables::stop_always},
+            Range{transfer_boot_loop, transfer_boot_loop, Tables::stop_transfer},
+            Range{transfer_sboot_loop, transfer_sboot_loop, Tables::stop_transfer},
+            Range{transfer_init_screen, transfer_init_screen + 99U,
+                Tables::stop_transfer},
+            // Heads of the loops wdc65816_kernels.cpp runs natively. The
+            // kernels check the bytes there before they run anything.
+            Range{kernel_entries[0], kernel_entries[0], Tables::stop_kernel},
+            Range{kernel_entries[1], kernel_entries[1], Tables::stop_kernel},
+            Range{kernel_entries[2], kernel_entries[2], Tables::stop_kernel}};
+        fast.build(bus, rom_bank_count, stop_ranges);
+        fast.kernel_entries = kernel_entries;
+        // The second byte watch_transfer_requests() hands to the loop; the
+        // first is the first byte of work RAM.
+        fast.watch.set_trap(planetdma == 0U || vmap2 == 0U || bitmap1 == 0U
+            ? nullptr : wram.data() + static_cast<std::uint16_t>(planetdma));
+        fast.kernels.pairs_filter = find_symbol(symbols, "CHKCOLL0") & 0xffffU;
+        fast.kernels.pairs_axes = find_symbol(symbols, "NORMALCOL") & 0xffffU;
+    }
+
+    // The bytes service_transfer and service_planet_transfer wait for.
+    void watch_transfer_requests(detail::Fast65816Call& call) const noexcept {
+        call.service[0] = wram.data();
+        call.service[1] = planetdma == 0U || vmap2 == 0U || bitmap1 == 0U
+            ? nullptr : wram.data() + static_cast<std::uint16_t>(planetdma);
     }
 
     std::uint8_t read8(std::uint32_t address) const {
         return const_cast<SystemBus&>(bus).ReadByte(address);
     }
 
+    // The library is about to push a return address. The stack of a call
+    // sits in page one, below the watched block; anywhere else is not followed.
+    void note_library_pushes() {
+        const auto stack = cpu.cpu_state.regs.sp.u16;
+        if (stack >= detail::LeanWatch::first && stack < 0x2003U) fast.watch.untracked();
+    }
+
+    // Where an address lands in work RAM, or work RAM's size.
+    static std::size_t wram_offset(std::uint32_t address) noexcept {
+        if (address - 0x7e0000U < 0x20000U) return address - 0x7e0000U;
+        const auto bank = address >> 16U;
+        return (bank < 0x40U || (bank >= 0x80U && bank < 0xc0U)) && (address & 0xffffU) < 0x2000U
+            ? address & 0xffffU : 0x20000U;
+    }
+
     void write8(std::uint32_t address, std::uint8_t value) {
+        if (const auto offset = wram_offset(address); offset < wram.size())
+            fast.watch.store(wram.data() + offset, 1U);
         bus.WriteByte(address, value);
     }
 
@@ -1217,9 +1333,86 @@ struct Wdc65816::Impl {
         if (address >= 0x2100U && address < 0x2140U) {
             write_ppu(address, value);
         } else if (address == 0x2180U) {
+            fast.watch.store(wram.data() + (wram_port_address & 0x1ffffU), 1U);
             wram[wram_port_address & 0x1ffffU] = value;
             wram_port_address = (wram_port_address + 1U) & 0x1ffffU;
         }
+    }
+
+    // Literal VRAM/WRAM streams can copy whole spans. Require a fully mapped,
+    // contiguous source with no I/O, and retain byte order for overlapping RAM.
+    bool dma_memory_stream(std::uint32_t source, std::uint32_t length,
+        std::uint8_t parameters, std::uint16_t ppu_base) {
+        const auto mode = parameters & 7U;
+        const bool vram_stream = (mode == 1U || mode == 5U)
+            && ppu_base == 0x2118U && (ppu_registers[0x15U] & 0x80U);
+        const bool wram_stream = (mode == 0U || mode == 2U || mode == 6U)
+            && ppu_base == 0x2180U;
+        if (!fast.usable || (parameters & 0x98U) != 0U
+            || (!vram_stream && !wram_stream)
+            || source >= 0x1000000U || length > 0x1000000U - source) return false;
+        const auto* page = fast.read[source >> 12U];
+        if (!page) return false;
+        const auto* input = page + (source & 4095U);
+        const auto source_begin = reinterpret_cast<std::uintptr_t>(input);
+        const auto contained = [&](const auto& bytes) {
+            const auto begin = reinterpret_cast<std::uintptr_t>(bytes.data());
+            return length <= bytes.size() && source_begin >= begin
+                && source_begin - begin <= bytes.size() - length;
+        };
+        bool bounded = contained(wram) || contained(superfx_ram)
+            || contained(cartridge_ram) || contained(rom->bytes());
+        if (!bounded) for (const auto& [bank, bytes] : compatible_rom_banks)
+            if (contained(bytes)) { bounded = true; break; }
+        if (!bounded) return false;
+        for (unsigned offset = 0; offset < length;) {
+            const auto address = source + offset;
+            const auto* mapped = fast.read[address >> 12U];
+            if (!mapped || reinterpret_cast<std::uintptr_t>(mapped + (address & 4095U))
+                != source_begin + offset) return false;
+            offset += std::min<std::uint32_t>(length - offset, 4096U - (address & 4095U));
+        }
+        if (wram_stream) {
+            const auto destination = wram_port_address & 0x1ffffU;
+            const auto first = std::min<std::uint32_t>(length, 0x20000U - destination);
+            const auto overlaps = [&](unsigned at, unsigned count) {
+                const auto begin = reinterpret_cast<std::uintptr_t>(wram.data() + at);
+                return source_begin < begin + count && source_begin + length > begin;
+            };
+            if (overlaps(destination, first)
+                || (first < length && overlaps(0U, length - first))) return false;
+            fast.watch.store(wram.data() + destination, first);
+            if (first < length) fast.watch.store(wram.data(), length - first);
+            std::memcpy(wram.data() + destination, input, first);
+            if (first < length) std::memcpy(wram.data(), input + first, length - first);
+            wram_port_address = (destination + length) & 0x1ffffU;
+            bus.open_bus = input[length - 1U];
+            return true;
+        }
+        const auto vram_begin = reinterpret_cast<std::uintptr_t>(ppu.vram.data());
+        if (source_begin < vram_begin + ppu.vram.size()
+            && source_begin + length > vram_begin) return false;
+        unsigned changed = 0;
+        unsigned destination = (unsigned(vram_address) * 2U) & 65535U;
+        for (unsigned offset = 0; offset < length;) {
+            const auto count = std::min<std::uint32_t>(length - offset, 65536U - destination);
+            auto* output = ppu.vram.data() + destination;
+            if (std::memcmp(output, input + offset, count)) {
+                for (unsigned i = 0; i < count; ++i) changed += output[i] != input[offset + i];
+                std::memcpy(output, input + offset, count);
+            }
+            offset += count; destination = 0;
+        }
+        // Preserve each revision increment, including the rare epoch wraps.
+        if (changed <= 0xffffffffU - ppu_memory_revision
+            && changed <= 0xffffffffU - ppu_vram_revision) {
+            ppu_memory_revision += changed; ppu_vram_revision += changed;
+        } else for (unsigned i = 0; i < changed; ++i) mark_ppu_vram_changed();
+        ppu_registers[0x18U] = input[(length - 1U) & ~1U];
+        if (length > 1U) ppu_registers[0x19U] = input[((length - 2U) & ~1U) + 1U];
+        vram_address = static_cast<std::uint16_t>(vram_address + length / 2U);
+        bus.open_bus = input[length - 1U];
+        return true;
     }
 
     void run_dma(std::uint8_t enabled_channels) {
@@ -1244,9 +1437,19 @@ struct Wdc65816::Impl {
                 0x2100U + dma_registers[base + 1U]);
             const auto decrement = (parameters & 0x10U) != 0U;
             const auto fixed = (parameters & 0x08U) != 0U;
+            // Every pattern length is a power of two: ARM11 needs no divide.
+            static_assert([] { for (auto n : pattern_lengths) if (!n || (n & (n - 1U))) return false; return true; }());
+            const auto pattern_mask = pattern_lengths[mode] - 1U;
+            if (dma_memory_stream(source, length, parameters, ppu_base)) {
+                source += length;
+                dma_registers[base + 2U] = static_cast<std::uint8_t>(source);
+                dma_registers[base + 3U] = static_cast<std::uint8_t>(source >> 8U);
+                dma_registers[base + 5U] = dma_registers[base + 6U] = 0U;
+                continue;
+            }
             for (std::uint32_t index = 0; index < length; ++index) {
                 const auto ppu_address = static_cast<std::uint16_t>(ppu_base
-                    + patterns[mode][index % pattern_lengths[mode]]);
+                    + patterns[mode][index & pattern_mask]);
                 if ((parameters & 0x80U) == 0U) {
                     write_bbus(ppu_address, bus.ReadByte(source));
                 }
@@ -2405,13 +2608,18 @@ struct Wdc65816::Impl {
             draw_teammate_meter(true);
             return;
         }
+        if ((mcopyface && address == mcopyface) || (mcopyface2 && address == mcopyface2)) {
+            const unsigned channel=address==mcopyface2?1U:0U;
+            if(dialogue_count[channel] && dialogue_animation[channel])
+                dialogue_speaking[channel]=wram[dialogue_count[channel]&0xffffU]!=0U
+                    && wram[dialogue_animation[channel]&0xffffU]>=5U;
+            return;
+        }
         // These routines update only the source bitmap/window. Their visible
         // output is composed by the PC renderer from the state that the
         // surrounding 65C816 routines maintain, so completion is immediate
         // just as it is for the other translated Super FX entry points.
         if ((mcalc_circle != 0U && address == mcalc_circle)
-            || (mcopyface != 0U && address == mcopyface)
-            || (mcopyface2 != 0U && address == mcopyface2)
             // SHOWVIEW_L's draw-list transform/sort is represented by the
             // host's fixed-point view/cull pass and draw_order_ construction.
             || (mallrotzsort != 0U && address == mallrotzsort)
@@ -2546,6 +2754,8 @@ struct Wdc65816::Impl {
     }
 
     void service_transfer() {
+        // Its stores are spread over buffers the cartridge names at run time.
+        fast.watch.untracked();
         const auto flag = wram[0];
         switch (flag) {
         case 2U: {
@@ -2622,6 +2832,17 @@ struct Wdc65816::Impl {
             wram[0] = 14U;
             break;
         case 14U: {
+            // Restore EX FOXIRQ3's ordered animated palette overlays.
+            apply_ex_irq_palette_cycles(ex_palette_cycles,
+                ex_color_trip && wram[static_cast<std::uint16_t>(ex_color_trip)],
+                [&](auto a){return wram[static_cast<std::uint16_t>(a)];},
+                [&](auto a,auto v){wram[static_cast<std::uint16_t>(a)]=v;},
+                [&](auto table,auto destination){copy_bus_to_cgram(table,destination*2U,32U);});
+            apply_ex_title_palette_cycle(ex_title_cycle,
+                ex_color_trip && wram[static_cast<std::uint16_t>(ex_color_trip)],
+                [&](auto a){return wram[static_cast<std::uint16_t>(a)];},
+                [&](auto a,auto v){wram[static_cast<std::uint16_t>(a)]=v;},
+                [&](auto table,auto destination){copy_bus_to_cgram(table,destination*2U,32U);});
             // FOXIRQ3 submits OAM and swaps the two bitmap screens before
             // releasing FOXYTRANS. Input edges are already written directly
             // by GameSimulation at the same source-frame boundary.
@@ -2806,6 +3027,7 @@ struct Wdc65816::Impl {
         if (request == 0U) return;
         copy_superfx_to_vram(static_cast<std::uint16_t>(bitmap1),
             read_wram16(static_cast<std::uint16_t>(vmap2)), 16U * 16U * 64U);
+        fast.watch.store(wram.data() + static_cast<std::uint16_t>(planetdma), 1U);
         wram[static_cast<std::uint16_t>(planetdma)] = 0U;
     }
 };
@@ -2898,12 +3120,111 @@ bool Wdc65816::read_mapped_wram_block(
     return true;
 }
 
+const std::uint8_t* Wdc65816::mapped_wram(
+    std::uint32_t address, std::size_t length) const noexcept {
+    const auto offset = mapped_wram_offset(address, length);
+    return offset ? impl_->wram.data() + *offset : nullptr;
+}
+
 bool Wdc65816::write_mapped_wram_block(
     std::uint32_t address, std::span<const std::uint8_t> input) noexcept {
     const auto offset = mapped_wram_offset(address, input.size());
     if (!offset) return false;
+    impl_->fast.watch.store(impl_->wram.data() + *offset, input.size());
     std::memcpy(impl_->wram.data() + *offset, input.data(), input.size());
     impl_->bus.open_bus = input.back();
+    return true;
+}
+
+bool Wdc65816::wram_block_watched(std::uint32_t address, std::size_t length) const noexcept {
+    const auto offset = mapped_wram_offset(address, length);
+    return offset && impl_->fast.watch.covers(static_cast<std::uint32_t>(*offset),
+        static_cast<std::uint32_t>(length));
+}
+
+void Wdc65816::revalidate_wram_marks() const noexcept {
+    auto& watch = impl_->fast.watch;
+    if (watch.base != nullptr) watch.all = false;
+}
+
+bool Wdc65816::wram_marks_cover(std::uint32_t address, std::size_t length) const noexcept {
+    const auto offset = mapped_wram_offset(address, length);
+    const auto& watch = impl_->fast.watch;
+    return offset && !watch.all && watch.covers(static_cast<std::uint32_t>(*offset),
+        static_cast<std::uint32_t>(length));
+}
+
+bool Wdc65816::wram_marked(std::uint32_t address, std::size_t length) const noexcept {
+    const auto offset = mapped_wram_offset(address, length);
+    const auto& watch = impl_->fast.watch;
+    return !offset || watch.any(watch.dirty, static_cast<std::uint32_t>(*offset),
+        static_cast<std::uint32_t>(length));
+}
+
+namespace {
+// Calls visit(first, count) for the parts of [offset, offset + length) that a
+// marked chunk reaches, until it returns false.
+template<class Visit>
+bool visit_marked(const detail::LeanWatch& watch, std::uint32_t offset, std::uint32_t length,
+    Visit visit) {
+    using Watch = detail::LeanWatch;
+    for (std::uint32_t chunk = (offset - 1U - Watch::first) >> Watch::chunk_bits;
+         chunk <= (offset + length - 1U - Watch::first) >> Watch::chunk_bits; ++chunk) {
+        if (watch.dirty[chunk] == 0U) continue;
+        const std::uint32_t at = Watch::first + (chunk << Watch::chunk_bits);
+        const std::uint32_t from = std::max(at, offset);
+        const std::uint32_t to = std::min(at + Watch::kept_size, offset + length);
+        if (from < to && !visit(from, to - from)) return false;
+    }
+    return true;
+}
+} // namespace
+
+bool Wdc65816::wram_marked_equal(
+    std::uint32_t address, std::span<const std::uint8_t> reference) const noexcept {
+    const auto offset = mapped_wram_offset(address, reference.size());
+    if (!offset) return false;
+    const auto start = static_cast<std::uint32_t>(*offset);
+    return visit_marked(impl_->fast.watch, start, static_cast<std::uint32_t>(reference.size()),
+        [&](std::uint32_t from, std::uint32_t count) {
+            return std::memcmp(impl_->wram.data() + from, reference.data() + (from - start), count) == 0;
+        });
+}
+
+void Wdc65816::wram_copy_marked(
+    std::uint32_t address, std::span<std::uint8_t> reference) const noexcept {
+    const auto offset = mapped_wram_offset(address, reference.size());
+    if (!offset) return;
+    const auto start = static_cast<std::uint32_t>(*offset);
+    static_cast<void>(visit_marked(impl_->fast.watch, start,
+        static_cast<std::uint32_t>(reference.size()),
+        [&](std::uint32_t from, std::uint32_t count) {
+            std::memcpy(reference.data() + (from - start), impl_->wram.data() + from, count);
+            return true;
+        }));
+}
+
+void Wdc65816::clear_wram_marks() noexcept {
+    auto& watch = impl_->fast.watch;
+    if (watch.base != nullptr && !watch.logging) watch.clear();
+}
+
+bool Wdc65816::open_wram_checkpoint() noexcept {
+    auto& watch = impl_->fast.watch;
+    if (watch.base == nullptr) return false;
+    watch.open_checkpoint();
+    return true;
+}
+
+void Wdc65816::close_wram_checkpoint() noexcept { impl_->fast.watch.close_checkpoint(); }
+
+bool Wdc65816::read_wram_checkpoint(
+    std::uint32_t address, std::span<std::uint8_t> output) const noexcept {
+    const auto offset = mapped_wram_offset(address, output.size());
+    const auto& watch = impl_->fast.watch;
+    if (!offset || (!watch.logging && !watch.imaged) || !watch.covers(
+            static_cast<std::uint32_t>(*offset), static_cast<std::uint32_t>(output.size()))) return false;
+    watch.read_checkpoint(static_cast<std::uint32_t>(*offset), output);
     return true;
 }
 
@@ -2936,6 +3257,10 @@ void Wdc65816::discard_msu_register_writes() noexcept {
 
 void Wdc65816::set_apu_clock_offset(std::uint32_t clocks) noexcept {
     impl_->apu_clock_offset = clocks;
+}
+void Wdc65816::set_apu_access_fence(ApuAccessFence fence,void* context) noexcept {
+    impl_->apu_access_fence=fence;
+    impl_->apu_access_context=context;
 }
 
 void Wdc65816::set_apu_output_ports(
@@ -3040,6 +3365,7 @@ void Wdc65816::submit_superfx_bitmap() {
     // directly into BITMAP1 while translated Super FX model calls are drawn
     // by the host. Submitting that source bitmap preserves those native text
     // pixels without duplicating any model geometry.
+    impl_->fast.watch.store(impl_->wram.data(), 1U);
     impl_->wram[0] = 10U;
     impl_->service_transfer();
     impl_->service_transfer();
@@ -3120,27 +3446,29 @@ std::size_t Wdc65816::call_near(
 
 std::uint8_t Wdc65816::open_bus() const noexcept { return impl_->bus.open_bus; }
 void Wdc65816::restore_open_bus(std::uint8_t value) noexcept { impl_->bus.open_bus = value; }
+std::array<std::uint64_t,4> Wdc65816::native_execution_counts() const noexcept {
+    return impl_->fast.native_counts;
+}
+std::array<std::uint64_t,6> Wdc65816::native_dispatch_counts() const noexcept {
+    return impl_->fast.dispatch_counts;
+}
 
 std::size_t Wdc65816::call(
     std::uint32_t address, Wdc65816Registers& registers,
     std::size_t instruction_limit, bool service_transfer_flag, bool long_return) {
-    // Select once per source call. Ordinary strategies must not test the
-    // collision accelerator after every interpreted instruction.
-    if (long_return && !service_transfer_flag && impl_->collision_entry != 0U
-        && address == impl_->collision_entry) {
-        return call_impl<true, false>(address, registers, instruction_limit,
-            service_transfer_flag, long_return);
-    }
+    // Keep collision code inside the fast loop: handing short blocks back
+    // to the library repeatedly copied the CPU state and broke dispatch
+    // locality. The same instruction implementations now run continuously.
     if (service_transfer_flag && address != 0U
         && (address == impl_->transfer_restart_entry
             || address == impl_->transfer_background_entry))
-        return call_impl<false, true>(address, registers, instruction_limit,
+        return call_impl<true>(address, registers, instruction_limit,
             service_transfer_flag, long_return);
-    return call_impl<false, false>(address, registers, instruction_limit,
+    return call_impl<false>(address, registers, instruction_limit,
         service_transfer_flag, long_return);
 }
 
-template<bool CollisionCall, bool AccelerateTransferCall>
+template<bool AccelerateTransferCall>
 std::size_t Wdc65816::call_impl(
     std::uint32_t address,
     Wdc65816Registers& registers,
@@ -3153,6 +3481,7 @@ std::size_t Wdc65816::call_impl(
     const auto return_sentinel = long_return
         ? kReturnSentinel
         : (address & 0xff0000U) | (kReturnSentinel & 0xffffU);
+    impl_->note_library_pushes();
     if (long_return) {
         cpu.Push(static_cast<std::uint8_t>(return_sentinel >> 16U));
     }
@@ -3163,10 +3492,6 @@ std::size_t Wdc65816::call_impl(
     std::array<std::uint32_t, 32> recent_program_counters{};
     std::vector<std::uint32_t> crash_entry_trace;
     std::uint32_t crash_entry{};
-    constexpr bool collision_call = CollisionCall;
-    detail::CollisionCodeBlock<99U> collision_filter;
-    detail::CollisionCodeBlock<18U> collision_next;
-    detail::CollisionCodeBlock<90U> collision_axis;
     detail::TransferCodeBlock<21U> transfer_boot;
     detail::TransferCodeBlock<32U> transfer_sboot;
     std::array<detail::TransferCodeBlock<6U>, 2U> transfer_word_fill;
@@ -3194,15 +3519,19 @@ std::size_t Wdc65816::call_impl(
             }
         }
     }
-    if (collision_call) {
-        collision_filter.capture(impl_->wram, impl_->collision_filter,
-            detail::CollisionDispatch::filter_matches);
-        collision_next.capture(impl_->wram, impl_->collision_next,
-            detail::CollisionDispatch::next_matches);
-        collision_axis.capture(impl_->wram, impl_->collision_axis,
-            detail::CollisionDispatch::axis_matches);
-    }
-    while (cpu.program_address() != return_sentinel) {
+    using FastTables = detail::Fast65816Tables;
+    detail::Fast65816Call fast_call{return_sentinel,
+        static_cast<std::uint8_t>(FastTables::stop_always | FastTables::stop_return | 2U
+            | (AccelerateTransferCall ? unsigned{FastTables::stop_transfer} : 0U)),
+        recent_program_counters.data(), 0U, 0U, {nullptr, nullptr}};
+    if (service_transfer_flag) impl_->watch_transfer_requests(fast_call);
+    for (;;) {
+        // Ordinary instructions run here; the loop below keeps every address
+        // and request it tests for, and anything this one leaves alone.
+        fast_call.instructions = instructions;
+        fast_call.budget = instruction_limit - instructions;
+        instructions += detail::run_lean_65816(cpu, impl_->fast, fast_call);
+        if (cpu.program_address() == return_sentinel) break;
         // BGS.ASM's waittrans macro waits for the NMI-side transfer engine to
         // clear TRANS_FLAG at WRAM $0000. During a bounded subroutine call no
         // concurrent SNES NMI runs, so acknowledge those requests here when
@@ -3256,12 +3585,14 @@ std::size_t Wdc65816::call_impl(
             if ((pc == transfer_boot.address || pc == transfer_sboot.address)
                 && T::allowed(cpu, false, true, remaining, 13U)) {
                 if (transfer_boot.matches(cpu, pc)) {
+                    impl_->fast.watch.untracked();
                     T::repeat(cpu, record, remaining, 13U, [&](auto& next) {
                         T::upload<false>(cpu, next, transfer_modes);
                     });
                     continue;
                 }
                 if (transfer_sboot.matches(cpu, pc)) {
+                    impl_->fast.watch.untracked();
                     T::repeat(cpu, record, remaining, 13U, [&](auto& next) {
                         T::upload<true>(cpu, next, transfer_modes);
                     });
@@ -3272,7 +3603,8 @@ std::size_t Wdc65816::call_impl(
                 && T::allowed(cpu, true, true, remaining, 3U)
                 && (transfer_word_fill[0].matches(cpu, pc)
                     || transfer_word_fill[1].matches(cpu, pc))) {
-                T::repeat(cpu, record, remaining, 3U, [&](auto& next) {
+                impl_->fast.watch.untracked();
+                    T::repeat(cpu, record, remaining, 3U, [&](auto& next) {
                     T::word_fill(cpu, next);
                 });
                 continue;
@@ -3280,41 +3612,10 @@ std::size_t Wdc65816::call_impl(
             if (pc == transfer_short_fill.address
                 && T::allowed(cpu, true, false, remaining, 6U)
                 && transfer_short_fill.matches(cpu, pc)) {
-                T::repeat(cpu, record, remaining, 6U, [&](auto& next) {
+                impl_->fast.watch.untracked();
+                    T::repeat(cpu, record, remaining, 6U, [&](auto& next) {
                     T::short_index_fill(cpu, next);
                 });
-                continue;
-            }
-        }
-        // These blocks have no interrupts or transfer-side effects. A complete
-        // block fits inside the remaining budget, and debugger/trace callers
-        // retain ordinary one-instruction dispatch. Recheck captured bytes in
-        // case native code or a loaded state changed the copied RAM routines.
-        if (collision_call
-            && (pc == collision_filter.address || pc == collision_next.address
-                || pc == collision_axis.address)
-            && detail::CollisionDispatch::allowed(cpu,
-                pc == collision_next.address, instruction_limit - instructions)) {
-            auto record = [&](std::uint32_t at) {
-                recent_program_counters[instructions
-                    % recent_program_counters.size()] = at;
-                ++instructions;
-            };
-            // Direct-indexed object fields must stay in bank-zero's WRAM
-            // mirror. Invalid native pointers continue through the full bus.
-            const auto other_object = collision_filter.address != 0U
-                ? impl_->read_wram16(collision_filter.bytes[1U]) : 0U;
-            if (cpu.x() < 0x1f00U && other_object < 0x1f00U
-                && collision_filter.matches(impl_->wram, pc)) {
-                detail::CollisionDispatch::filter(cpu, record);
-                continue;
-            }
-            if (collision_next.matches(impl_->wram, pc)) {
-                detail::CollisionDispatch::next(cpu, record);
-                continue;
-            }
-            if (collision_axis.matches(impl_->wram, pc)) {
-                detail::CollisionDispatch::axis(cpu, record);
                 continue;
             }
         }
@@ -3332,7 +3633,26 @@ std::size_t Wdc65816::call_impl(
         }
         recent_program_counters[instructions % recent_program_counters.size()]
             = pc;
-        step_cartridge_cpu(cpu);
+        fast_call.instructions = instructions;
+        fast_call.budget = instruction_limit - instructions;
+        if (const auto ran = detail::run_lean_65816(cpu, impl_->fast, fast_call)) {
+            instructions += ran;
+            continue;
+        }
+        // The service handler can leave another transfer pending. This path
+        // has always executed one instruction before servicing it again.
+        // Keep that boundary: one instruction with the service check
+        // suppressed never permits a second one.
+        auto single_call = fast_call;
+        single_call.budget = 1U;
+        single_call.service[0] = single_call.service[1] = nullptr;
+        if (const auto ran = detail::run_lean_65816(cpu, impl_->fast, single_call)) {
+            instructions += ran;
+            continue;
+        }
+        impl_->fast.watch.untracked();
+        step_cartridge_cpu(cpu, impl_->fast, fast_call);
+        ++impl_->fast.dispatch_counts[2];
         ++instructions;
     }
 
@@ -3357,6 +3677,7 @@ Wdc65816TaskResult Wdc65816::begin_long_task(
     impl_->task_entry = address;
     impl_->task_return_sentinel = kReturnSentinel;
     detail::set_cartridge_call_registers(cpu, registers);
+    impl_->note_library_pushes();
     cpu.Push(static_cast<std::uint8_t>(kReturnSentinel >> 16U));
     cpu.Push(static_cast<std::uint16_t>((kReturnSentinel & 0xffffU) - 1U));
     detail::set_cartridge_program_address(cpu, address);
@@ -3376,6 +3697,7 @@ Wdc65816TaskResult Wdc65816::begin_near_task(
     impl_->task_return_sentinel =
         (address & 0xff0000U) | (kReturnSentinel & 0xffffU);
     detail::set_cartridge_call_registers(cpu, registers);
+    impl_->note_library_pushes();
     cpu.Push(static_cast<std::uint16_t>(
         (impl_->task_return_sentinel & 0xffffU) - 1U));
     detail::set_cartridge_program_address(cpu, address);
@@ -3395,6 +3717,63 @@ Wdc65816TaskResult Wdc65816::resume_task(
         service_transfer_flag);
 }
 
+namespace {
+// Task yield addresses are caller-specific. Copy only their guard pages, clear
+// cached no-stop proofs there, and restore the complete table on scope exit.
+struct NativeTaskStops {
+    detail::Fast65816Tables& tables;
+    std::size_t initial_rows;
+    std::vector<std::pair<std::uint32_t,std::uint8_t>> original;
+    NativeTaskStops(detail::Fast65816Tables& source,
+        std::span<const std::uint32_t> stops,std::uint32_t sentinel)
+        :tables(source),initial_rows(source.stop_pages.size()) {
+        for(auto pc:stops)add(pc);
+        add(sentinel);
+    }
+    void add(std::uint32_t pc) {
+        const auto page=(pc&0xffffffU)>>12U;
+        auto& guard=tables.guarded[page];
+        if(guard==detail::Fast65816Tables::never_runs)return;
+        const auto old=std::find_if(original.begin(),original.end(),
+            [&](const auto& entry){return entry.first==page;});
+        if(old==original.end()) {
+            original.emplace_back(page,guard);
+            if(tables.stop_pages.size()>=detail::Fast65816Tables::never_runs-1U) {
+                guard=detail::Fast65816Tables::never_runs;return;
+            }
+            std::array<std::uint8_t,4096> row{};
+            if(guard)row=tables.stop_pages[guard-1];
+            for(auto& byte:row)byte&=15U;
+            tables.stop_pages.push_back(row);
+            guard=static_cast<std::uint8_t>(tables.stop_pages.size());
+        }
+        tables.stop_pages[guard-1][pc&4095U]|=detail::Fast65816Tables::stop_always;
+        tables.refresh_stop_marks(guard-1U);
+    }
+    std::size_t resume_compiled(WDC65C816& cpu, detail::Fast65816Call call) {
+        const auto pc=cpu.program_address(),page=pc>>12U,offset=pc&4095U;
+        const auto saved=std::find_if(original.begin(),original.end(),
+            [&](const auto& entry){return entry.first==page;});
+        const auto guard=tables.guarded[page];
+        if(saved==original.end()||!guard||guard==detail::Fast65816Tables::never_runs)
+            return 0;
+        if(saved->second&&(tables.stop_pages[saved->second-1][offset]
+                &detail::Fast65816Tables::stop_always))return 0;
+        auto& stop=tables.stop_pages[guard-1][offset];
+        struct Restore { std::uint8_t& byte; std::uint8_t value;
+            ~Restore(){byte=value;} } restore{stop,stop};
+        stop&=static_cast<std::uint8_t>(~detail::Fast65816Tables::stop_always);
+        call.budget=1U;
+        return detail::run_lean_65816(cpu,tables,call);
+    }
+    ~NativeTaskStops() {
+        for(const auto& [page,guard]:original)tables.guarded[page]=guard;
+        tables.stop_pages.resize(initial_rows);
+        tables.stop_marks.resize(initial_rows);
+    }
+};
+}
+
 Wdc65816TaskResult Wdc65816::run_task(
     Wdc65816Registers& registers,
     std::span<const std::uint32_t> stop_addresses,
@@ -3404,6 +3783,12 @@ Wdc65816TaskResult Wdc65816::run_task(
     Wdc65816TaskResult result;
     std::array<std::uint32_t, 32> recent_program_counters{};
     bool executed_instruction = false;
+    NativeTaskStops task_stops(impl_->fast,stop_addresses,impl_->task_return_sentinel);
+    detail::Fast65816Call fast_call{impl_->task_return_sentinel,
+        static_cast<std::uint8_t>(detail::Fast65816Tables::stop_always
+            | detail::Fast65816Tables::stop_return | 2U),
+        recent_program_counters.data(),0U,0U,{nullptr,nullptr}};
+    if(service_transfer_flag)impl_->watch_transfer_requests(fast_call);
     while (true) {
         const auto pc = cpu.program_address();
         if (impl_->service_zero_projection(pc)) continue;
@@ -3460,8 +3845,18 @@ Wdc65816TaskResult Wdc65816::run_task(
         }
         recent_program_counters[
             result.instructions % recent_program_counters.size()] = pc;
-        step_cartridge_cpu(cpu);
-        ++result.instructions;
+        // A resumed yield address must execute its first instruction once.
+        const bool resuming_stop=!executed_instruction
+            &&std::find(stop_addresses.begin(),stop_addresses.end(),pc)!=stop_addresses.end();
+        std::size_t count{};
+        fast_call.instructions=result.instructions;
+        fast_call.budget=instruction_limit-result.instructions;
+        if(resuming_stop)count=task_stops.resume_compiled(cpu,fast_call);
+        else {
+            count=detail::run_lean_65816(cpu,impl_->fast,fast_call);
+        }
+        if(!count){impl_->fast.watch.untracked();step_cartridge_cpu(cpu);++impl_->fast.dispatch_counts[2];count=1U;}
+        result.instructions+=count;
         executed_instruction = true;
     }
 
@@ -3477,3 +3872,7 @@ Wdc65816TaskResult Wdc65816::run_task(
 }
 
 } // namespace starfox::simulation
+
+std::optional<bool> starfox::simulation::Wdc65816::dialogue_speaking(bool alternate) const noexcept {
+    return impl_->dialogue_speaking[alternate?1U:0U];
+}

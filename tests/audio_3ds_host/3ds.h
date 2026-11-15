@@ -8,11 +8,19 @@
 #include <atomic>
 #include <thread>
 #include <utility>
+#ifdef STARWING_AUDIO_REAL_THREADS
+#include <mutex>
+#include <condition_variable>
+#endif
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;
 using Result = std::int32_t;
 using Thread = void*;
+#ifdef STARWING_AUDIO_REAL_THREADS
+struct LightEvent { std::mutex mutex; std::condition_variable changed; bool signaled{}; };
+#else
 struct LightEvent {};
+#endif
 inline constexpr auto U64_MAX = UINT64_MAX;
 inline constexpr u32 CUR_PROCESS_HANDLE = 0xffff8001;
 inline constexpr int RESET_ONESHOT = 0;
@@ -68,16 +76,40 @@ inline Result csndInit() { return 0; }
 inline void csndExit() {}
 inline void* linearAlloc(std::size_t bytes) { return std::malloc(bytes); }
 inline void linearFree(void* pointer) { std::free(pointer); }
+#ifdef STARWING_AUDIO_REAL_THREADS
+inline void LightEvent_Init(LightEvent* event, int) {
+    std::lock_guard lock(event->mutex); event->signaled=false;
+}
+inline void LightEvent_Wait(LightEvent* event) {
+    std::unique_lock lock(event->mutex);
+    event->changed.wait(lock,[&]{return event->signaled;});event->signaled=false;
+}
+inline void LightEvent_Signal(LightEvent* event) {
+    {std::lock_guard lock(event->mutex);event->signaled=true;}
+    event->changed.notify_one();
+}
+#else
 inline void LightEvent_Init(LightEvent*, int) {}
 inline void LightEvent_Wait(LightEvent*) {}
 inline void LightEvent_Signal(LightEvent*) {}
+#endif
 inline Result APT_CheckNew3DS(bool* result) { *result = audio_test::new_3ds; return audio_test::model_result; }
-inline Thread threadCreate(void (*)(void*), void*, std::size_t, int, int core, bool) {
+inline Thread threadCreate(void (*entry)(void*), void* context, std::size_t, int, int core, bool) {
     audio_test::requested_cores.push_back(core);
+#ifdef STARWING_AUDIO_REAL_THREADS
+    return audio_test::thread_succeeds ? static_cast<Thread>(new std::thread(entry,context)) : nullptr;
+#else
+    (void)entry; (void)context;
     return audio_test::thread_succeeds ? static_cast<Thread>(&audio_test::requested_cores) : nullptr;
+#endif
 }
+#ifdef STARWING_AUDIO_REAL_THREADS
+inline Result threadJoin(Thread thread, u64) { static_cast<std::thread*>(thread)->join();return 0; }
+inline void threadFree(Thread thread) { delete static_cast<std::thread*>(thread); }
+#else
 inline Result threadJoin(Thread, u64) { return 0; }
 inline void threadFree(Thread) {}
+#endif
 inline Result APT_GetAppCpuTimeLimit(u32* result) {
     *result = audio_test::honour_quota ? audio_test::cpu_quota : 0U;
     return 0;

@@ -52,6 +52,14 @@ void compose_native_mode1(const render::Framebuffer& source,
     const render::Framebuffer& bg3_high, render::Framebuffer& target,
     bool bg3_high_priority) noexcept;
 
+// The PICA world is drawn separately. Compose only its three background
+// planes, four pixels at a time, without scanning empty world/foreground
+// buffers. Decline metadata-bearing targets so the general path owns them.
+bool compose_native_mode1_background(const render::Framebuffer& source,
+    const render::Framebuffer& bg2, const render::Framebuffer& bg3_low,
+    const render::Framebuffer& bg3_high, render::Framebuffer& target,
+    bool include_bg3_high) noexcept;
+
 // Place only source pixels actually written by foreground passes over the
 // native world. Palette index zero and same-colour writes remain opaque when
 // their coverage bit is set; unwritten centre pixels retain the 3D world.

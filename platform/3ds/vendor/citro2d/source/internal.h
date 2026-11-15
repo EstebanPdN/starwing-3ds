@@ -1,13 +1,7 @@
 #pragma once
 #include <c2d/base.h>
 
-typedef struct
-{
-	float pos[3];
-	float texcoord[2];
-	float ptcoord[2];
-	u32 color;
-} C2Di_Vertex;
+typedef C2D_Vertex C2Di_Vertex;
 
 typedef struct
 {
@@ -59,6 +53,7 @@ enum
 	C2DiF_Mode_ImageSub   = 7   << C2DiF_Mode_Shift,
 	C2DiF_Mode_ImageOMAdd = 8   << C2DiF_Mode_Shift,
 	C2DiF_Mode_ImageOMSub = 9   << C2DiF_Mode_Shift,
+	C2DiF_Mode_Dither   = 10  << C2DiF_Mode_Shift,
 
 	C2DiF_ProcTex_Shift  = 12,
 	C2DiF_ProcTex_Mask   = 0xf << C2DiF_ProcTex_Shift,

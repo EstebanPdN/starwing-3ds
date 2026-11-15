@@ -57,6 +57,15 @@ public:
     void render_logic_tick(std::span<const simulation::ApuPortWrite> writes,
         std::vector<std::int16_t>& output);
 
+    using OutputPortsReady = void (*)(void*, const std::array<std::uint8_t, 4>&) noexcept;
+    // Publish the final CPU-facing ports as soon as the cartridge SPC has
+    // executed the tick. Its remaining DSP catch-up, filter and PCM copy do
+    // not affect these ports and may finish while the game resumes its tick.
+    // The callback runs on the caller's thread, once, and must not access this
+    // object. Split stems publish after both cores finish.
+    void render_logic_tick_with_ports(std::span<const simulation::ApuPortWrite> writes,
+        std::vector<std::int16_t>& output, OutputPortsReady callback, void* context);
+
     // BGM commands (CPU port 0) and effect commands (continuous engine and
     // positional audio on ports 1/2 plus queued effects on port 3) run on
     // independent SPC700 instances. Exposing the most recent stems makes it

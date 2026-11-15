@@ -1,3 +1,4 @@
+#include "starfox/simulation/irq_palette.hpp"
 #pragma once
 
 #include "starfox/assets/rom.hpp"
@@ -220,6 +221,7 @@ struct StageResultsState {
     std::uint16_t total_percentage{};
     std::array<std::uint8_t, 3> teammate_health{};
     bool visible{};
+    bool credit_bonus{};
 };
 
 struct BriefingState {
@@ -666,6 +668,7 @@ private:
         const input::TickInput& input);
     [[nodiscard]] GameTickResult tick_continue_screen(const input::TickInput& input);
     [[nodiscard]] GameTickResult tick_stage_results(const input::TickInput& input);
+    void advance_retail_stage_tally();
     void finish_stage_results();
     void begin_special_exit(bool fade_to_white);
     void update_special_exit();
@@ -861,6 +864,9 @@ private:
     PlanetCampaignAssets first_planet_campaign_{};
     PlanetCampaignAssets second_planet_campaign_{};
     std::uint32_t map2_flag_{};
+    std::array<IrqPaletteCycle,3> ex_irq_cycles_{};
+    TitlePaletteCycle ex_title_cycle_{};
+    std::uint32_t ex_irq_color_trip_{};
     bool starfox_ex_cartridge_{};
     bool second_planet_campaign_active_{};
     std::uint8_t planet_count_{17U};

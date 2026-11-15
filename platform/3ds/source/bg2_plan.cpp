@@ -1,13 +1,85 @@
 #include "bg2_plan.hpp"
+#include "bg2_map_cache.hpp"
+#include "starfox/render/word_math.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
 #include <utility>
+#include <span>
 
 namespace starfox::platform_3ds {
 namespace {
+
+// Evaluate the carry image in raster order. Source-map reads stay adjacent
+// instead of repeatedly walking 240-row columns through the tile decoder.
+// Emit the finished corrections in the original column order afterwards.
+// Kept out of line: the optional New 3DS plan worker does not need this
+// scratch space on its smaller stack.
+__attribute__((noinline)) bool indexed_ground_carry(const Bg2MapSourceCache& map,
+    std::span<const std::int32_t> fitted,std::span<const std::int32_t> scroll_x,
+    unsigned width,unsigned height,int origin_x,int origin_y,unsigned x_mask,unsigned y_mask,
+    std::vector<Bg2Rect>& output,std::size_t capacity) {
+    std::array<std::uint16_t,400U*240U> corrections;
+    std::array<std::uint8_t,400U> last{};
+    std::array<std::uint16_t,400U> previous{};
+    std::array<bool,400U> wrapped{};
+    const auto first=std::min(height,static_cast<unsigned>(std::max(origin_y+144,0)));
+    // Only the nearest nonzero sample above the extension can affect its
+    // carry. Walking every sky row forwards duplicated the normal BG2 pass.
+    // Seed each column by searching backwards, then evaluate the extension.
+    // Each candidate still uses its own HDMA phase and source coordinates.
+    if(first)for(unsigned x=0;x<width;++x) {
+        for(unsigned row=first;row>0;) {
+            const auto y=--row;
+            const auto phase=static_cast<unsigned>(scroll_x[y])&7U;
+            const unsigned sx=(static_cast<unsigned>(int(x)-origin_x)
+                +static_cast<unsigned>(scroll_x[y]))&x_mask;
+            const unsigned sy=static_cast<unsigned>(int(y)-origin_y+fitted[x+phase])&y_mask;
+            if(y==first-1U)previous[x]=static_cast<std::uint16_t>(sy);
+            const auto colour=map.sample(sx,sy);
+            if(colour){last[x]=colour;break;}
+        }
+    }
+    for(unsigned y=first;y<height;++y) {
+        const auto* offsets=fitted.data()+(static_cast<unsigned>(scroll_x[y])&7U);
+        unsigned sx=(static_cast<unsigned>(-origin_x)+static_cast<unsigned>(scroll_x[y]))&x_mask;
+        for(unsigned x=0;x<width;++x,sx=(sx+1U)&x_mask) {
+            const unsigned sy=static_cast<unsigned>(int(y)-origin_y+offsets[x])&y_mask;
+            if(y>=first && y && previous[x]>sy && previous[x]-sy>(y_mask+1U)/2U)wrapped[x]=true;
+            previous[x]=static_cast<std::uint16_t>(sy);
+            if(y>=first && wrapped[x]) corrections[(y-first)*width+x]=last[x];
+            else {
+                const auto colour=map.sample(sx,sy);
+                if(colour)last[x]=colour;
+                if(y>=first)corrections[(y-first)*width+x]=colour||!last[x]?256U:last[x];
+            }
+        }
+    }
+    constexpr auto none=std::numeric_limits<std::size_t>::max();
+    std::array<std::size_t,240U> prior;prior.fill(none);
+    const auto append=[&](unsigned x,unsigned y,unsigned count,unsigned colour) {
+        auto& index=prior[y];
+        if(index!=none) {
+            auto& last=output[index];
+            if(last.x+last.width==x && last.height==count && last.solid_colour==colour) {
+                ++last.width;return true;
+            }
+        }
+        if(output.size()==capacity)return false;
+        index=output.size();Bg2Rect rect{};rect.x=x;rect.y=y;rect.width=1;rect.height=count;
+        rect.solid=true;rect.solid_colour=colour;output.push_back(rect);return true;
+    };
+    for(unsigned x=0;x<width;++x)for(unsigned y=first;y<height;) {
+        const auto colour=corrections[(y-first)*width+x];
+        if(colour==256U){++y;continue;}
+        auto end=y+1U;
+        while(end<height && corrections[(end-first)*width+x]==colour)++end;
+        if(!append(x,y,end-y,colour)){output.clear();return false;}y=end;
+    }
+    return true;
+}
 
 std::uint16_t vram_word(const simulation::SnesPpuState& ppu,
     std::uint32_t address) noexcept {
@@ -23,13 +95,16 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
     std::vector<Bg2Rect>& output, std::size_t capacity,
     std::uint32_t target_width, std::uint32_t target_height,
     std::int32_t origin_x, std::int32_t origin_y,
-    bool cache_rolled_ground_samples, bool use_map_texture, bool map_is_opaque) {
+    bool cache_rolled_ground_samples, bool use_map_texture, bool map_is_opaque,
+    const Bg2MapSourceCache* indexed_map, std::uint64_t ppu_vram_revision) {
     output.clear();
     if (ppu.background_mode != 2U || (ppu.mosaic & 0x02U) != 0U)
         return false;
     if (target_width == 0U || target_height == 0U
         || target_width > 400U || target_height > 240U) return false;
     if ((ppu.main_screen & 0x02U) == 0U) return true;
+    if (indexed_map && (!use_map_texture
+            || !indexed_map->matches(ppu, ppu_vram_revision))) indexed_map=nullptr;
 
     const auto width_tiles = (ppu.bg2_screen_size & 1U) != 0U ? 64U : 32U;
     const auto height_tiles = (ppu.bg2_screen_size & 2U) != 0U ? 64U : 32U;
@@ -38,7 +113,6 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
     const auto tile_shift = ppu.bg2_tile_size_16 ? 4U : 3U;
     const auto x_mask = width_tiles * tile_edge - 1U;
     const auto y_mask = height_tiles * tile_edge - 1U;
-    const auto offset_phase = static_cast<std::uint32_t>(scroll_x) & 7U;
     std::array<std::uint16_t, 32U> vertical_offsets{};
     if (ppu.bg2_vertical_offsets_enabled) {
         for (std::uint32_t index = 0U; index < vertical_offsets.size(); ++index)
@@ -49,15 +123,23 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
     for (std::uint32_t y = 0U; y < target_height; ++y) {
         const auto source_y = static_cast<std::int32_t>(y) - origin_y;
         row_scroll_x_values[y] = ppu.bg2_horizontal_offsets_enabled
-                && source_y >= 0 && source_y < 224
             ? static_cast<std::int32_t>(ppu.bg2_horizontal_offsets[
-                static_cast<std::size_t>(source_y)]) : scroll_x;
+                static_cast<std::size_t>(std::clamp<std::int32_t>(source_y, 0, 223))]) : scroll_x;
         const auto clamped_source_y = std::clamp<std::int32_t>(
             source_y, 0, 223);
         row_scroll_y_values[y] = ppu.bg2_scanline_scroll_enabled
             ? static_cast<std::int32_t>(ppu.bg2_scanline_scroll_y[
                 static_cast<std::size_t>(clamped_source_y)]) : scroll_y;
     }
+
+    // Affine strips are one scanline high. On ordinary backgrounds, a few
+    // HDMA bands are far cheaper as tall rectangles (Prueba 4's 65-state
+    // replay catches this). Reserve affine sampling for dense row changes.
+    unsigned horizontal_changes=0;
+    for(unsigned y=1;y<target_height;++y)
+        horizontal_changes+=row_scroll_x_values[y]!=row_scroll_x_values[y-1];
+    const bool use_affine_rows=use_map_texture
+        && horizontal_changes>=target_height/4U;
 
     // The cartridge provides a per-column roll table only for its original
     // 256-pixel window. Leaving the new side columns on BG2VOFS produces a
@@ -98,20 +180,33 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
         fitted_intercept = (sum_y - fitted_slope * sum_x) / count;
     }
     constexpr auto no_column_offset = std::numeric_limits<std::int32_t>::min();
-    std::array<std::int32_t, 400U> column_offsets{};
-    column_offsets.fill(no_column_offset);
-    if (fitted_samples != 0U) {
-        for (std::uint32_t x = 0U; x < target_width; ++x) {
-            const auto logical_x = static_cast<std::int32_t>(x) - origin_x;
-            const auto visible_column = static_cast<double>(logical_x
-                + (scroll_x & 7)) / 8.0;
-            auto offset = static_cast<std::int32_t>(std::lround(
-                fitted_intercept + fitted_slope * visible_column));
-            offset %= 8192;
-            if (offset < 0) offset += 8192;
-            column_offsets[x] = offset;
+    // All eight fine-scroll phases are overlapping views of one linear
+    // coordinate domain. Compute 407 samples once instead of up to 8*400;
+    // the evaluation order for each coordinate remains exactly the same.
+    std::array<std::int32_t,407U> fitted_columns;
+    if(fitted_samples!=0U) {
+        for(unsigned x=0;x<target_width+7U;++x) {
+            const auto coordinate=static_cast<std::int32_t>(x)-origin_x;
+            auto offset=static_cast<std::int32_t>(render::word::exact_lround(
+                fitted_intercept+fitted_slope*(static_cast<double>(coordinate)/8.0)));
+            offset%=8192;if(offset<0)offset+=8192;
+            fitted_columns[x]=offset;
         }
-    }
+    } else fitted_columns.fill(no_column_offset);
+    const auto columns_for=[&](unsigned phase) -> std::span<const std::int32_t> {
+        return {fitted_columns.data()+(fitted_samples?phase:0U),target_width};
+    };
+    // Adding an integer source row cannot change nearest-texel rounding.
+    // Certify an affine strip once per fine-scroll phase/start column, then
+    // clip it analytically at each row's map wrap. The former per-row scan
+    // repeated the same 400 rounding checks up to 240 times per image.
+    struct AffineCertificate {std::int32_t base;std::uint16_t length;};
+    std::array<AffineCertificate,8U*400U> affine_certificates;
+    // Read only while affine rows are planned; cleared only then.
+    std::array<bool,8U*400U> affine_certified;
+    if (use_affine_rows && fitted_samples != 0U) affine_certified.fill(false);
+    const auto affine_gradient=static_cast<std::int32_t>(
+        render::word::exact_lround(fitted_slope*32.0));
 
     auto& planned = output;
     planned.reserve(std::min<std::size_t>(capacity, 16384U));
@@ -162,8 +257,10 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
     for (std::uint32_t band_top = 0U; band_top < target_height;) {
         const auto band_scroll_x = row_scroll_x_values[band_top];
         const auto band_scroll_y = row_scroll_y_values[band_top];
+        const auto offset_phase = static_cast<std::uint32_t>(band_scroll_x) & 7U;
+        const auto& column_offsets = columns_for(offset_phase);
         auto band_end = band_top + 1U;
-        while (band_end < target_height
+        while (!(use_affine_rows && fitted_samples != 0U) && band_end < target_height
             && (!ppu.bg2_horizontal_offsets_enabled
                 || row_scroll_x_values[band_end] == band_scroll_x)
             // A fitted column supplies Y for every output pixel. Its value
@@ -191,6 +288,48 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
                 && index < vertical_offsets.size()
                 && (vertical_offsets[index] & 0x4000U) != 0U) {
                 column_scroll_y = vertical_offsets[index] & 0x1fffU;
+            }
+            if (use_affine_rows && fitted_samples != 0U) {
+                // One affine texture strip can replace ~50 stepped rectangles.
+                // Certify EVERY nearest sample against the integer column table
+                // first. A 1/64 texel guard keeps it off PICA rounding boundaries;
+                // maps/rolls which cannot satisfy that retain the exact old path.
+                const auto gradient = affine_gradient;
+                const auto logical_y = static_cast<std::int32_t>(band_top) - origin_y;
+                const auto period = static_cast<std::int32_t>((y_mask + 1U) * 256U);
+                const auto certificate_index=offset_phase*400U+x;
+                auto& certificate=affine_certificates[certificate_index];
+                if (!affine_certified[certificate_index]) {
+                    const double fitted=fitted_intercept+fitted_slope
+                        *(static_cast<double>(logical_x+static_cast<std::int32_t>(offset_phase))/8.0);
+                    certificate.base=static_cast<std::int32_t>(
+                        render::word::exact_lround(fitted*256.0))+128+4;
+                    unsigned length=0;
+                    for(;length<target_width-x;++length) {
+                        const auto value=static_cast<std::uint32_t>(certificate.base
+                            +static_cast<std::int32_t>(length)*gradient)&(period-1U);
+                        const auto wanted=static_cast<std::uint32_t>(column_offsets[x+length])&y_mask;
+                        if((value>>8U)!=wanted || (value&255U)<4U || (value&255U)>251U)break;
+                    }
+                    certificate.length=static_cast<std::uint16_t>(length);
+                    affine_certified[certificate_index]=true;
+                }
+                const auto centre=static_cast<std::uint32_t>(certificate.base+logical_y*256)&(period-1U);
+                const auto limit = std::min(target_width - x, x_mask + 1U - source_x);
+                unsigned count=std::min<unsigned>(certificate.length,limit);
+                if(gradient>0)count=std::min<unsigned>(count,(static_cast<unsigned>(period)-1U-centre)
+                    /static_cast<unsigned>(gradient)+1U);
+                else if(gradient<0)count=std::min<unsigned>(count,centre/static_cast<unsigned>(-gradient)+1U);
+                if (count >= 2U) {
+                    if (planned.size() == capacity) { output.clear(); return false; }
+                    Bg2Rect rectangle{};
+                    rectangle.x=x; rectangle.y=band_top; rectangle.width=count; rectangle.height=1;
+                    rectangle.source_x=source_x; rectangle.source_y=centre / 256;
+                    rectangle.map_sample=true; rectangle.affine_map=true;
+                    rectangle.map_y_q9=centre * 2 - 256 - gradient;
+                    rectangle.map_dy_dx_q8=gradient;
+                    planned.push_back(rectangle); x += count; continue;
+                }
             }
             if (use_map_texture) {
                 // An immutable, predecoded tile map already contains tile
@@ -317,6 +456,9 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
     // renderer's per-column carry only at the lower edge, after all ordinary
     // BG2 fragments, so foreground models and sprites retain their priority.
     if (wide_roll && target_height > 192U) {
+        if(indexed_map && fitted_samples && !map_is_opaque)
+            return indexed_ground_carry(*indexed_map,fitted_columns,row_scroll_x_values,
+                target_width,target_height,origin_x,origin_y,x_mask,y_mask,output,capacity);
         // The carry resolver may sample the same map entry and 8x8 character
         // dozens of times while it walks down each rolled column. These
         // caches are scoped to one immutable PPU snapshot, so no revision or
@@ -335,6 +477,7 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
                                        bool* opaque_sample = nullptr) {
             if (uniform_sample) *uniform_sample = false;
             if (opaque_sample) *opaque_sample = false;
+            if (indexed_map) return indexed_map->sample(source_x,source_y,uniform_sample,opaque_sample);
             const auto tile_x = source_x >> tile_shift;
             const auto tile_y = source_y >> tile_shift;
             const auto page = (tile_x >> 5U) + (tile_y >> 5U) * pages_wide;
@@ -448,7 +591,7 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
                 : static_cast<std::uint8_t>(((tile >> 10U) & 7U) * 16U
                     + colour);
         };
-        std::array<std::size_t, 240U> solid_run_by_y{};
+        std::array<std::size_t, 240U> solid_run_by_y;
         solid_run_by_y.fill(std::numeric_limits<std::size_t>::max());
         const auto append_solid = [&](std::uint32_t x, std::uint32_t y,
                                       std::uint32_t height,
@@ -485,29 +628,113 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
         const auto first_ground_y = std::min(target_height,
             static_cast<std::uint32_t>(std::max<std::int32_t>(
                 origin_y + 144, 0)));
+        unsigned ground_phases=0;
+        for(unsigned y=first_ground_y?first_ground_y-1U:0U;y<target_height;++y)
+            ground_phases|=1U<<(static_cast<unsigned>(row_scroll_x_values[y])&7U);
+        unsigned first_ground_phase=0,last_ground_phase=7;
+        while(!(ground_phases&(1U<<first_ground_phase)))++first_ground_phase;
+        while(!(ground_phases&(1U<<last_ground_phase)))--last_ground_phase;
+        const bool small_phase_span=std::abs(fitted_slope)
+            *double(last_ground_phase-first_ground_phase)/8.0+2.0<double(y_mask+1U);
+        bool constant_phase = true;
+        for (unsigned y = 1; y < target_height; ++y)
+            constant_phase &= ((row_scroll_x_values[y] ^ row_scroll_x_values[0]) & 7) == 0;
+        if (use_map_texture && map_is_opaque && !ppu.bg2_tile_size_16
+            && fitted_samples != 0U) {
+            // The case every rolled Corneria-style horizon takes: an opaque
+            // predecoded map and a fitted roll. It is the general column loop
+            // below with what that loop recomputes per column taken out of
+            // it. Under a fitted roll a column's vertical scroll is the
+            // fitted value of its fine-scroll phase at every row, so "one
+            // vertical scroll for the whole column" is simply "one phase for
+            // every row" and needs no scan over the rows.
+            const auto* const fitted = fitted_columns.data();
+            const auto colour_at = [&](std::uint32_t x, std::uint32_t y,
+                                       std::uint32_t source_y) {
+                const auto logical_x = static_cast<std::int32_t>(x) - origin_x;
+                return sample_colour(static_cast<std::uint32_t>(logical_x
+                    + row_scroll_x_values[y]) & x_mask, source_y);
+            };
+            if (constant_phase) {
+                // A viewport is shorter than the map: at most one wrap, and
+                // the row before it holds the carry colour.
+                const auto phase = static_cast<unsigned>(row_scroll_x_values[0]) & 7U;
+                for (std::uint32_t x = 0U; x < target_width; ++x) {
+                    const auto first_source_y = static_cast<std::uint32_t>(
+                        static_cast<std::int32_t>(first_ground_y) - origin_y
+                        + fitted[x + phase]) & y_mask;
+                    const auto wrap_y = first_ground_y
+                        + (first_source_y == 0U && first_ground_y != 0U
+                            ? 0U : y_mask + 1U - first_source_y);
+                    if (wrap_y < target_height
+                        && !append_solid(x, wrap_y, target_height - wrap_y,
+                            colour_at(x, wrap_y - 1U, y_mask))) {
+                        output.clear();
+                        return false;
+                    }
+                }
+                return true;
+            }
+            const auto* const first_phase = fitted + first_ground_phase;
+            const auto* const last_phase = fitted + last_ground_phase;
+            const auto mask = static_cast<std::int32_t>(y_mask);
+            const bool rising = fitted_slope >= 0.0;
+            const auto first_row = static_cast<std::int32_t>(
+                first_ground_y ? first_ground_y - 1U : 0U) - origin_y;
+            const auto last_row = static_cast<std::int32_t>(target_height - 1U) - origin_y;
+            const auto half_map = static_cast<std::int32_t>((y_mask + 1U) / 2U);
+            const auto source_y_at = [&](std::uint32_t x, std::uint32_t y) {
+                return static_cast<std::uint32_t>(static_cast<std::int32_t>(y) - origin_y
+                    + fitted[x + (static_cast<unsigned>(row_scroll_x_values[y]) & 7U)]) & y_mask;
+            };
+            for (std::uint32_t x = 0U; x < target_width; ++x) {
+                // Usually every fine-scroll phase stays within one map page
+                // over the lower extension: certified from the two extreme
+                // phases, or from all of them around a wrap.
+                const auto first = first_phase[x] & mask;
+                const auto last = last_phase[x] & mask;
+                std::int32_t minimum = std::min(first, last), maximum = std::max(first, last);
+                if (!small_phase_span || (rising ? last < first : last > first))
+                    for (unsigned phase = 0; phase < 8; ++phase) if (ground_phases & (1U << phase)) {
+                        const auto offset = fitted[x + phase] & mask;
+                        minimum = std::min(minimum, offset); maximum = std::max(maximum, offset);
+                    }
+                const auto low = static_cast<std::uint32_t>(first_row + minimum);
+                const auto high = static_cast<std::uint32_t>(last_row + maximum);
+                if ((low & ~y_mask) == (high & ~y_mask) && maximum - minimum <= half_map) continue;
+                auto prior = first_ground_y ? source_y_at(x, first_ground_y - 1U) : source_y_at(x, 0U);
+                for (unsigned y = first_ground_y; y < target_height; ++y) {
+                    const auto current = source_y_at(x, y);
+                    if (prior > current && prior - current > (y_mask + 1U) / 2U) {
+                        if (!append_solid(x, y, target_height - y, colour_at(x, y - 1U, prior))) {
+                            output.clear(); return false;
+                        }
+                        break;
+                    }
+                    prior = current;
+                }
+            }
+            return true;
+        }
         for (std::uint32_t x = 0U; x < target_width; ++x) {
             const auto logical_x = static_cast<std::int32_t>(x) - origin_x;
-            const auto column = logical_x >= 0
-                ? (static_cast<std::uint32_t>(logical_x) + offset_phase) / 8U
-                : 33U;
-            const auto index = column == 0U ? 0U : column - 1U;
-            const bool fitted_column =
-                column_offsets[x] != no_column_offset;
-            const bool table_column = index < vertical_offsets.size()
-                && (vertical_offsets[index] & 0x4000U) != 0U;
-            const bool fixed_vertical_scroll = fitted_column || table_column
-                || !ppu.bg2_scanline_scroll_enabled;
-            const auto fixed_scroll_y = fitted_column
-                ? column_offsets[x]
-                : table_column
-                    ? static_cast<std::int32_t>(vertical_offsets[index]
-                        & 0x1fffU)
-                    : scroll_y;
             const auto scroll_at = [&](std::uint32_t y) {
-                if (fitted_column) return column_offsets[x];
-                if (table_column) return fixed_scroll_y;
+                const unsigned phase = static_cast<unsigned>(row_scroll_x_values[y]) & 7U;
+                const auto& offsets = columns_for(phase);
+                if (offsets[x] != no_column_offset) return offsets[x];
+                const unsigned column = logical_x >= 0
+                    ? (static_cast<unsigned>(logical_x) + phase) / 8U : 33U;
+                const unsigned index = column == 0U ? 0U : column - 1U;
+                if (ppu.bg2_vertical_offsets_enabled && index < vertical_offsets.size()
+                    && (vertical_offsets[index] & 0x4000U) != 0U)
+                    return static_cast<std::int32_t>(vertical_offsets[index] & 0x1fffU);
                 return row_scroll_y_values[y];
             };
+            const auto fixed_scroll_y = scroll_at(0U);
+            bool fixed_vertical_scroll = constant_phase || !ppu.bg2_vertical_offsets_enabled;
+            if (fixed_vertical_scroll && ppu.bg2_scanline_scroll_enabled)
+                for (unsigned y = 1; y < target_height; ++y)
+                    if (scroll_at(y) != fixed_scroll_y) { fixed_vertical_scroll = false; break; }
             const auto source_y_at = [&](std::uint32_t y) {
                 return static_cast<std::uint32_t>(
                     static_cast<std::int32_t>(y) - origin_y
@@ -525,8 +752,46 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
                     + row_scroll_x_values[y]) & x_mask;
                 return sample_colour(source_x, source_y, uniform_sample, opaque_sample);
             };
-            if (use_map_texture && map_is_opaque && !ppu.bg2_tile_size_16
-                && fixed_vertical_scroll) {
+            if (use_map_texture && map_is_opaque && !ppu.bg2_tile_size_16) {
+                if (!fixed_vertical_scroll) {
+                    // Usually every possible fine-scroll phase stays within
+                    // one map page over the lower extension. Certify that in
+                    // at most eight lookups instead of rescanning 88 rows per
+                    // column. Fall back to the exact scan around a wrap or
+                    // large discontinuity; no pixel or carry colour changes.
+                    if(fitted_samples!=0U) {
+                        const auto first=columns_for(first_ground_phase)[x]&static_cast<std::int32_t>(y_mask);
+                        const auto last=columns_for(last_ground_phase)[x]&static_cast<std::int32_t>(y_mask);
+                        std::int32_t minimum=std::min(first,last),maximum=std::max(first,last);
+                        // A fitted line is monotone before wrapping. Its two
+                        // extreme phases bound every intermediate sample if
+                        // the segment is shorter than one page and its ends
+                        // retain that ordering. Otherwise inspect all phases.
+                        if(!small_phase_span || (fitted_slope>=0.0?last<first:last>first))
+                            for(unsigned phase=0;phase<8;++phase)if(ground_phases&(1U<<phase)) {
+                                const auto offset=columns_for(phase)[x]&static_cast<std::int32_t>(y_mask);
+                                minimum=std::min(minimum,offset);maximum=std::max(maximum,offset);
+                            }
+                        const auto low=static_cast<std::uint32_t>(
+                            static_cast<std::int32_t>(first_ground_y?first_ground_y-1U:0U)-origin_y+minimum);
+                        const auto high=static_cast<std::uint32_t>(
+                            static_cast<std::int32_t>(target_height-1U)-origin_y+maximum);
+                        if((low&~y_mask)==(high&~y_mask)
+                            && maximum-minimum<=static_cast<std::int32_t>((y_mask+1U)/2U)) continue;
+                    }
+                    auto prior = first_ground_y ? source_y_at(first_ground_y - 1U) : source_y_at(0U);
+                    for (unsigned y = first_ground_y; y < target_height; ++y) {
+                        const auto current = source_y_at(y);
+                        if (prior > current && prior - current > (y_mask + 1U) / 2U) {
+                            if (!append_solid(x, y, target_height - y, colour_at(y - 1U, prior))) {
+                                output.clear(); return false;
+                            }
+                            break;
+                        }
+                        prior = current;
+                    }
+                    continue;
+                }
                 // Every preceding sample is nonzero, even with horizontal
                 // HDMA changes. The last source pixel before the first
                 // lower-edge wrap is therefore the exact carry colour.
@@ -562,10 +827,21 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
                     while (y > 0U) {
                         --y;
                         source_y = (source_y - 1U) & y_mask;
-                        const auto sampled = colour_at(y, source_y);
+                        bool uniform=false;
+                        const auto sampled = colour_at(y, source_y,&uniform);
                         if (sampled != 0U) {
                             last_opaque = sampled;
                             return;
+                        }
+                        // A transparent uniform tile has no preceding carry
+                        // colour in any of its remaining rows. Skip them as
+                        // a block while X HDMA still selects the same column.
+                        if(uniform) {
+                            unsigned skipped=0;
+                            const auto limit=std::min(y,source_y&7U);
+                            while(skipped<limit && row_scroll_x_values[y-skipped-1U]
+                                ==row_scroll_x_values[y])++skipped;
+                            y-=skipped;source_y=(source_y-skipped)&y_mask;
                         }
                     }
                 } else {

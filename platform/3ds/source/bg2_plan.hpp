@@ -7,6 +7,7 @@
 #include <vector>
 
 namespace starfox::platform_3ds {
+class Bg2MapSourceCache;
 
 // One unscaled source-raster fragment of an 8x8 4bpp BG2 character. The
 // source coordinates already include SNES tile flips. A consumer walks them
@@ -23,6 +24,10 @@ struct Bg2Rect {
     std::uint8_t solid_colour{};
     // Coordinates in the predecoded BG2 tile map rather than one character.
     bool map_sample{};
+    // Certified nearest-neighbour affine sampling of a rolled map row.
+    // Q9 Y at the top-left vertex; Q8 change of Y per output X pixel.
+    bool affine_map{};
+    std::int32_t map_y_q9{}, map_dy_dx_q8{};
     friend constexpr bool operator==(const Bg2Rect&, const Bg2Rect&) = default;
 };
 
@@ -43,6 +48,10 @@ struct Bg2Rect {
     bool cache_rolled_ground_samples = true,
     bool use_map_texture = false,
     // True only with a current Bg2MapSourceCache::all_opaque() certificate.
-    bool map_is_opaque = false);
+    bool map_is_opaque = false,
+    const Bg2MapSourceCache* indexed_map = nullptr,
+    // The simulation's VRAM revision for `ppu`, when the caller knows it:
+    // lets the indexed map prove itself current without comparing its bytes.
+    std::uint64_t ppu_vram_revision = 0U);
 
 } // namespace starfox::platform_3ds

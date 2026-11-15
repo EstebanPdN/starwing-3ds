@@ -1,6 +1,6 @@
 # Experimental native rendering and audio
 
-Included in stable 1.1, internal CIA version 87. Product: Starwing 3DS.
+Current local candidate: Prueba 4, internal CIA version 93. Product: Starwing 3DS.
 Physical Old/New 3DS acceptance remains pending. Host measurements below are
 workload-specific and cannot be converted into console FPS.
 
@@ -11,8 +11,9 @@ workload-specific and cannot be converted into console FPS.
 | `hardware_profile.hpp` | Conservative Old/unknown selection; independent New policy |
 | `frame_3ds.cpp` | Existing game geometry, layer extraction, recording, fallback |
 | `native_engine/scene.*` | Portable, bounded compiler to ordered rectangles |
-| `native_engine/pica.*` | GPU resources, compact vertices, palette/checker draw |
-| `native_engine/span.v.pica` | Position and palette/checker coordinates |
+| `native_engine/pica.*` | One ordered Citro2D world batch and GPU resource ownership |
+| `native_engine/material.hpp` | Palette layout, vertex colours and global checker coordinates |
+| `gpu_self_test.*` | Production-path patterns and captured gameplay pixel comparisons |
 | `display_3ds.cpp` | GPU fence, background/world/foreground order and presentation |
 | `tools/cmake/SpcNativeBlocks.cmake` | Guarded native execution of one profiled SPC loop |
 | `tools/cmake/SpcDspOptimizations.cmake` | Exact ARM saturation in the pinned DSP |
@@ -61,11 +62,15 @@ a fresh reference frame. Switching routes invalidates the world cache.
 
 ## Buffers, cache and ownership
 
-Each rectangle emits six 8-byte vertices: signed-short position, two byte
-palette indices and signed-short dither scale. The shader derives UVs. The
-reserved linear VBO is 786,432 bytes, compared with 3,538,944 bytes in the
-first float-vertex prototype: a 2,752,512-byte reduction (77.8%). This comparison
-is against the prototype, not E1, which had no native world VBO.
+Prueba 4 emits four vertices per rectangle into the existing Citro2D buffer.
+It removes the separate 786,432-byte world VBO and custom world shader. The
+unchanged Citro2D vertex shader supplies both texture coordinates: unit 0
+samples the odd palette colour, vertex colour supplies the even colour, and
+unit 1 samples the checker. One TEV interpolation chooses the two colours.
+All rectangles retain painter order in one draw, with no per-material binds.
+Texture unit 2 is never used. The valid checker remains bound to unit 1 during
+normal Citro2D work; no private Citro3D context scanning or mutation remains
+in the executable. Scene targets explicitly set their scissor rectangles.
 
 The world target occupies 512 x 256 x 4 = 524,288 bytes in VRAM. The palette
 and checker are 1,024 and 256 bytes. Scene storage is pre-reserved once.
@@ -78,12 +83,16 @@ linear bytes), two right-eye textures (524,288 VRAM bytes combined), or its
 allocator metadata/alignment and libctru framebuffer storage are separate.
 New 3DS retains these resources. A failed model query selects mono resources.
 
-`Display3ds` acquires a completed GPU frame before writing the persistent VBO.
+`Display3ds` acquires a completed GPU frame before writing shared vertices or palette data.
 The single GPU queue orders background rendering, the offscreen world draw,
-then the final three-layer composite. The custom shader restores alpha blend
-and texture state before returning to Citro2D. Shutdown drains the preceding
-queue through FrameBegin before freeing native resources. VBlank waiting
-alone is not a completion fence.
+then the final three-layer composite. The world mode disables procedural texturing
+and overwrites RGBA (including palette-zero alpha); the following Citro2D mode
+restores its own texture combiner. Alpha blend and depth-write policy are restored
+before the final composite. Frame acquisition and shutdown waits are bounded.
+If completion cannot be established, GPU resources are quarantined instead of
+being freed while hardware might still use them. VBlank is not a completion fence.
+
+See [Prueba 4](PRUEBA-4.md) for the exact validation scope and hardware test files.
 
 ## Audio work and exactness
 

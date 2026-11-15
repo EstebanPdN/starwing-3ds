@@ -9,6 +9,8 @@
 #include "updater_3ds.hpp"
 #include "hardware_profile.hpp"
 #include "presentation_limit.hpp"
+#include "bottom_hud_cache.hpp"
+#include "bottom_damage.hpp"
 
 #include <cstdint>
 #include <string>
@@ -86,8 +88,22 @@ public:
     void draw_title_top(const render::Framebuffer& frame,
         const render::Palette256& palette);
     void draw_title_bottom(std::uint64_t time_ms);
-    void draw_level_hud(const simulation::GameSimulation& game,
+    // Brings bottom_pixels() to the level HUD of this state. The picture
+    // is retained between calls: only the parts whose sources changed are
+    // painted again. Returns whether a source of the picture changed, which
+    // is when the loop presents it again.
+    bool draw_level_hud(const simulation::GameSimulation& game,
         const render::Palette256& palette, float fps);
+    // What draw_level_hud() rewrote in bottom_pixels() since this was last
+    // taken: the pixels a presentation of the level HUD has to refresh.
+    [[nodiscard]] ScreenDamage take_level_hud_damage() noexcept {
+        const auto damage=hud_damage_;
+        hud_damage_.clear();
+        return damage;
+    }
+    // The lower screen showed something else since the level HUD was last
+    // presented: its next presentation refreshes every pixel.
+    void discard_level_hud_presentation() noexcept { hud_damage_.add_everything(); }
     void draw_overlay(const OverlayMetrics& metrics);
     [[nodiscard]] const std::vector<std::uint32_t>& top_pixels() const noexcept { return top_; }
     [[nodiscard]] const std::vector<std::uint32_t>& bottom_pixels() const noexcept { return bottom_; }
@@ -118,6 +134,30 @@ private:
     render::Framebuffer hud_status_frame_{256U,224U};
     render::Framebuffer bomb_icon_frame_{8U,8U};
     render::SpriteRenderer hud_sprites_{};
+    BottomHudCache hud_cache_{};
+    // The meters hud_status_frame_ was drawn with, the area the FPS panel
+    // and its label occupy, and the areas rewritten but not yet presented.
+    simulation::MeterState hud_status_meter_{};
+    ScreenRect hud_fps_area_{};
+    // The FPS label and the value it was formatted from.
+    std::array<char,24> hud_fps_label_{};
+    float hud_fps_value_{};
+    bool hud_fps_formatted_{};
+    // The box around the message's glyphs on the picture.
+    ScreenRect hud_message_area_{};
+    ScreenDamage hud_damage_{};
+    // Decoded communication portraits, and which one is on the picture.
+    struct PortraitFrame {
+        std::array<std::uint8_t,32U*40U> pixels{};
+        BottomHudCache::Colours colours{};
+        std::uint32_t last_use{};
+        std::uint8_t frame{};
+        bool alternate{},valid{};
+    };
+    std::array<PortraitFrame,4U> hud_portraits_{};
+    int hud_portrait_shown_{-1};
+    std::uint32_t hud_portrait_clock_{};
+    [[nodiscard]] int decoded_portrait(std::uint8_t frame,bool alternate);
     std::uint32_t bomb_count_address_{};
     std::uint32_t font_glyphs_{}, font_widths_{}, font_translation_{};
     MenuPage page_{MenuPage::closed};

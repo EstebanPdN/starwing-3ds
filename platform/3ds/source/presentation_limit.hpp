@@ -6,6 +6,36 @@ namespace starfox::platform_3ds {
 constexpr unsigned valid_fps_limit(unsigned value) noexcept {
     return value==30U || value==60U ? value : 0U;
 }
+inline constexpr unsigned fps_profile_policy=2U;
+constexpr unsigned profile_fps_limit(unsigned default_rate,unsigned stored_rate,
+                                      unsigned stored_policy) noexcept {
+    // Previous releases saved 60 as Old 3DS's default. Migrate that legacy
+    // setting once; only a choice saved under this policy overrides defaults.
+    return stored_policy==fps_profile_policy
+        &&(stored_rate==0U || stored_rate==30U || stored_rate==60U)
+        ?stored_rate:default_rate;
+}
+// The simulation already consumes a rational 60 Hz phase clock. Select every
+// second phase at 30 FPS; variable logic work must not shift the limiter's
+// timestamp and accidentally skip a whole extra 16.67 ms display slot.
+class PhasePresentationLimit {
+public:
+    constexpr bool accept(unsigned phases,unsigned requested) noexcept {
+        if (!phases) return false;
+        const unsigned rate=valid_fps_limit(requested);
+        if (!started_ || rate!=rate_) {
+            started_=true;rate_=rate;credit_=0;return true;
+        }
+        if (rate!=30U) return true;
+        credit_+=phases;
+        if (credit_<2U) return false;
+        credit_%=2U;
+        return true;
+    }
+private:
+    unsigned rate_{},credit_{};
+    bool started_{};
+};
 // Limits presentation only; late frames never accumulate a burst of draws.
 class PresentationLimit {
 public:

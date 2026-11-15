@@ -282,14 +282,21 @@ bool draw_split_native(const simulation::SnesPpuState& ppu,
                 8U - (source_x & 7U), remaining);
             const bool flip_x = (tile & 0x4000U) != 0U;
             const auto offset = y * low.width() + x;
-            for (std::uint32_t i = 0U; i < count; ++i) {
-                const auto character_x = (source_x + (repeat_edge ? 0U : i)) & 7U;
+            if (repeat_edge) {
+                const auto character_x = source_x & 7U;
                 const auto colour = row[flip_x ? 7U - character_x : character_x];
                 if (colour != 0U)
-                    destination[offset + i] = static_cast<std::uint8_t>(
-                        palette + colour);
-                else if (repeat_edge && wall != 0U)
-                    low_pixels[offset + i] = wall;
+                    std::memset(destination + offset, palette + colour, count);
+                else if (wall != 0U)
+                    std::memset(low_pixels + offset, wall, count);
+            } else if (offset + 8U <= low.pixels().size()) {
+                merge_character_run(destination + offset, row, source_x & 7U,
+                    count, flip_x, palette);
+            } else for (std::uint32_t i = 0U; i < count; ++i) {
+                const auto character_x = (source_x + i) & 7U;
+                const auto colour = row[flip_x ? 7U - character_x : character_x];
+                if (colour != 0U)
+                    destination[offset + i] = static_cast<std::uint8_t>(palette + colour);
             }
             x += count;
         }
@@ -719,15 +726,22 @@ void BackgroundRenderer::draw_bg2(
     const auto final_x = extend_horizontal ? target.width()
         : std::min(target.width(), static_cast<std::uint32_t>(
             std::max<std::int32_t>(horizontal_origin + 256, 0)));
-    std::vector<std::int32_t> column_scroll_y;
     constexpr auto no_column_scroll = std::numeric_limits<std::int32_t>::min();
-    if (ppu.background_mode == 2U && ppu.bg2_vertical_offsets_enabled) {
+    // HDMA changes the fine-scroll phase on each line. Resolve each of the
+    // eight possible column tables once, instead of using the frame register.
+    std::array<std::vector<std::int32_t>, 8U> columns_by_phase;
+    const auto columns_for = [&](std::int32_t row_scroll_x)
+        -> const std::vector<std::int32_t>& {
+        const auto phase = row_scroll_x & 7;
+        auto& column_scroll_y = columns_by_phase[static_cast<unsigned>(phase)];
+        if (ppu.background_mode != 2U || !ppu.bg2_vertical_offsets_enabled
+            || !column_scroll_y.empty()) return column_scroll_y;
         column_scroll_y.resize(final_x - first_x, no_column_scroll);
         for (auto screen_x = first_x; screen_x < final_x; ++screen_x) {
             const auto logical_x = static_cast<std::int32_t>(screen_x)
                 - horizontal_origin;
             const auto column_coordinate = logical_x
-                + (static_cast<std::int32_t>(scroll_x) & 7);
+                + phase;
             if (expanded_mode2 && fitted_samples != 0U) {
                 // Evaluate at pixel precision across the complete wide view.
                 // That removes both the 8-pixel staircase in the extensions
@@ -747,7 +761,8 @@ void BackgroundRenderer::draw_bg2(
                     visible_column, no_column_scroll);
             }
         }
-    }
+        return column_scroll_y;
+    };
     std::vector<std::uint8_t> last_opaque_ground;
     std::vector<std::int32_t> previous_ground_source_y;
     std::vector<std::uint8_t> ground_source_wrapped;
@@ -803,9 +818,6 @@ void BackgroundRenderer::draw_bg2(
         for (std::uint32_t x = 0U; x < 256U; ++x) {
             sampled_x[x] = mosaic_coordinate(
                 static_cast<std::int32_t>(x), ppu.mosaic, 0x02U);
-            sampled_column_scroll_y[x] = column_scroll_y.empty()
-                ? no_column_scroll
-                : column_scroll_y[static_cast<std::size_t>(sampled_x[x])];
         }
         const bool mosaic = (ppu.mosaic & 0x02U) != 0U;
         for (std::uint32_t screen_y = 0U; screen_y < 224U; ++screen_y) {
@@ -814,6 +826,10 @@ void BackgroundRenderer::draw_bg2(
             const auto row_scroll_x = ppu.bg2_horizontal_offsets_enabled
                 ? static_cast<std::int32_t>(ppu.bg2_horizontal_offsets[sample_y])
                 : scroll_x;
+            const auto& column_scroll_y = columns_for(row_scroll_x);
+            for (unsigned x = 0; x < 256; ++x)
+                sampled_column_scroll_y[x] = column_scroll_y.empty()
+                    ? no_column_scroll : column_scroll_y[static_cast<unsigned>(sampled_x[x])];
             const auto register_scroll_y = ppu.bg2_scanline_scroll_enabled
                 ? static_cast<std::int32_t>(ppu.bg2_scanline_scroll_y[sample_y])
                 : scroll_y;
@@ -945,13 +961,12 @@ void BackgroundRenderer::draw_bg2(
         for (std::uint32_t screen_y = 0U; screen_y < target.height(); ++screen_y) {
             const auto logical_y = static_cast<std::int32_t>(screen_y)
                 - vertical_origin;
+            // Extend the last real HDMA line into the 3DS top/bottom margins.
             const auto row_scroll_x = ppu.bg2_horizontal_offsets_enabled
-                && logical_y >= 0
-                && static_cast<std::size_t>(logical_y)
-                    < ppu.bg2_horizontal_offsets.size()
                 ? static_cast<std::int32_t>(ppu.bg2_horizontal_offsets[
-                    static_cast<std::size_t>(logical_y)])
+                    static_cast<std::size_t>(std::clamp<std::int32_t>(logical_y, 0, 223))])
                 : scroll_x;
+            const auto& column_scroll_y = columns_for(row_scroll_x);
             const auto register_scroll_y = ppu.bg2_scanline_scroll_enabled
                 ? ppu.bg2_scanline_scroll_y[std::clamp<std::int32_t>(logical_y, 0, 223)]
                 : scroll_y;
@@ -1034,13 +1049,12 @@ void BackgroundRenderer::draw_bg2(
             - vertical_origin;
         const auto sample_y = mosaic_coordinate(
             logical_y, ppu.mosaic, 0x02U);
+        // Extend the last real HDMA line into the 3DS top/bottom margins.
         const auto row_scroll_x = ppu.bg2_horizontal_offsets_enabled
-            && sample_y >= 0
-            && static_cast<std::size_t>(sample_y)
-                < ppu.bg2_horizontal_offsets.size()
             ? static_cast<std::int32_t>(ppu.bg2_horizontal_offsets[
-                static_cast<std::size_t>(sample_y)])
+                static_cast<std::size_t>(std::clamp<std::int32_t>(sample_y, 0, 223))])
             : scroll_x;
+        const auto& column_scroll_y = columns_for(row_scroll_x);
         const auto unique_scroll_x = unique_regions.empty() ? 0
             : wrap(row_scroll_x + width_pixels / 2, width_pixels) - width_pixels / 2;
         for (auto screen_x = first_x; screen_x < final_x; ++screen_x) {

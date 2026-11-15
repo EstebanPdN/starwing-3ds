@@ -6,9 +6,10 @@
 namespace starfox::platform_3ds {
 
 // HOME and sleep transitions must not issue CSND commands: commands sent
-// from the APT suspend hook left the HOME Menu frozen on hardware. Silence
-// the looping PCM ring in ordinary context before the transition, and let
-// the first source tick after resuming start a fresh ring.
+// from the APT suspend hook left the HOME Menu frozen on hardware, and so
+// did a stop sent just before the transition. Zero the looping PCM rings
+// instead, with no sound-service call, and let the first source tick after
+// resuming stop the channels and start a fresh ring.
 class AptAudioPause {
 public:
     explicit AptAudioPause(starfox::platform_3ds::Audio3ds& audio) : audio_{&audio} {
@@ -25,8 +26,8 @@ public:
     bool main_loop(Quiesce&& quiesce) {
         if (aptShouldJumpToHome()) {
             trace("w", "home requested");
-            audio_->stop_playback();
-            trace("a", "audio stopped");
+            audio_->silence_for_suspend();
+            trace("a", "rings silenced");
             trace("a", quiesce() ? "gpu idle" : "gpu busy after 500 ms");
             trace("a", "entering transition");
             transition_traced_ = true;

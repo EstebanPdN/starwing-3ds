@@ -185,7 +185,10 @@ void compare_case(unsigned case_number, unsigned map_size,
                     auto& pixel = map_pixels[(r.y + dy) * target_width + r.x + dx];
                     if (r.solid) { pixel = r.solid_colour; continue; }
                     if (!r.map_sample) fail("map rectangle missing source kind", case_number);
-                    const unsigned sx = r.source_x + dx, sy = r.source_y + dy;
+                    const unsigned sx = r.source_x + dx;
+                    const unsigned sy = r.affine_map
+                        ? (r.map_y_q9 + int(dy)*512 + 256 + r.map_dy_dx_q8*(2*int(dx)+1)) / 512
+                        : r.source_y + dy;
                     const unsigned tx = sx / 8U, ty = sy / 8U;
                     const unsigned width_tiles = (map_size & 1U) ? 64U : 32U;
                     const unsigned height_tiles = (map_size & 2U) ? 64U : 32U;

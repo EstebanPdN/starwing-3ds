@@ -222,6 +222,23 @@ void C2D_Prepare(void);
 /** @brief Ensures all 2D objects so far have been drawn */
 void C2D_Flush(void);
 
+// Starwing extension, vertices TL, TR, BL, BR. Texture 0 supplies odd
+// colours, vertex colour the even colour, texture 1 the repeating checker.
+// Both coordinates are supplied by the unchanged Citro2D vertex shader.
+typedef struct { float x, y, u, v, checker_u, checker_v; u32 colour; } C2D_DitherVertex;
+bool C2D_DrawDitherQuad(C3D_Tex* palette, const C2D_DitherVertex vertices[4]);
+// Fill every reserved vertex before another drawing/flush call. NULL
+// leaves the buffers unchanged if the complete ordered batch does not fit.
+typedef struct {
+    float pos[3], texcoord[2], ptcoord[2];
+    u32 color;
+} C2D_Vertex;
+C2D_Vertex* C2D_ReserveDitherQuads(C3D_Tex* palette, size_t count);
+// Ordinary image mode with explicit affine UVs, sharing the standard shader.
+typedef struct { float x, y, u, v; } C2D_TextureVertex;
+bool C2D_DrawTextureQuad(C3D_Tex* texture, const C2D_TextureVertex vertices[4]);
+size_t C2D_QuadsAvailable(void);
+
 /** @brief Configures the size of the 2D scene.
  *  @param[in] width The width of the scene, in pixels.
  *  @param[in] height The height of the scene, in pixels.

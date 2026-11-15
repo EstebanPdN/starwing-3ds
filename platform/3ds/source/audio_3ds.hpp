@@ -52,6 +52,9 @@ public:
         std::uint32_t spc_compute_last_ms{};
         std::uint32_t spc_compute_max_ms{};
         std::uint32_t spc_compute_packets{};
+        std::uint32_t spc_compute_last_us{}, worker_queue_last_us{}, wait_last_us{};
+        std::uint32_t ports_ready_last_us{}, ports_wait_last_us{};
+        std::uint64_t wait_total_us{};
     };
 
     Audio3ds();
@@ -65,8 +68,22 @@ public:
     // SPC state is retained; the next completed logic tick starts a fresh
     // playback ring after the operation returns.
     void stop_playback() noexcept;
-    // HOME/sleep must not wait for CSND's command-completion flag. Silence
-    // the retained rings first, submit the stop, then yield to the applet.
+    // Before a HOME or POWER transition: make the looping rings silent
+    // without issuing a CSND command. libctru's completion wait is an
+    // unbounded spin, so nothing here may depend on the sound service
+    // answering. The channels keep running; stop_playback() after resuming
+    // lets the next tick start a fresh ring.
+    void silence_for_suspend() noexcept;
+    // After returning from HOME or sleep, and when closing: submit the stop
+    // without spinning on CSND's completion flag. An application woken only
+    // to close must not depend on the sound service answering.
+    void stop_playback_no_wait() noexcept { stop_playback(false); }
+    // The system can drop the core-1 share while the application is
+    // suspended. Ask again for the share that was granted at open().
+    void reapply_cpu_quota() noexcept;
+    // Power-on SPC for a freshly constructed simulation (the test tour
+    // enters levels directly). The caller then primes the boot upload.
+    void restart_spc();
     [[nodiscard]] bool ready() const noexcept { return ready_; }
     [[nodiscard]] bool async_enabled() const noexcept {
         return worker_ != nullptr;
@@ -98,17 +115,29 @@ public:
     [[nodiscard]] bool update(
         std::span<const simulation::ApuPortWrite> writes);
 
-    // Copy the completed 20 Hz tick's port writes. New 3DS normally computes
-    // audio on core 2 while video is built; Old 3DS uses core 1 when APT
-    // grants at least a 50% slice, else the application core. A failed
-    // New 3DS core-2 launch may use core 1. finish_update() must be called
-    // before reading output_ports() or starting the next game tick.
+    // Hand over the port writes of one 50 ms packet. New 3DS normally
+    // computes audio on core 2 while video is built; Old 3DS uses core 1 when
+    // APT grants at least a 50% slice, else the application core. A failed
+    // New 3DS core-2 launch may use core 1.
+    //
+    // Packets queue: the worker renders them one after another and the caller
+    // never waits for one to start the next (it used to, a whole packet's
+    // worth each time two fell due together). A game tick that reads the
+    // sound ports calls wait_for_output_ports(), which waits for the ports of
+    // the last packet handed over, exactly the values an eager wait gave.
+    // collect() publishes the PCM of the packets that are done;
+    // finish_update() waits for all of them first and must precede direct
+    // access to the SPC state.
     void begin_update(std::span<const simulation::ApuPortWrite> writes);
     [[nodiscard]] bool finish_update();
-    [[nodiscard]] bool pending() const noexcept { return pending_; }
+    // Never waits. True when it published at least one packet's ports and PCM.
+    bool collect();
+    [[nodiscard]] std::array<std::uint8_t,4> wait_for_output_ports();
+    [[nodiscard]] bool pending() const noexcept { return submitted_ != collected_; }
+    // Everything handed over is rendered and waits to be collected.
     [[nodiscard]] bool update_ready() const noexcept {
-        return pending_ && (worker_ == nullptr
-            || worker_completed_.load(std::memory_order_acquire));
+        return pending() && (worker_ == nullptr
+            || completed_.load(std::memory_order_acquire) == submitted_);
     }
 
     // Append one 50 ms packet to the continuously playing CSND ring.
@@ -117,7 +146,10 @@ public:
         master_volume_ = percent > 100U ? 100U : percent;
     }
 
+    // The newest ports this thread has taken from the worker; the SPC's own
+    // when nothing is outstanding.
     [[nodiscard]] std::array<std::uint8_t, 4> output_ports() const noexcept {
+        if (pending() && worker_ != nullptr) return known_ports_;
         return spc_.output_ports();
     }
     [[nodiscard]] audio::Spc700Audio& spc() noexcept { return spc_; }
@@ -126,6 +158,9 @@ public:
 private:
     void stop_playback(bool wait_done) noexcept;
     static void worker_main(void* argument);
+    static void publish_ports(void*, const std::array<std::uint8_t,4>&) noexcept;
+    // Publishes one rendered packet; `count` is its number plus one.
+    bool collect_packet(std::uint32_t count);
     // Try each APT slice in order and start the worker on core 1.
     void start_core1_worker(std::initializer_list<u32> quotas);
     static constexpr int left_channel_ = 8;
@@ -160,15 +195,29 @@ private:
     Thread worker_{};
     LightEvent work_requested_{};
     LightEvent work_completed_{};
+    LightEvent ports_completed_{};
     std::atomic<bool> stop_worker_{false};
-    std::atomic<bool> worker_completed_{false};
-    // Written by the worker before its completion event, then read by the
-    // application thread only after that event has been acquired.
-    std::uint32_t worker_compute_ms_{};
-    std::vector<simulation::ApuPortWrite> pending_writes_;
-    std::vector<std::int16_t> rendered_;
-    std::exception_ptr worker_failure_{};
-    bool pending_{};
+    // One 50 ms packet on its way through the worker. The application thread
+    // fills `writes` before it counts the packet in submitted_; the worker
+    // owns the rest until completed_ (ports and ports_failure until ported_)
+    // passes the packet.
+    struct Packet {
+        std::vector<simulation::ApuPortWrite> writes;
+        std::vector<std::int16_t> pcm;
+        std::array<std::uint8_t,4> ports{};
+        std::exception_ptr failure{}, ports_failure{};
+        std::uint64_t request_us{};
+        std::uint32_t compute_ms{}, compute_us{}, queue_us{}, ports_ready_us{};
+    };
+    static constexpr std::uint32_t queue_slots_ = 4U;
+    std::array<Packet, queue_slots_> packets_;
+    // Packets handed over (application thread), packets whose ports are out
+    // and packets fully rendered (worker), packets published (application
+    // thread). Each counts from zero and never goes back.
+    std::uint32_t submitted_{};
+    std::atomic<std::uint32_t> handed_{0}, ported_{0}, completed_{0};
+    std::uint32_t collected_{};
+    std::array<std::uint8_t,4> known_ports_{};
     bool quota_changed_{};
     AsyncDiagnostics diagnostics_{};
 };

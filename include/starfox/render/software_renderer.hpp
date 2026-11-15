@@ -226,6 +226,8 @@ struct Vec3 { double x{}, y{}, z{}; };
 struct ScreenPoint { double x{}, y{}, z{}; bool visible{}; };
 struct TexturePoint { double u{}, v{}; };
 struct RasterVertex { ScreenPoint point{}; TexturePoint texture{}; };
+struct WordProjection { std::int16_t x{}, y{}, z{}; };
+struct RasterPoint { std::int32_t x{}, y{}; };
 struct Scratch {
     std::vector<Vec3> transformed_vertices;
     std::vector<ScreenPoint> projected;
@@ -235,6 +237,11 @@ struct Scratch {
     std::vector<ScreenPoint> polygon;
     std::vector<RasterVertex> raster_polygon;
     std::vector<RasterVertex> clipping_scratch;
+    // Exact cartridge geometry can stay integral through projection,
+    // visibility and solid-face clipping. Retain these allocations too.
+    std::vector<WordProjection> word_projected;
+    std::vector<RasterPoint> word_polygon;
+    std::vector<RasterPoint> word_clipping_scratch;
 };
 } // namespace software_renderer_detail
 

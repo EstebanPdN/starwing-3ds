@@ -63,6 +63,16 @@ public:
     void end_write_coverage() noexcept {track_coverage_=false;}
     [[nodiscard]] bool tracks_write_coverage() const noexcept {return track_coverage_;}
     [[nodiscard]] std::span<const std::uint8_t> write_coverage() const noexcept {return coverage_;}
+    // For an in-place patch of a retained frame, which rewrites the coverage
+    // of a rectangle together with its pixels after tracking has ended.
+    [[nodiscard]] std::span<std::uint8_t> mutable_write_coverage() noexcept {return coverage_;}
+    void mark_written_mask4(std::size_t first, std::uint32_t lanes) noexcept {
+        if (!track_coverage_) return;
+        std::uint32_t previous;
+        std::memcpy(&previous, coverage_.data()+first, 4U);
+        previous |= lanes; // Each byte is exactly zero or one.
+        std::memcpy(coverage_.data()+first, &previous, 4U);
+    }
     // Bulk pixel writers must mark coverage too; colour comparison cannot
     // detect black or same-colour foreground writes.
     void mark_written(std::size_t first,std::size_t count=1) noexcept {

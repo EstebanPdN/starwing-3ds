@@ -1,5 +1,7 @@
 #include "diagnostics_3ds.hpp"
 #include "diagnostic_sha256.hpp"
+#include "diagnostic_png.hpp"
+#include "memory_3ds.hpp"
 
 #include <algorithm>
 #include <array>
@@ -87,26 +89,6 @@ bool write_bytes(const std::string& path, const void* bytes, std::size_t size) {
 bool write_text(const std::string& path, const char* text) {
     return text && write_bytes(path, text, std::strlen(text));
 }
-void be32(std::vector<u8>& out, u32 n) {
-    out.push_back(static_cast<u8>(n >> 24)); out.push_back(static_cast<u8>(n >> 16));
-    out.push_back(static_cast<u8>(n >> 8)); out.push_back(static_cast<u8>(n));
-}
-u32 crc32(const u8* data, std::size_t size) {
-    u32 c = 0xffffffffU;
-    for (std::size_t i = 0; i < size; ++i) {
-        c ^= data[i];
-        for (unsigned j = 0; j < 8; ++j)
-            c = (c >> 1) ^ ((c & 1U) ? 0xedb88320U : 0U);
-    }
-    return ~c;
-}
-void png_chunk(std::vector<u8>& png, const char type[4], const std::vector<u8>& body) {
-    be32(png, static_cast<u32>(body.size()));
-    const auto start = png.size();
-    png.insert(png.end(), type, type + 4);
-    png.insert(png.end(), body.begin(), body.end());
-    be32(png, crc32(png.data() + start, png.size() - start));
-}
 unsigned pixel_bytes(GSPGPU_FramebufferFormat format) {
     switch (format) {
     case GSP_RGBA8_OES: return 4;
@@ -154,37 +136,18 @@ bool screenshot(const std::string& path, gfxScreen_t screen, unsigned expected_w
     const auto fb_size = static_cast<u32>(physical_width) * physical_height * bpp;
     if (!cpu_snapshot && R_FAILED(GSPGPU_InvalidateDataCache(fb, fb_size)))
         return false;
-    std::vector<u8> raw;
-    raw.reserve((expected_width * 3U + 1U) * 240U);
-    for (unsigned y = 0; y < 240; ++y) {
-        raw.push_back(0); // PNG filter None.
-        for (unsigned x = 0; x < expected_width; ++x) {
-            const std::size_t offset = (x * 240U + (239U - y)) * bpp;
-            u8 rgb[3]; decode_pixel(fb + offset, format, rgb);
-            raw.insert(raw.end(), rgb, rgb + 3);
-        }
-    }
-    // A zlib stream with uncompressed DEFLATE blocks avoids a new library.
-    std::vector<u8> z{0x78, 0x01};
-    u32 a = 1, b = 0;
-    for (std::size_t off = 0; off < raw.size();) {
-        const u16 n = static_cast<u16>(std::min<std::size_t>(65535, raw.size() - off));
-        z.push_back(off + n == raw.size() ? 1 : 0);
-        z.push_back(static_cast<u8>(n)); z.push_back(static_cast<u8>(n >> 8));
-        z.push_back(static_cast<u8>(~n)); z.push_back(static_cast<u8>((~n) >> 8));
-        for (unsigned i = 0; i < n; ++i) {
-            const u8 c = raw[off + i]; z.push_back(c);
-            a = (a + c) % 65521U; b = (b + a) % 65521U;
-        }
-        off += n;
-    }
-    be32(z, (b << 16) | a);
-    std::vector<u8> png{137,80,78,71,13,10,26,10};
-    std::vector<u8> ihdr; be32(ihdr, expected_width); be32(ihdr, 240);
-    ihdr.insert(ihdr.end(), {8, 2, 0, 0, 0});
-    png_chunk(png, "IHDR", ihdr); png_chunk(png, "IDAT", z);
-    png_chunk(png, "IEND", {});
-    return write_bytes(path, png.data(), png.size());
+    FILE* file=std::fopen(path.c_str(),"wb");
+    if (!file) return false;
+    const bool written=write_diagnostic_rgb_png(file,expected_width,240U,
+        [&](unsigned x,unsigned y) {
+            std::array<u8,3> rgb{};
+            const std::size_t offset=(x*240U+(239U-y))*bpp;
+            decode_pixel(fb+offset,format,rgb.data());
+            return rgb;
+        });
+    const bool closed=std::fclose(file)==0;
+    if (!written || !closed) std::remove(path.c_str());
+    return written && closed;
 }
 bool log_tail(const std::string& output, const char* input) {
     if (!input) return write_text(output, "No log path supplied.\n");
@@ -417,6 +380,7 @@ Diagnostics3ds::Result Diagnostics3ds::capture(DiagnosticKind3ds kind,
         + ",\"complete\":false}\n";
     if (!write_text(dir + "/manifest.json", manifest.c_str()))
         return {false, dir, "Manifest write failed"};
+    allocation_failure.operation = "diagnostic_files_and_screenshots";
     const bool common = write_text(dir + "/runtime.json", report.runtime_json)
         && write_text(dir + "/performance.csv", report.performance_csv)
         && write_text(dir + "/presentation.csv", report.presentation_csv)

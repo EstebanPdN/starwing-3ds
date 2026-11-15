@@ -7,6 +7,17 @@
 #include <stdexcept>
 
 namespace starfox::platform_3ds {
+namespace {
+std::uint64_t audio_now_us() {
+#ifdef __3DS__
+    const auto ticks=svcGetSystemTick();
+    return (ticks/SYSCLOCK_ARM11)*1000000ULL+(ticks%SYSCLOCK_ARM11)*1000000ULL/SYSCLOCK_ARM11;
+#else
+    return osGetTime()*1000ULL;
+#endif
+}
+}
+
 
 static_assert(CSND_TIMER(audio::Spc700Audio::sample_rate) == 2094U);
 
@@ -39,6 +50,7 @@ bool Audio3ds::open() {
 
     LightEvent_Init(&work_requested_, RESET_ONESHOT);
     LightEvent_Init(&work_completed_, RESET_ONESHOT);
+    LightEvent_Init(&ports_completed_, RESET_ONESHOT);
     stop_worker_.store(false, std::memory_order_release);
 
     diagnostics_.model_result = APT_CheckNew3DS(&diagnostics_.new_3ds);
@@ -101,10 +113,8 @@ void Audio3ds::start_core1_worker(std::initializer_list<u32> quotas) {
 
 void Audio3ds::close() noexcept {
     if (worker_ != nullptr) {
-        if (pending_) {
+        while (completed_.load(std::memory_order_acquire) != submitted_)
             LightEvent_Wait(&work_completed_);
-            pending_ = false;
-        }
         stop_worker_.store(true, std::memory_order_release);
         LightEvent_Signal(&work_requested_);
         static_cast<void>(threadJoin(worker_, U64_MAX));
@@ -120,11 +130,18 @@ void Audio3ds::close() noexcept {
         }
     }
     spc_.set_parallel_stems_enabled(false);
-    pending_ = false;
-    pending_writes_.clear();
-    rendered_.clear();
-    worker_failure_ = nullptr;
-    stop_playback();
+    submitted_ = collected_ = 0U;
+    handed_.store(0U, std::memory_order_relaxed);
+    ported_.store(0U, std::memory_order_relaxed);
+    completed_.store(0U, std::memory_order_relaxed);
+    for (auto& packet : packets_) {
+        packet.writes.clear();
+        packet.pcm.clear();
+        packet.failure = packet.ports_failure = nullptr;
+    }
+    // Closing from HOME wakes the application without the foreground it had;
+    // submit the stop and let csndExit release the channels.
+    stop_playback(false);
     if (ready_) {
         csndExit();
     }
@@ -153,6 +170,26 @@ void Audio3ds::stop_playback(bool wait_done) noexcept {
     output_frames_total_ = 0;
 }
 
+void Audio3ds::silence_for_suspend() noexcept {
+    if (!playing_) return;
+    std::memset(pcm_left_, 0, ring_bytes_);
+    std::memset(pcm_right_, 0, ring_bytes_);
+    static_cast<void>(GSPGPU_FlushDataCache(pcm_left_, ring_bytes_));
+    static_cast<void>(GSPGPU_FlushDataCache(pcm_right_, ring_bytes_));
+}
+
+void Audio3ds::reapply_cpu_quota() noexcept {
+    if (quota_changed_)
+        static_cast<void>(APT_SetAppCpuTimeLimit(diagnostics_.effective_quota));
+}
+
+void Audio3ds::restart_spc() {
+    if (pending()) static_cast<void>(finish_update());
+    stop_playback();
+    spc_ = audio::Spc700Audio{spc_.routing()};
+    spc_.set_parallel_stems_enabled(false);
+}
+
 std::size_t Audio3ds::prime_upload_sequence(
     std::span<const simulation::ApuPortWrite> writes) {
     return spc_.prime_upload_sequence(writes);
@@ -167,63 +204,140 @@ void Audio3ds::worker_main(void* argument) {
     auto& self = *static_cast<Audio3ds*>(argument);
     for (;;) {
         LightEvent_Wait(&self.work_requested_);
-        std::atomic_thread_fence(std::memory_order_acquire);
         if (self.stop_worker_.load(std::memory_order_acquire)) break;
-        try {
-            const auto begin_ms = osGetTime();
-            self.spc_.render_logic_tick(self.pending_writes_, self.rendered_);
-            const auto elapsed_ms = static_cast<std::uint32_t>(
-                osGetTime() - begin_ms);
-            self.worker_compute_ms_ = elapsed_ms;
-        } catch (...) {
-            self.worker_failure_ = std::current_exception();
+        // Every packet handed over so far, in order, without going back to
+        // sleep in between.
+        for (;;) {
+            const auto number = self.completed_.load(std::memory_order_relaxed);
+            if (number == self.handed_.load(std::memory_order_acquire)) break;
+            auto& packet = self.packets_[number % queue_slots_];
+            try {
+                const auto begin_us = audio_now_us();
+                packet.queue_us = static_cast<std::uint32_t>(begin_us - packet.request_us);
+                const auto begin_ms = osGetTime();
+                self.spc_.render_logic_tick_with_ports(packet.writes, packet.pcm,
+                    &Audio3ds::publish_ports, &self);
+                packet.compute_ms = static_cast<std::uint32_t>(osGetTime() - begin_ms);
+                packet.compute_us = static_cast<std::uint32_t>(audio_now_us() - begin_us);
+            } catch (...) {
+                packet.failure = std::current_exception();
+            }
+            if (self.ported_.load(std::memory_order_relaxed) == number) {
+                // It failed before its ports were out.
+                packet.ports_failure = packet.failure;
+                publish_ports(&self, {});
+            }
+            self.completed_.store(number + 1U, std::memory_order_release);
+            LightEvent_Signal(&self.work_completed_);
         }
-        std::atomic_thread_fence(std::memory_order_release);
-        self.worker_completed_.store(true, std::memory_order_release);
-        LightEvent_Signal(&self.work_completed_);
     }
+}
+
+// Called by the SPC, on the worker, once per packet.
+void Audio3ds::publish_ports(void* context,
+    const std::array<std::uint8_t,4>& ports) noexcept {
+    auto& self = *static_cast<Audio3ds*>(context);
+    const auto number = self.ported_.load(std::memory_order_relaxed);
+    if (number != self.completed_.load(std::memory_order_relaxed)) return;   // already out
+    auto& packet = self.packets_[number % queue_slots_];
+    packet.ports = ports;
+    packet.ports_ready_us = static_cast<std::uint32_t>(audio_now_us() - packet.request_us);
+    self.ported_.store(number + 1U, std::memory_order_release);
+    LightEvent_Signal(&self.ports_completed_);
+}
+
+std::array<std::uint8_t,4> Audio3ds::wait_for_output_ports() {
+    if (!pending() || worker_ == nullptr) return spc_.output_ports();
+    const auto begin = audio_now_us();
+    // The ports of the last packet handed over: the ones a tick would have
+    // found had it waited for every packet before starting the next.
+    while (ported_.load(std::memory_order_acquire) != submitted_)
+        LightEvent_Wait(&ports_completed_);
+    const auto& packet = packets_[(submitted_ - 1U) % queue_slots_];
+    diagnostics_.ports_ready_last_us = packet.ports_ready_us;
+    diagnostics_.ports_wait_last_us = static_cast<std::uint32_t>(audio_now_us()-begin);
+    diagnostics_.wait_total_us += diagnostics_.ports_wait_last_us;
+    if (packet.ports_failure) std::rethrow_exception(packet.ports_failure);
+    known_ports_ = packet.ports;
+    return known_ports_;
 }
 
 void Audio3ds::begin_update(
     std::span<const simulation::ApuPortWrite> writes) {
-    if (pending_) throw std::logic_error{"SPC update already pending"};
     if (worker_ == nullptr) {
+        // No worker: one packet at a time, rendered here.
+        if (pending()) static_cast<void>(finish_update());
+        auto& packet = packets_[submitted_ % queue_slots_];
+        packet.request_us = audio_now_us();
+        packet.failure = packet.ports_failure = nullptr;
         const auto begin_ms = osGetTime();
-        spc_.render_logic_tick(writes, rendered_);
-        const auto elapsed_ms = static_cast<std::uint32_t>(
-            osGetTime() - begin_ms);
-        diagnostics_.spc_compute_last_ms = elapsed_ms;
-        diagnostics_.spc_compute_total_ms += elapsed_ms;
-        diagnostics_.spc_compute_max_ms = std::max(
-            diagnostics_.spc_compute_max_ms, elapsed_ms);
-        ++diagnostics_.spc_compute_packets;
-    } else {
-        pending_writes_.assign(writes.begin(), writes.end());
-        worker_failure_ = nullptr;
-        worker_completed_.store(false, std::memory_order_relaxed);
-        std::atomic_thread_fence(std::memory_order_release);
-        LightEvent_Signal(&work_requested_);
+        spc_.render_logic_tick(writes, packet.pcm);
+        packet.compute_ms = static_cast<std::uint32_t>(osGetTime() - begin_ms);
+        packet.compute_us = static_cast<std::uint32_t>(audio_now_us() - packet.request_us);
+        packet.queue_us = 0U;
+        packet.ports = spc_.output_ports();
+        ++submitted_;
+        handed_.store(submitted_, std::memory_order_relaxed);
+        ported_.store(submitted_, std::memory_order_relaxed);
+        completed_.store(submitted_, std::memory_order_relaxed);
+        return;
     }
-    pending_ = true;
+    if (!pending()) known_ports_ = spc_.output_ports();
+    // Every slot taken: the oldest packet has to come out first.
+    while (submitted_ - collected_ == queue_slots_) {
+        const auto wait_begin = audio_now_us();
+        while (completed_.load(std::memory_order_acquire) == collected_)
+            LightEvent_Wait(&work_completed_);
+        diagnostics_.wait_last_us = static_cast<std::uint32_t>(audio_now_us() - wait_begin);
+        diagnostics_.wait_total_us += diagnostics_.wait_last_us;
+        static_cast<void>(collect_packet(collected_ + 1U));
+    }
+    auto& packet = packets_[submitted_ % queue_slots_];
+    packet.writes.assign(writes.begin(), writes.end());
+    packet.failure = packet.ports_failure = nullptr;
+    packet.request_us = audio_now_us();
+    ++submitted_;
+    handed_.store(submitted_, std::memory_order_release);
+    LightEvent_Signal(&work_requested_);
+}
+
+bool Audio3ds::collect_packet(std::uint32_t count) {
+    auto& packet = packets_[(count - 1U) % queue_slots_];
+    collected_ = count;
+    known_ports_ = packet.ports;
+    if (!packet.failure) {
+        diagnostics_.spc_compute_last_ms = packet.compute_ms;
+        diagnostics_.spc_compute_last_us = packet.compute_us;
+        diagnostics_.worker_queue_last_us = packet.queue_us;
+        diagnostics_.ports_ready_last_us = packet.ports_ready_us;
+        diagnostics_.spc_compute_total_ms += packet.compute_ms;
+        diagnostics_.spc_compute_max_ms = std::max(
+            diagnostics_.spc_compute_max_ms, packet.compute_ms);
+        ++diagnostics_.spc_compute_packets;
+    }
+    if (packet.failure) std::rethrow_exception(packet.failure);
+    return push_samples(packet.pcm);
+}
+
+bool Audio3ds::collect() {
+    bool any = false;
+    while (collected_ != completed_.load(std::memory_order_acquire)) {
+        static_cast<void>(collect_packet(collected_ + 1U));
+        any = true;
+    }
+    return any;
 }
 
 bool Audio3ds::finish_update() {
-    if (!pending_) return false;
-    if (worker_ != nullptr) {
+    if (!pending()) return false;
+    const auto wait_begin=audio_now_us();
+    while (completed_.load(std::memory_order_acquire) != submitted_)
         LightEvent_Wait(&work_completed_);
-        std::atomic_thread_fence(std::memory_order_acquire);
-        if (!worker_failure_) {
-            diagnostics_.spc_compute_last_ms = worker_compute_ms_;
-            diagnostics_.spc_compute_total_ms += worker_compute_ms_;
-            diagnostics_.spc_compute_max_ms = std::max(
-                diagnostics_.spc_compute_max_ms, worker_compute_ms_);
-            ++diagnostics_.spc_compute_packets;
-        }
-    }
-    pending_ = false;
-    pending_writes_.clear();
-    if (worker_failure_) std::rethrow_exception(worker_failure_);
-    return push_samples(rendered_);
+    diagnostics_.wait_last_us=static_cast<std::uint32_t>(audio_now_us()-wait_begin);
+    diagnostics_.wait_total_us+=diagnostics_.wait_last_us;
+    bool pushed = false;
+    while (collected_ != submitted_) pushed = collect_packet(collected_ + 1U);
+    return pushed;
 }
 
 bool Audio3ds::push_samples(std::span<const std::int16_t> interleaved) {

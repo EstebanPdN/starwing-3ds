@@ -20,9 +20,15 @@ public:
         std::int32_t bg2_x{}, bg2_y{};
         std::uint16_t roll_first{}, roll_last{}, alpha_milli{};
         bool bg2{}, plan_hit{}, paused{};
+        std::uint32_t effective_held{}, scripted_tick{}, logic_instructions{}, audio_wait_us{};
+        std::uint32_t spc_compute_us{}, spc_queue_us{}, world_record_us{}, scene_compile_us{};
+        std::uint32_t native_commands{}, native_rectangles{}, native_sampled_pixels{};
+        std::uint32_t mode1_layer_rectangles{}, mode1_layer_quads{}, mode1_layer_upload_bytes{};
+        bool mode1_retained_layers{};
+        std::uint32_t mode1_layer_converted_bytes{};
     };
     struct Interval {
-        float gap_p50_ms{}, gap_p95_ms{}, gap_max_ms{};
+        float gap_p50_ms{}, gap_p95_ms{}, gap_max_ms{}, gap_p99_ms{};
         unsigned gaps{}, over_25_ms{}, over_50_ms{}, held_or{}, moving_frames{};
     };
     void reset_epoch() noexcept { last_us_ = 0U; }
@@ -52,6 +58,7 @@ public:
             std::sort(gaps_.begin(), gaps_.begin() + gap_count_);
             interval_.gap_p50_ms = gaps_[(gap_count_ - 1U) / 2U] / 1000.0F;
             interval_.gap_p95_ms = gaps_[(gap_count_ * 95U - 1U) / 100U] / 1000.0F;
+            interval_.gap_p99_ms = gaps_[(gap_count_ * 99U - 1U) / 100U] / 1000.0F;
         }
         const auto result = interval_;
         interval_ = {};
@@ -59,24 +66,28 @@ public:
         return result;
     }
     [[nodiscard]] std::string csv() const {
-        std::string result = "session_us,gap_us,work_us,renderer_us,presentation_us,held,phases,bg2_quads,plan_us,plan_wait_us,bg2_x,bg2_y,roll_first,roll_last,alpha_milli,bg2,plan_hit,paused\n";
-        char row[256];
+        std::string result = "session_us,gap_us,work_us,renderer_us,presentation_us,held,phases,bg2_quads,plan_us,plan_wait_us,bg2_x,bg2_y,roll_first,roll_last,alpha_milli,bg2,plan_hit,paused,effective_held,scripted_tick,logic_instructions,audio_wait_us,spc_compute_us,spc_queue_us,world_record_us,scene_compile_us,native_commands,native_rectangles,native_sampled_pixels,mode1_layer_rectangles,mode1_layer_quads,mode1_layer_upload_bytes,mode1_retained_layers,mode1_layer_converted_bytes\n";
+        char row[512];
         for (std::size_t n = 0U; n < count_; ++n) {
             const auto& f = frames_[(cursor_ + frames_.size() - count_ + n) % frames_.size()];
             std::snprintf(row, sizeof(row),
-                "%llu,%u,%u,%u,%u,%u,%u,%u,%u,%u,%d,%d,%u,%u,%u,%u,%u,%u\n",
+                "%llu,%u,%u,%u,%u,%u,%u,%u,%u,%u,%d,%d,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
                 static_cast<unsigned long long>(f.session_us), unsigned(f.gap_us),
                 unsigned(f.work_us), unsigned(f.renderer_us), unsigned(f.presentation_us),
                 unsigned(f.held), unsigned(f.phases), unsigned(f.bg2_quads),
                 unsigned(f.plan_us), unsigned(f.plan_wait_us), int(f.bg2_x), int(f.bg2_y),
                 unsigned(f.roll_first), unsigned(f.roll_last), unsigned(f.alpha_milli), unsigned(f.bg2),
-                unsigned(f.plan_hit), unsigned(f.paused));
+                unsigned(f.plan_hit), unsigned(f.paused), unsigned(f.effective_held), unsigned(f.scripted_tick), unsigned(f.logic_instructions),
+                unsigned(f.audio_wait_us), unsigned(f.spc_compute_us), unsigned(f.spc_queue_us), unsigned(f.world_record_us), unsigned(f.scene_compile_us),
+                unsigned(f.native_commands), unsigned(f.native_rectangles), unsigned(f.native_sampled_pixels),
+                unsigned(f.mode1_layer_rectangles),unsigned(f.mode1_layer_quads),
+                unsigned(f.mode1_layer_upload_bytes),unsigned(f.mode1_retained_layers),unsigned(f.mode1_layer_converted_bytes));
             result += row;
         }
         return result;
     }
 private:
-    std::array<Frame, 512U> frames_{};
+    std::array<Frame, 2048U> frames_{};
     std::array<std::uint32_t, 256U> gaps_{};
     std::size_t count_{}, cursor_{}, gap_count_{};
     std::uint64_t last_us_{};
