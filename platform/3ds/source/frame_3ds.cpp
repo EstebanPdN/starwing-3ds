@@ -2,7 +2,7 @@
 #include "starfox/render/source_sprite_material.hpp"
 #include "frame_3ds.hpp"
 #include "starfox/render/source_depth_tables.hpp"
-#include "starfox/render/gpu_raster.hpp"
+#include "starfox/render/raster_replay.hpp"
 #include "hud_layout.hpp"
 #include "shape_memory.hpp"
 #include "native_canvas.hpp"

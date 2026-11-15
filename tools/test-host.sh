@@ -46,7 +46,7 @@ done
   -I"${ROOT}/include" -I"${ROOT}/platform/3ds/source" \
   "${ROOT}/tests/native_scene_test.cpp" \
   "${ROOT}/platform/3ds/source/native_engine/scene.cpp" \
-  "${ROOT}/src/render/gpu_raster.cpp" -o "${TEST_BUILD}/native_scene_test"
+  "${ROOT}/src/render/raster_replay.cpp" -o "${TEST_BUILD}/native_scene_test"
 "${TEST_BUILD}/native_scene_test"
 "${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra \
   -I"${ROOT}/tests/audio_3ds_host" -I"${ROOT}/platform/3ds/source" \

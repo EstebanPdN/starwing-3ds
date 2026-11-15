@@ -1,5 +1,5 @@
 #include "native_engine/scene.hpp"
-#include "starfox/render/gpu_raster.hpp"
+#include "starfox/render/raster_replay.hpp"
 #include <algorithm>
 #include <iostream>
 #include <random>

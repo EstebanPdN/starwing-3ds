@@ -139,7 +139,7 @@ add_library(starfox_core
     src/assets/shape_decoder.cpp
     src/render/background_renderer.cpp
     src/render/dust_renderer.cpp
-    src/render/gpu_raster.cpp
+    src/render/raster_replay.cpp
     src/render/scalefx.cpp
     src/render/framebuffer.cpp
     src/render/palette.cpp
@@ -483,7 +483,7 @@ if(STARFOX_BUILD_TESTS)
     target_link_libraries(starfox_background_transition_check PRIVATE starfox_core)
     target_link_libraries(starfox_state_tests PRIVATE starfox_core)
     add_test(NAME starfox_state_tests COMMAND starfox_state_tests)
-    add_executable(starfox_raster_commands_tests tools/benchmark_gpu_raster.cpp)
+    add_executable(starfox_raster_commands_tests tests/raster_commands_test.cpp)
     add_executable(starfox_face_material_tests tests/face_material_tests.cpp)
     add_executable(starfox_word_renderer_tests tests/word_renderer_tests.cpp)
     target_link_libraries(starfox_word_renderer_tests PRIVATE starfox_core)

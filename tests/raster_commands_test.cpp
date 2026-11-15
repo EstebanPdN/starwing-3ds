@@ -1,4 +1,4 @@
-#include "starfox/render/gpu_raster.hpp"
+#include "starfox/render/raster_replay.hpp"
 #include <chrono>
 #include <iostream>
 #include <string_view>
