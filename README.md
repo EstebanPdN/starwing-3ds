@@ -152,8 +152,9 @@ for reproducible reports. Capture shortcuts and sharing precautions are in
 ## License and legal notice
 
 [LICENSE-XBRZ.txt](docs/legal/LICENSE-XBRZ.txt) contains **GNU GPL v3.0** for the xBRZ
-component. GitHub's automatic license label refers to this detected license;
-it is not a blanket license for every file or for the game content.
+code that earlier revisions of this repository carried; the current source does
+not include xBRZ. GitHub's automatic license label refers to this file; it is
+not a blanket license for every file or for the game content.
 
 Third-party components retain their own licenses and notices. See
 [THIRD_PARTY_NOTICES.md](docs/legal/THIRD_PARTY_NOTICES.md) and the vendored

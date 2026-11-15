@@ -11,8 +11,8 @@ engine sources, the 3DS adaptation, and their existing tests. The original
 working tree, Git history, and private build inputs are preserved locally.
 
 The engine checkout has no general root LICENSE or COPYING. Its third-party
-notices and optional xBRZ GPL license do not grant a blanket license for the
-native engine. The original engine GitHub endpoint returned 404 during
+notices and the xBRZ GPL license kept for earlier revisions do not grant a
+blanket license for the native engine. The original engine GitHub endpoint returned 404 during
 preparation on September 30, 2026. The maintainer confirmed permission to
 republish the engine for this repository. No blanket license has been invented;
 the permission does not extend to Nintendo's cartridge data or other assets.
