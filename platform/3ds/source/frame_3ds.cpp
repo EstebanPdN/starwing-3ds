@@ -115,6 +115,9 @@ bool same_mode2_foreground(const simulation::SnesPpuState& a,
         && a.tunnel_scene == b.tunnel_scene;
 }
 
+// The PPU registers and HDMA tables a frame depends on; VRAM, CGRAM and OAM
+// are compared through the simulation's revision tokens instead.
+// capture_ppu_metadata() copies exactly these fields.
 bool same_ppu_metadata(const simulation::SnesPpuState& a,
     const simulation::SnesPpuState& b) noexcept {
     return a.background_mode == b.background_mode
@@ -729,7 +732,8 @@ Frame3ds::StorageStats Frame3ds::storage_stats() const noexcept {
         return values.capacity() * sizeof(values[0]);
     };
     result.item_capacity_bytes = bytes(items_);
-    // Fixed storage of the two object captures; no world-state copy remains.
+    // Fixed storage of the two object captures; the frame keeps no copy of
+    // the world state.
     result.draw_order_capacity_bytes = 0U;
     result.object_capacity_bytes = 0U;
     result.foreground_spans_size = source_foreground_spans_.size();
@@ -894,9 +898,9 @@ const render::Framebuffer& Frame3ds::draw(
             // that scrolls a level. An entry whose stationary BG3 atlas is
             // still current needs only its scrolled layers refreshed, and it
             // keeps handing the presenter the same atlas under the same
-            // name. Rotating to the other entry instead presented an equal
-            // atlas under a new name on each tick, which the presenter can
-            // only establish by comparing both 1536-pixel planes in full.
+            // name. Rotating to the other entry instead would present an
+            // equal atlas under a new name on each tick, which the presenter
+            // can only establish by comparing both 1536-pixel planes in full.
             // The second entry stays for a second tile set, as on the title.
             for (auto& candidate : mode1_caches_) {
                 if (candidate.valid && candidate.bg2_low.width() == 400U
@@ -1669,7 +1673,8 @@ const render::Framebuffer& Frame3ds::draw(
     } else if (native_mode1_background) {
         // All background pixels share one scroll coordinate system. The
         // source-sized foreground keeps OBJ, models and their SNES priority;
-        // copying its centre no longer reinstates wrapped scenery seams.
+        // copying its centre therefore does not reinstate wrapped scenery
+        // seams.
         compose_native_mode1(frame_, world_, mode1_cache->bg2_low,
             mode1_cache->bg2_high, mode1_cache->panorama_low,
             mode1_cache->panorama_high, wide_frame_, ppu.bg3_high_priority);
@@ -1741,8 +1746,8 @@ const render::Framebuffer& Frame3ds::draw(
     }
     wide_foreground_valid_ = native_scene_active_ && (mode2_gameplay || native_mode1_background) && !stereo;
     wide_foreground_top_hud_ = top_hud_shown;
-    // Kept, patched, replaced or composed: Mode 2's layer now shows exactly
-    // source_foreground_spans_ under the HUD.
+    // Kept, patched, replaced or composed: at this point Mode 2's layer shows
+    // exactly source_foreground_spans_ under the HUD.
     wide_source_layer_ = wide_foreground_valid_ && mode2_gameplay;
     if (stereo && gpu_bg2) right_frame_.end_write_coverage();
     last_draw_stereo_ = stereo;

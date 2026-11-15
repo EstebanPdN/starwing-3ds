@@ -17,8 +17,8 @@ namespace starfox::platform_3ds {
 namespace {
 
 // All callers hold an acquired PICA frame. Citro3D's SyncDisplayTransfer
-// splits with flags=0; explicitly flush every split command list now that
-// frame end flushes only the used Citro2D buffers, rather than the whole heap.
+// splits with flags=0; explicitly flush every split command list, because
+// frame end flushes only the used Citro2D buffers, not the whole heap.
 void queue_display_transfer(u32* source, u32 source_size, u32* destination,
     u32 destination_size, u32 flags) {
     C3D_FrameSplit(GX_CMDLIST_FLUSH);
@@ -73,6 +73,8 @@ std::uint16_t rgba5551(const render::Rgba8& colour,
         | (opaque ? 1U : 0U));
 }
 
+// Texel order inside one 8x8 PICA200 texture tile (Z-order):
+// tile_morton[y * 8 + x] is the offset of texel (x, y).
 constexpr std::array<std::uint8_t, 64> tile_morton{{
      0,  1,  4,  5, 16, 17, 20, 21,
      2,  3,  6,  7, 18, 19, 22, 23,
@@ -1009,7 +1011,7 @@ bool Display3ds::prepare_mode1_layer(const Mode1LayerPlan& plan,unsigned layer,
         const auto c=palette[i];
         const unsigned r=c.r>>3U,b=c.b>>3U;
         const unsigned g=plan.above_world(layer)?c.g>>3U:c.g>>2U;
-        // Match the previous two-plane presenter: RGB565 below the world,
+        // Match the two-plane present_native(): RGB565 below the world,
         // RGB5A1 above it. Store the expanded result in RGBA8 so transparent
         // atlas texels retain that same colour precision in either position.
         const unsigned red=(r<<3U)|(r>>2U),blue=(b<<3U)|(b>>2U);

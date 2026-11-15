@@ -9,11 +9,17 @@
 #include <cstdint>
 #include <limits>
 
+// draw_controls_3ds_art(): the 3DS control-layout drawing (pixel runs in
+// controls_3ds_art_data.hpp) composited over the SNES pad of the controls screen. Used by
+// game_3ds.cpp when it presents that screen.
+
 namespace starfox::platform_3ds {
 
 // Composite Esteban's hand-edited 200x107 drawing over the original SNES pad.
 // Reserve otherwise-unused palette entries for its exact colours, so the
 // indexed 3DS presentation keeps every outline and label pixel intact.
+// Does nothing unless `frame` is 400x240 at draw scale 1. `brightness`
+// (0..15, 15 = full) scales the art colours with the screen brightness.
 inline void draw_controls_3ds_art(render::Framebuffer& frame,
     render::Palette256& palette, unsigned brightness = 15U) {
     if (frame.width() != 400U || frame.height() != 240U
@@ -36,8 +42,9 @@ inline void draw_controls_3ds_art(render::Framebuffer& frame,
     std::array<bool,256> used{};
     const auto& source=frame.pixels();
     for(const auto index:source) used[index]=true;
-    // This specific cartridge backdrop is the background behind the old pad.
-    // Sampling it preserves the active menu's exact brightness/palette state.
+    // Art colour 0 is the backdrop: the cartridge backdrop pixel at the art's
+    // top-left corner, behind the original SNES pad. Sampling it preserves
+    // the active menu's exact brightness/palette state.
     mapped[0]=source[controls_art_y*400+controls_art_x];
     for(std::size_t color=1;color<controls_art_colors.size();++color) {
         auto want=controls_art_colors[color];

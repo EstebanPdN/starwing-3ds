@@ -27,8 +27,8 @@ __attribute__((noinline)) bool indexed_ground_carry(const Bg2MapSourceCache& map
     std::array<bool,400U> wrapped{};
     const auto first=std::min(height,static_cast<unsigned>(std::max(origin_y+144,0)));
     // Only the nearest nonzero sample above the extension can affect its
-    // carry. Walking every sky row forwards duplicated the normal BG2 pass.
-    // Seed each column by searching backwards, then evaluate the extension.
+    // carry. Walking every sky row forwards would duplicate the normal BG2
+    // pass. Seed each column by searching backwards, then evaluate the extension.
     // Each candidate still uses its own HDMA phase and source coordinates.
     if(first)for(unsigned x=0;x<width;++x) {
         for(unsigned row=first;row>0;) {
@@ -81,6 +81,7 @@ __attribute__((noinline)) bool indexed_ground_carry(const Bg2MapSourceCache& map
     return true;
 }
 
+// Little-endian VRAM word at word address `address` (wraps at 32 Ki words).
 std::uint16_t vram_word(const simulation::SnesPpuState& ppu,
     std::uint32_t address) noexcept {
     const auto byte = (address & 0x7fffU) * 2U;
@@ -113,6 +114,7 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
     const auto tile_shift = ppu.bg2_tile_size_16 ? 4U : 3U;
     const auto x_mask = width_tiles * tile_edge - 1U;
     const auto y_mask = height_tiles * tile_edge - 1U;
+    // The cartridge's DOVOFS roll table (Bg2Motion::roll_table_word).
     std::array<std::uint16_t, 32U> vertical_offsets{};
     if (ppu.bg2_vertical_offsets_enabled) {
         for (std::uint32_t index = 0U; index < vertical_offsets.size(); ++index)
@@ -133,8 +135,9 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
     }
 
     // Affine strips are one scanline high. On ordinary backgrounds, a few
-    // HDMA bands are far cheaper as tall rectangles (Prueba 4's 65-state
-    // replay catches this). Reserve affine sampling for dense row changes.
+    // HDMA bands are far cheaper as tall rectangles (measured on a 65-state
+    // replay). Reserve affine sampling for dense row changes: at least one
+    // horizontal scroll change per four rows.
     unsigned horizontal_changes=0;
     for(unsigned y=1;y<target_height;++y)
         horizontal_changes+=row_scroll_x_values[y]!=row_scroll_x_values[y-1];
@@ -142,8 +145,8 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
         && horizontal_changes>=target_height/4U;
 
     // The cartridge provides a per-column roll table only for its original
-    // 256-pixel window. Leaving the new side columns on BG2VOFS produces a
-    // visible 256-pixel rectangle. Continue the PC port's fitted horizon
+    // 256-pixel window. Leaving the side columns beyond it on BG2VOFS produces
+    // a visible 256-pixel rectangle. Continue the PC port's fitted horizon
     // through the full native viewport, at pixel precision.
     const bool wide_roll = target_width > 256U
         && ppu.bg2_vertical_offsets_enabled;
@@ -198,8 +201,8 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
     };
     // Adding an integer source row cannot change nearest-texel rounding.
     // Certify an affine strip once per fine-scroll phase/start column, then
-    // clip it analytically at each row's map wrap. The former per-row scan
-    // repeated the same 400 rounding checks up to 240 times per image.
+    // clip it analytically at each row's map wrap. A per-row scan would
+    // repeat the same 400 rounding checks up to 240 times per image.
     struct AffineCertificate {std::int32_t base;std::uint16_t length;};
     std::array<AffineCertificate,8U*400U> affine_certificates;
     // Read only while affine rows are planned; cleared only then.
@@ -293,7 +296,8 @@ bool plan_bg2_rects(const simulation::SnesPpuState& ppu,
                 // One affine texture strip can replace ~50 stepped rectangles.
                 // Certify EVERY nearest sample against the integer column table
                 // first. A 1/64 texel guard keeps it off PICA rounding boundaries;
-                // maps/rolls which cannot satisfy that retain the exact old path.
+                // maps/rolls which cannot satisfy that use the exact stepped
+                // map rectangles below.
                 const auto gradient = affine_gradient;
                 const auto logical_y = static_cast<std::int32_t>(band_top) - origin_y;
                 const auto period = static_cast<std::int32_t>((y_mask + 1U) * 256U);

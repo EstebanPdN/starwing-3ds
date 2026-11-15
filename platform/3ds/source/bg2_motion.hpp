@@ -8,6 +8,10 @@
 #include <cstddef>
 #include <utility>
 
+// Bg2Motion: previous and current BG2 scroll and roll-table endpoints, interpolated for
+// presentation between source ticks like the camera. Used by frame_3ds; the BG2 caches use its
+// roll-table location. Host-tested by tests/bg2_motion_test.cpp.
+
 namespace starfox::platform_3ds {
 
 // Presentation endpoints only. The native map/PPU remains the authoritative
@@ -70,6 +74,9 @@ private:
     }
 
 public:
+    // Makes this PPU state, scroll (x, y) and map background id the current
+    // endpoint; the current one becomes the previous. The first capture, a
+    // scene cut or a BG2 layout change snaps both endpoints together.
     void capture(const simulation::SnesPpuState& ppu,
         std::int16_t x, std::int16_t y, std::uint16_t background,
         bool scene_cut) noexcept {
@@ -102,6 +109,8 @@ public:
         return true;
     }
 
+    // BG2 scroll at `alpha` (0 = previous, 1 = current endpoint). X wraps at
+    // 16 bits and Y at 9 bits, each taking the shorter way around.
     [[nodiscard]] std::pair<std::int16_t, std::int16_t>
     scroll(double alpha) const noexcept {
         if (alpha >= 1.0) return {current_.x, current_.y};
@@ -115,6 +124,9 @@ public:
                     previous_.y, current_.y, alpha, 0x1ffU))};
     }
 
+    // Writes interpolated horizontal line offsets and active DOVOFS roll
+    // words into `presentation`, a copy of the live PPU. Does nothing before
+    // the first capture or at alpha >= 1.
     void apply(simulation::SnesPpuState& presentation, double alpha) const noexcept {
         if (!ready_ || alpha >= 1.0) return;
         alpha = std::clamp(alpha, 0.0, 1.0);

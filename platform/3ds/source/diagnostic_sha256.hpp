@@ -8,6 +8,9 @@
 #include <cstring>
 #include <span>
 
+// DiagnosticSha256: portable SHA-256. Used by diagnostics_3ds (capture files), gpu_self_test and
+// updater_3ds (download check); host-tested by tests/diagnostic_sha256_test.cpp.
+
 namespace starfox::platform_3ds {
 
 // Incremental SHA-256 for diagnostic-file integrity. No OS hashing service,

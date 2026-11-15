@@ -2,6 +2,7 @@
 // Which pixels of the retained 320x240 bottom image changed. The image's
 // owner names the rectangles it rewrote; presentation converts and flushes
 // those instead of the whole screen. Free of libctru for host tests.
+// Used by options_menu_3ds, screen_transfer and game_3ds.
 #include <algorithm>
 #include <array>
 #include <cstddef>

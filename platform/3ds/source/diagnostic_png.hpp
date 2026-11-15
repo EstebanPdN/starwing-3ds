@@ -5,8 +5,12 @@
 #include <cstdint>
 #include <cstdio>
 
+// write_diagnostic_rgb_png(): allocation-free, uncompressed RGB PNG writer for diagnostic
+// captures. Used by diagnostics_3ds.cpp; host-tested by tests/diagnostic_png_test.cpp.
+
 namespace starfox::platform_3ds {
 namespace png_detail {
+// PNG CRC-32 continued from `c`: start with 0xffffffff, invert the result.
 inline std::uint32_t crc(std::uint32_t c, const std::uint8_t* bytes, std::size_t size) noexcept {
     for (std::size_t i=0; i<size; ++i) {
         c ^= bytes[i];
@@ -18,6 +22,7 @@ inline std::uint32_t crc(std::uint32_t c, const std::uint8_t* bytes, std::size_t
 inline void big_endian(std::uint8_t* out, std::uint32_t n) noexcept {
     for (unsigned i=0;i<4;++i) out[i]=std::uint8_t(n>>(24U-8U*i));
 }
+// Writes one chunk: length, four-letter type, data, CRC. False on a short write.
 inline bool chunk(FILE* file, const char* type, const std::uint8_t* bytes,
                   std::size_t size) noexcept {
     std::array<std::uint8_t,4> word{};
@@ -34,6 +39,10 @@ inline bool chunk(FILE* file, const char* type, const std::uint8_t* bytes,
 // One stored DEFLATE block and IDAT chunk per row. No image-sized vectors,
 // reallocations, or C++ heap allocations, including under memory pressure.
 // IDAT chunks together form one zlib stream, with a single Adler checksum.
+// Writes a width x height image (at most 400x240) of 8-bit RGB;
+// pixel_at(x, y) returns the R, G, B bytes as rgb[0..2]. Returns false for a
+// null file, a size out of range or a short write, which leaves the file
+// incomplete.
 template<class PixelAt>
 bool write_diagnostic_rgb_png(FILE* file, unsigned width, unsigned height,
                               PixelAt pixel_at) {

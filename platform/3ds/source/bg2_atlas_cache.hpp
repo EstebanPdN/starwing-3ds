@@ -8,6 +8,10 @@
 #include <cstdint>
 #include <cstring>
 
+// Bg2AtlasSourceCache: byte copies of the BG2 characters behind the GPU tile atlas, so a later
+// PPU state can prove the atlas still current. Used by display_3ds and Bg2MapSourceCache;
+// host-tested by tests/bg2_atlas_cache_test.cpp.
+
 namespace starfox::platform_3ds {
 
 // Only decoded characters own atlas texels. Tile maps, HDMA and unused
@@ -17,6 +21,8 @@ class Bg2AtlasSourceCache {
 public:
     void reset() noexcept { used_.fill(0U); }
 
+    // Copies the 32 bytes of 4bpp character `character` (masked to 0..1023)
+    // at this PPU's BG2 character base, wrapping at 64 KiB of VRAM.
     void remember(const simulation::SnesPpuState& ppu,
         std::uint16_t character) noexcept {
         character &= 1023U;
@@ -30,6 +36,8 @@ public:
         used_[character / 64U] |= std::uint64_t{1} << (character % 64U);
     }
 
+    // True when every remembered character still has the same bytes at this
+    // PPU's BG2 character base. Callers compare the base itself.
     [[nodiscard]] bool matches(const simulation::SnesPpuState& ppu) const noexcept {
         for (unsigned group = 0U; group < used_.size(); ++group) {
             auto remaining = used_[group];

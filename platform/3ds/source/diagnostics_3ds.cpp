@@ -20,6 +20,7 @@ namespace {
 constexpr const char* root = "sdmc:/3ds/Starwing/dumps";
 constexpr std::size_t chunk_size = 1024U * 1024U;
 
+// Entries the clear chord may delete: NNN-dump-* and unnumbered dump-*.
 bool managed_dump_name(const char* name) {
     if (std::strncmp(name, "dump-", 5) == 0) return true;
     const char* p = name;
@@ -28,7 +29,9 @@ bool managed_dump_name(const char* name) {
 }
 
 // Match the other 3DS ports: derive the next number from numbered folders.
-// Legacy unnumbered captures remain intact and do not consume sequence IDs.
+// Unnumbered dump-* captures that an SD card may hold remain intact and do
+// not consume sequence IDs. Fails when the directory cannot be read or a
+// number passes 999999.
 bool next_dump_number(unsigned& next) {
     DIR* entries = opendir(root);
     if (!entries) return false;
@@ -122,6 +125,9 @@ void decode_pixel(const u8* p, GSPGPU_FramebufferFormat format, u8* rgb) {
     default: rgb[0] = rgb[1] = rgb[2] = 0;
     }
 }
+// PNG of the submitted framebuffer (else the current drawing buffer),
+// expected_width x 240 and unrotated. cpu_snapshot marks a CPU copy that
+// needs no cache invalidation. A failed file is removed.
 bool screenshot(const std::string& path, gfxScreen_t screen, unsigned expected_width,
                 const u8* submitted_framebuffer, bool cpu_snapshot) {
     u16 physical_width = 0, physical_height = 0;
@@ -149,6 +155,7 @@ bool screenshot(const std::string& path, gfxScreen_t screen, unsigned expected_w
     if (!written || !closed) std::remove(path.c_str());
     return written && closed;
 }
+// Copies the last 16 KiB of `input`; a missing path or file writes a note.
 bool log_tail(const std::string& output, const char* input) {
     if (!input) return write_text(output, "No log path supplied.\n");
     FILE* f = std::fopen(input, "rb");
@@ -163,6 +170,8 @@ bool log_tail(const std::string& output, const char* input) {
     std::fclose(f);
     return ok && write_bytes(output, bytes.data(), bytes.size());
 }
+// Appends "<sha256 hex>  <name>" (sha256sum format) for a written file of
+// at most 1 MiB, read back from the SD card.
 bool hash_file(const std::string& dir, const char* name, std::string& hashes) {
     FILE* file = std::fopen((dir + "/" + name).c_str(), "rb");
     if (!file) return false;
@@ -216,6 +225,8 @@ bool free_sd_bytes(u64& bytes) {
     }
     return false;
 }
+// Writes every readable mapping from 0x00100000 to 0x40000000 (I/O and free
+// regions skipped) as 1 MiB mem-NNN.bin chunks listed in memory-map.txt.
 bool full_memory(const std::string& dir, std::string& hashes, std::string& error,
     u64 total, const DiagnosticReport3ds& report) {
     FILE* map = std::fopen((dir + "/memory-map.txt").c_str(), "wb");
@@ -265,6 +276,7 @@ bool full_memory(const std::string& dir, std::string& hashes, std::string& error
     if (std::fclose(map) != 0) { error = "memory map close failed"; return false; }
     return true;
 }
+// The byte count full_memory() will write, for the SD space check.
 bool readable_memory_bytes(u64& total) {
     total = 0;
     for (u32 address = 0x00100000U; address < 0x40000000U;) {

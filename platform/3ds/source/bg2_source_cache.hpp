@@ -5,12 +5,18 @@
 #include <array>
 #include <cstring>
 
+// Bg2SourceCache: byte copies of what the Mode 1 BG2 atlas depends on, so the atlas is rebuilt
+// only when that VRAM changes. Used by mode1_bg2_atlas.hpp.
+
 namespace starfox::platform_3ds {
 // Dependencies of the unscrolled Mode 1 BG2 atlas: map words and the 4-bpp
 // characters they address. Other layers' VRAM writes do not change this art.
 // Palette and display metadata are checked by the owning frame cache.
 class Bg2SourceCache {
 public:
+    // True when BG2's main-screen enable, bases, map size and tile size match
+    // the capture and, while BG2 is enabled, the map words and referenced
+    // characters are byte-identical.
     bool matches(const simulation::SnesPpuState& ppu) const noexcept {
         if (!valid_ || enabled_ != bool(ppu.main_screen&2U) || base_ != ppu.bg2_character_base || map_ != ppu.bg2_screen_base
             || size_ != ppu.bg2_screen_size || large_ != ppu.bg2_tile_size_16) return false;
@@ -38,11 +44,14 @@ public:
         verified_revision_ = same && roll_independent_ ? vram_revision : 0U;
         return same;
     }
+    // capture(ppu) that also records `vram_revision` for the shortcut above.
     void capture(const simulation::SnesPpuState& ppu,
         std::uint64_t vram_revision) noexcept {
         capture(ppu);
         if (valid_ && roll_independent_) verified_revision_ = vram_revision;
     }
+    // Copies the map words and every character they address (all four for a
+    // 16x16 tile). With BG2 off the main screen only that state is recorded.
     void capture(const simulation::SnesPpuState& ppu) noexcept {
         verified_revision_ = 0U;
         roll_independent_ = true;

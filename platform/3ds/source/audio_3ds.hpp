@@ -13,12 +13,22 @@
 #include <span>
 #include <vector>
 
+// Audio3ds runs the cartridge SPC700 sound program (audio::Spc700Audio), on a worker thread when
+// one can be started, and streams its PCM into two looping CSND channels. Used by the 3DS
+// frontend; host tests compile audio_3ds.cpp against the libctru stub in tests/audio_3ds_host.
+
 namespace starfox::platform_3ds {
 
 // CSND consumes the native SPC output as two signed 16-bit mono channels at
-// 32 kHz. Call update() once per 20 Hz simulation logic tick.
+// 32 kHz. Call update(), or begin_update() and later collect() or
+// finish_update(), once per 20 Hz simulation logic tick.
 class Audio3ds {
 public:
+    // Setup results and running counters for the frontend's diagnostics and
+    // timing reports. Result fields hold libctru codes and stay -1 until the
+    // call is made. selected_core is 2 or 1 for the worker thread, 0 when
+    // packets render on the calling thread, -1 before open(). Quotas are APT
+    // application CPU time limits in percent.
     struct AsyncDiagnostics {
         Result csnd_result{-1};
         Result model_result{-1};
@@ -35,7 +45,11 @@ public:
         u32 effective_quota{};
         // CSND playback is an independently clocked, continuously looping
         // PCM ring. These counters distinguish producer starvation from a
-        // graphics stall or a failed sound-service call.
+        // graphics stall or a failed sound-service call. A late packet is due
+        // before the estimated read head plus the write guard and is moved
+        // forward (late_frames sums the frames skipped); a dropped packet
+        // would start more than 500 ms ahead of the read head;
+        // rate_adjust_frames counts frames inserted to follow the CSND clock.
         Result playback_start_result{-1};
         std::uint32_t submitted_packets{};
         std::uint32_t late_packets{};
@@ -62,7 +76,14 @@ public:
     Audio3ds(const Audio3ds&) = delete;
     Audio3ds& operator=(const Audio3ds&) = delete;
 
+    // Calls close(), then starts CSND on channels 8 and 9 with two 2-second
+    // linear-memory rings and starts the SPC worker (cores: see
+    // begin_update()). Returns ready(); when false, output is muted but the
+    // SPC still runs.
     [[nodiscard]] bool open();
+    // Lets the worker finish the packets already handed over (their output
+    // is discarded), stops it, restores the APT CPU quota, submits a stop
+    // without waiting and releases CSND and the rings. Safe to repeat.
     void close() noexcept;
     // Stop the hardware reader during long, synchronous SD operations. The
     // SPC state is retained; the next completed logic tick starts a fresh
@@ -71,8 +92,8 @@ public:
     // Before a HOME or POWER transition: make the looping rings silent
     // without issuing a CSND command. libctru's completion wait is an
     // unbounded spin, so nothing here may depend on the sound service
-    // answering. The channels keep running; stop_playback() after resuming
-    // lets the next tick start a fresh ring.
+    // answering. The channels keep running; stop_playback_no_wait() after
+    // resuming lets the next tick start a fresh ring.
     void silence_for_suspend() noexcept;
     // After returning from HOME or sleep, and when closing: submit the stop
     // without spinning on CSND's completion flag. An application woken only
@@ -101,12 +122,14 @@ public:
     [[nodiscard]] const AsyncDiagnostics& diagnostics() const noexcept {
         return diagnostics_;
     }
+    // Linear-memory bytes held by the two CSND rings, for the memory report.
     // Stable main-thread ownership; excludes the worker-mutated SPC buffers.
     [[nodiscard]] std::size_t pcm_ring_bytes() const noexcept {
         return (std::size_t(pcm_left_ != nullptr) + std::size_t(pcm_right_ != nullptr)) * ring_bytes_;
     }
 
     // Feed the complete cartridge boot APU upload before the first logic tick.
+    // Returns the number of 50 ms SPC frames rendered to service it.
     [[nodiscard]] std::size_t prime_upload_sequence(
         std::span<const simulation::ApuPortWrite> writes);
 
@@ -120,14 +143,16 @@ public:
     // APT grants at least a 50% slice, else the application core. A failed
     // New 3DS core-2 launch may use core 1.
     //
-    // Packets queue: the worker renders them one after another and the caller
-    // never waits for one to start the next (it used to, a whole packet's
-    // worth each time two fell due together). A game tick that reads the
-    // sound ports calls wait_for_output_ports(), which waits for the ports of
-    // the last packet handed over, exactly the values an eager wait gave.
-    // collect() publishes the PCM of the packets that are done;
-    // finish_update() waits for all of them first and must precede direct
-    // access to the SPC state.
+    // Packets queue in four slots: the worker renders them one after another
+    // and the caller waits only when every slot is taken. Waiting for each
+    // packet before handing over the next would cost a whole packet's render
+    // time whenever two packets fall due together. A game tick that reads
+    // the sound ports calls wait_for_output_ports(), which waits for the
+    // ports of the last packet handed over: the same values a wait for every
+    // packet would give. collect() publishes the PCM of the packets that are
+    // done; finish_update() waits for all of them first and must precede
+    // direct access to the SPC state. An exception raised while rendering a
+    // packet is rethrown by the call that collects it or waits for its ports.
     void begin_update(std::span<const simulation::ApuPortWrite> writes);
     [[nodiscard]] bool finish_update();
     // Never waits. True when it published at least one packet's ports and PCM.
@@ -140,7 +165,11 @@ public:
             || completed_.load(std::memory_order_acquire) == submitted_);
     }
 
-    // Append one 50 ms packet to the continuously playing CSND ring.
+    // Append one 50 ms packet (exactly 1600 interleaved stereo frames) to the
+    // continuously playing CSND ring; the first packet after a stop clears
+    // both rings and starts the looping channels. Returns false when CSND is
+    // not ready, the size is wrong, the packet would start more than 500 ms
+    // ahead of playback, a cache flush fails or playback cannot start.
     [[nodiscard]] bool push_samples(std::span<const std::int16_t> interleaved);
     void set_master_volume(unsigned percent) noexcept {
         master_volume_ = percent > 100U ? 100U : percent;
@@ -184,6 +213,10 @@ private:
     audio::Spc700Audio spc_;
     std::int16_t* pcm_left_{};
     std::int16_t* pcm_right_{};
+    // Ring timeline in output frames since the channels started (the read
+    // head is estimated from playback_started_ms_): write_frame_ is where the
+    // next packet goes, silence_until_frame_ how far ahead the ring is
+    // already cleared. The source and output totals carry the rate matching.
     std::uint64_t playback_started_ms_{};
     std::uint64_t write_frame_{};
     std::uint64_t silence_until_frame_{};

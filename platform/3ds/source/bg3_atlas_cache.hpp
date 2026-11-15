@@ -4,12 +4,18 @@
 #include <array>
 #include <cstring>
 
+// Bg3AtlasSourceCache: byte copies of what the Mode 1 BG3 atlas depends on, so the atlas is
+// rebuilt only when that VRAM changes. Used by frame_3ds; host-tested by
+// tests/bg3_atlas_cache_test.cpp.
+
 namespace starfox::platform_3ds {
 // Dependencies of the unscrolled Mode 1 BG3 atlas: map words and the 2-bpp
 // characters they address. Other layers' VRAM writes do not change this art.
 // Palette and display metadata are checked by the owning frame cache.
 class Bg3AtlasSourceCache {
 public:
+    // True when BG3's bases, map size and tile size match the capture and the
+    // map words and referenced characters are byte-identical.
     bool matches(const simulation::SnesPpuState& ppu) const noexcept {
         if (!valid_ || base_ != ppu.bg3_character_base || map_ != ppu.bg3_screen_base
             || size_ != ppu.bg3_screen_size || large_ != ppu.bg3_tile_size_16) return false;
@@ -22,6 +28,8 @@ public:
         }
         return true;
     }
+    // Copies the map words and every character they address (all four for a
+    // 16x16 tile).
     void capture(const simulation::SnesPpuState& ppu) noexcept {
         base_=ppu.bg3_character_base; map_=ppu.bg3_screen_base;
         size_=ppu.bg3_screen_size; large_=ppu.bg3_tile_size_16;

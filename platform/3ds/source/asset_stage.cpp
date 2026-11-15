@@ -21,6 +21,8 @@ struct ResourceName {
     const char *path;
 };
 
+/* Packaged romfs resources by id: 101/102 patch and symbol table of the original game, 108/109
+ * of Star Fox EX, 120-126 regional patches that turn other retail revisions into USA 1.2. */
 constexpr std::array resources{
     ResourceName{101, "romfs:/ultrastarfox-v12.bps"},
     ResourceName{102, "romfs:/ultrastarfox.txt"},
@@ -35,6 +37,7 @@ constexpr std::array resources{
     ResourceName{126, "romfs:/retail-germany-v10-to-usa-v12.bps"},
 };
 
+/* Whole file of at most 64 MiB; throws std::runtime_error on any failure. */
 std::vector<std::uint8_t> read_file(const char *path) {
     FILE *file = std::fopen(path, "rb");
     if (file == nullptr) throw std::runtime_error(std::string("Cannot open ") + path);
@@ -68,6 +71,8 @@ std::span<const std::uint8_t> resource(
     throw std::runtime_error("Unknown asset resource");
 }
 
+/* Fingerprint that binds a bundle to these exact resources; the symbol tables (102, 109) are
+ * hashed with normalized line endings. */
 std::uint32_t manifest(
     const std::array<std::vector<std::uint8_t>, resources.size()> &data) {
     std::array<starfox::assets::RuntimeManifestResource, resources.size()> entries;
@@ -76,6 +81,8 @@ std::uint32_t manifest(
     return starfox::assets::runtime_asset_manifest(entries);
 }
 
+/* Patch id that turns the retail ROM with this CRC32 (copier header excluded) into USA 1.2,
+ * or 0 when it already is USA 1.2. Throws for an unknown CRC. */
 int regional_patch(std::uint32_t crc) {
     switch (crc) {
     case 0x8fc4e6d0u: return 0;
@@ -96,6 +103,7 @@ std::string text_resource(
     return {reinterpret_cast<const char *>(bytes.data()), bytes.size()};
 }
 
+/* Writes path + ".tmp" and renames it to path only after a complete write and close. */
 void write_atomically(const char *path, std::span<const std::uint8_t> bytes) {
     const std::string temporary = std::string(path) + ".tmp";
     FILE *file = std::fopen(temporary.c_str(), "wb");
@@ -144,6 +152,7 @@ extern "C" int starwing_prepare_assets(const char *rom_path, const char *output_
         if (!starwing_probe_rom(rom_path, &info))
             throw std::runtime_error("Unsupported or modified retail ROM");
         auto retail = read_file(rom_path);
+        /* 1 MiB plus a 512-byte copier header: drop the header. */
         if (retail.size() == (1u << 20u) + 512u)
             retail.erase(retail.begin(), retail.begin() + 512);
         const int patch = regional_patch(info.crc32);

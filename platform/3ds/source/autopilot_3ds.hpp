@@ -1,4 +1,5 @@
 #pragma once
+// Autopilot3ds: scripted input, image captures and timing logs for game_3ds.cpp.
 // Emulator regression builds only (STARWING_AUTOPILOT). Release builds never
 // compile this file's behaviour: no SD script is read and no input is added.
 //
@@ -28,6 +29,9 @@ namespace starfox::platform_3ds {
 
 class Autopilot3ds {
 public:
+    // Reads <directory>/autopilot.txt. Without a script the autopilot stays
+    // inactive and every query reports nothing to do; with one it creates
+    // autopilot.csv and autopilot-events.txt anew in the same directory.
     explicit Autopilot3ds(const char* directory) {
         std::snprintf(directory_,sizeof(directory_),"%s",directory);
         char path[160]{};
@@ -86,6 +90,7 @@ public:
         return false;
     }
 
+    // Scripted stereo slider strength (0..8), or -1 when the script sets none.
     int stereo_override() const noexcept { return stereo_; }
     // True once, at the scripted tick.
     bool take_home_due() noexcept {
@@ -96,6 +101,9 @@ public:
     bool capture_due() const noexcept {
         return capture_index_ < captures_.size() && tick_ >= captures_[capture_index_];
     }
+    // When a scripted capture is due, saves both presented top framebuffers
+    // (rotated RGB565, 400x240; a null side is skipped) as
+    // capture-<tick>-left|right.rgb565 and moves on to the next capture.
     void capture(const u8* left, const u8* right) {
         if (!capture_due()) return;
         const auto requested=captures_[capture_index_++];
@@ -112,7 +120,10 @@ public:
         event("capture");
     }
 
-    // Explicit readback also resolves the emulator's cached VRAM surfaces.
+    // Saves one GPU layer texture of the latest capture as
+    // capture-<tick>-layer-<layer>.linear: four u32 (width, height, 0, byte
+    // size), then RGBA8 pixels. Explicit readback also resolves the
+    // emulator's cached VRAM surfaces.
     void capture_texture(unsigned layer, const C3D_Tex& texture) {
         if (!capture_index_ || !texture.data) return;
         const u32 size=texture.width*texture.height*4U;
@@ -163,6 +174,8 @@ public:
     }
 
     // Called once per source tick, before the simulation consumes input.
+    // Adds the buttons of every step that covers this tick (and matches
+    // `flow`), with press and release edges, then advances tick().
     void apply(input::TickInput& controls, const char* flow) noexcept {
         if (!active_) return;
         // Script flow names use '_' where the overlay label has a space.
@@ -181,6 +194,8 @@ public:
         ++tick_;
     }
 
+    // autopilot.csv lines: the first columns (tick, top_lit, ppu_mode) are
+    // written here; `columns` and `text` supply the rest, line end included.
     void header(const char* columns) noexcept {
         if (!csv_) return;
         std::fprintf(csv_, "tick,top_lit,ppu_mode,%s", columns);
@@ -191,6 +206,7 @@ public:
         std::fprintf(csv_, "%u,%u,%u,%s", tick_, top_lit, ppu_mode, text);
         std::fflush(csv_);
     }
+    // Appends "<osGetTime() ms> tick=<n> <text>" to autopilot-events.txt.
     void event(const char* text) noexcept {
         if (!events_) return;
         std::fprintf(events_, "%llu tick=%u %s\n",

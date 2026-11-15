@@ -3,14 +3,25 @@
 #include "bg2_atlas_cache.hpp"
 #include "bg2_motion.hpp"
 
+// Bg2MapSourceCache: byte-exact certificate of BG2's tile map and the characters it references,
+// plus the decoded indexed image of the whole map. Used by display_3ds and bg2_plan.cpp;
+// host-tested by tests/bg2_map_cache_test.cpp and tests/bg2_plan_test.cpp.
+
 namespace starfox::platform_3ds {
 
 // The complete BG2 image depends on map words and referenced character
 // bytes. Roll/HDMA tables can change VRAM without changing this image.
+// Only 8x8 tiles are cached.
 class Bg2MapSourceCache {
 public:
     void reset() noexcept { valid_ = false; verified_revision_ = 0U; }
+    // True when the cache is valid and no referenced character has a
+    // transparent (colour 0) pixel.
     [[nodiscard]] bool all_opaque() const noexcept { return valid_ && all_opaque_; }
+    // CGRAM index (palette * 16 + colour; 0 when transparent) of map pixel
+    // (x, y), both inside the 256- or 512-pixel map. Optionally reports
+    // whether that tile's character is fully opaque and of one colour.
+    // Meaningful only after ensure() or remember() has built a valid cache.
     [[nodiscard]] std::uint8_t sample(unsigned x,unsigned y,bool* uniform=nullptr,bool* opaque=nullptr) const noexcept {
         const unsigned width=(screen_size_&1U)?512U:256U;
         const auto flags=opaque_tiles_[(y/8U)*(width/8U)+x/8U];
@@ -18,6 +29,8 @@ public:
         if (uniform) *uniform=(flags&2U)!=0U;
         return indices_[std::size_t(y)*width+x];
     }
+    // True when the cache holds this PPU's BG2 source: 8x8 tiles, the same
+    // bases and size, byte-identical map words and referenced characters.
     [[nodiscard]] bool matches(const simulation::SnesPpuState& ppu) const noexcept {
         if (!valid_ || ppu.bg2_tile_size_16 || ppu.bg2_character_base != character_base_
             || ppu.bg2_screen_base != screen_base_ || ppu.bg2_screen_size != screen_size_)
@@ -56,6 +69,8 @@ public:
         if (valid_ && roll_independent_) verified_revision_ = vram_revision;
         return true;
     }
+    // Rebuilds from this PPU: copies the map words and referenced characters
+    // and decodes the indexed image. 16x16 tiles leave the cache invalid.
     __attribute__((noinline)) void remember(const simulation::SnesPpuState& ppu) noexcept {
         valid_ = false;
         verified_revision_ = 0U;
@@ -99,9 +114,10 @@ public:
                 }
             }
         }
-        // Keep the exact indexed source beside its byte certificate. The
-        // rolled-ground planner previously decoded/located map pixels for
-        // every output column on every frame, even when VRAM was unchanged.
+        // Keep the exact indexed source beside its byte certificate, so the
+        // rolled-ground planner reads decoded pixels instead of decoding and
+        // locating map pixels for every output column on every frame while
+        // VRAM is unchanged.
         std::array<std::uint8_t,1024U*64U> decoded;
         std::array<std::uint8_t,1024U> opaque{};
         std::array<std::uint64_t,16U> decoded_valid{};
@@ -158,6 +174,8 @@ private:
     mutable std::uint64_t verified_revision_{};
     bool roll_independent_{};
     std::array<std::uint8_t, 8192U> words_{};
+    // Decoded map: one CGRAM index per pixel (rows of 256 or 512) and one
+    // flag byte per tile (bit 0: no transparent pixel, bit 1: one colour).
     std::array<std::uint8_t,512U*512U> indices_{};
     std::array<std::uint8_t,4096U> opaque_tiles_{};
     std::size_t bytes_{};

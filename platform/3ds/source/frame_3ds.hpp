@@ -28,12 +28,18 @@
 #include <utility>
 #include <vector>
 
+// Frame3ds builds each top-screen frame from the simulation: interpolated object snapshots and
+// camera, models (software or recorded for PICA), dust, backgrounds and the top HUD. Used by
+// game_3ds.cpp; host-tested by tests/frame_3ds_test.cpp and tests/stereo_3ds_test.cpp.
+
 namespace starfox::platform_3ds {
 
 // Cartridge foreground retains its 256x224 raster, centred at (72, 8).
 // Gameplay geometry and scenery share the complete 400x240 top screen.
 class Frame3ds {
 public:
+    // Time spent in the last draw(): stages in milliseconds and finer parts
+    // in microseconds, measured with the ARM11 system tick.
     struct DrawBreakdown {
         float background_ms{};
         float world_ms{};
@@ -46,7 +52,12 @@ public:
         std::uint32_t world_record_us{}, scene_compile_us{};
     };
 
+    // Keeps references to `rom` and `symbols`, which must outlive the frame,
+    // and resolves every symbol it reads once, here.
     Frame3ds(const assets::RomImage& rom, const assets::SymbolMap& symbols);
+    // Record the world for the PICA native engine instead of rasterizing it:
+    // Mode 2 gameplay drawn with gpu_bg2, and Mode 1 levels when `mode1` is
+    // set. Stereo frames always rasterize. A change invalidates the last draw.
     void set_native_engine(bool enabled, bool mode1=false) noexcept {
         if (native_engine_enabled_ != enabled || native_mode1_enabled_ != mode1)
             last_draw_valid_ = false;
@@ -58,9 +69,16 @@ public:
         native_commands_.unpack();
         return native_commands_;
     }
+    // The 400x240 Mode 1 background for Display3ds::present_native() and the
+    // revision that names its contents.
     const render::Framebuffer& native_background() const noexcept { return native_background_; }
     std::uint32_t native_background_revision() const noexcept { return native_background_revision_; }
+    // The last draw's compiled PICA world; null when that draw rasterized
+    // the world in software or the scene overflowed the GPU batch.
     const native_engine::Scene* native_scene() const noexcept { return native_scene_active_ ? &native_scene_ : nullptr; }
+    // Let Mode 1 levels go to Display3ds::present_mode1_layers() as a layer
+    // plan (mode1_layers(), null when the last draw composed them itself)
+    // instead of a CPU-composed background.
     void set_retained_mode1_layers(bool enabled) noexcept {
         if (retained_mode1_enabled_!=enabled) last_draw_valid_=false;
         retained_mode1_enabled_=enabled;
@@ -68,12 +86,17 @@ public:
     [[nodiscard]] const Mode1LayerPlan* mode1_layers() const noexcept {
         return retained_mode1_active_ ? &mode1_layer_plan_ : nullptr;
     }
+    // Per-eye stereo offset in pixels (the eyes move in opposite directions),
+    // clamped to 8; 0 turns stereo off. Only Mode 2 gameplay draws a
+    // right-eye frame (stereo_active() after that draw).
     void set_stereo_strength(std::uint8_t strength) noexcept;
     [[nodiscard]] bool stereo_active() const noexcept { return last_draw_stereo_; }
     [[nodiscard]] std::uint8_t stereo_strength() const noexcept { return stereo_strength_; }
+    // The last draw's right-eye frame, or last_frame() when it had none.
     [[nodiscard]] const render::Framebuffer& right_frame() const noexcept {
         return last_draw_stereo_ ? right_frame_ : last_frame();
     }
+    // Lays the top HUD out for the full 400x240 view (true) or the 4:3 view.
     void set_wide_view(bool wide) noexcept {
         if (wide_view_ != wide) {
             wide_view_ = wide;
@@ -86,13 +109,25 @@ public:
             last_draw_valid_=false;
         }
     }
+    // Builds the frame for one presentation and returns the 400x240 wide
+    // frame, valid until the next draw. gpu_bg2: Display3ds draws BG2 in
+    // Mode 2 gameplay, so the frame holds only the layers above it.
+    // interpolation_alpha (0..1) places camera, objects and BG2 between the
+    // previous and the latest source tick. prepared_background is the
+    // presentation_ppu() snapshot a BG2 worker may be reading.
     [[nodiscard]] const render::Framebuffer& draw(
         const simulation::GameSimulation& game, bool gpu_bg2 = false,
         double interpolation_alpha = 1.0,
         const simulation::SnesPpuState* prepared_background = nullptr);
+    // Whether the last frame can be shown again: same gpu_bg2 mode, alpha,
+    // flow, scene revision, PPU memory revision and background state as the
+    // last draw().
     [[nodiscard]] bool can_reuse_presentation(
         const simulation::GameSimulation& game, bool gpu_bg2,
         double interpolation_alpha = 1.0) const;
+    // Records the presentation endpoints after a source tick: camera, object
+    // poses and BG2 motion. A scene cut, flow change or camera jump makes
+    // both endpoints equal, so nothing interpolates across it.
     void capture_after_tick(const simulation::GameSimulation& game);
     [[nodiscard]] const render::Framebuffer& last_frame() const noexcept {
         return last_frame_wide_ ? wide_frame_ : frame_;
@@ -103,19 +138,28 @@ public:
         return wide_foreground_revision_;
     }
     // Decode the stage's currently active geometry while the source display
-    // is black, before the first visible gameplay presentation.
+    // is black, before the first visible gameplay presentation. Returns the
+    // number of shapes added to the cache.
     [[nodiscard]] unsigned preload_active_shapes(
         const simulation::GameSimulation& game);
     struct PreloadStats { unsigned candidates{}, decoded{}, rejected{}; std::size_t bytes{}; bool limited{}; };
     using PreloadProgress = bool (*)(void*, unsigned, unsigned);
+    // Sets the shape cache budget in bytes and decodes every symbolized
+    // model with its LOD, shadow and flash-colour variants while they fit
+    // (`limited` when some did not), then sizes the model scratch for the
+    // largest one. progress(context, done, total) returning false stops it.
     [[nodiscard]] PreloadStats preload_catalog(std::size_t budget,
         PreloadProgress progress = nullptr, void* context = nullptr);
+    // The BG2 scroll the last draw() used.
     [[nodiscard]] std::int16_t background_scroll_x() const noexcept {
         return background_scroll_x_;
     }
     [[nodiscard]] std::int16_t background_scroll_y() const noexcept {
         return background_scroll_y_;
     }
+    // BG2 scroll for a presentation at `interpolation_alpha`: the PPU
+    // registers in Mode 3, Bg2Motion in Mode 2 gameplay while the PPU still
+    // matches its captured endpoint, else the BG2XSCROLL/BG2SCROLL words.
     [[nodiscard]] std::pair<std::int16_t, std::int16_t>
     current_background_scroll(const simulation::GameSimulation& game,
         double interpolation_alpha = 1.0) const;
@@ -123,6 +167,7 @@ public:
     // it to draw() so that CPU rendering cannot rewrite the worker's input.
     [[nodiscard]] const simulation::SnesPpuState& presentation_ppu(
         const simulation::GameSimulation& game, double interpolation_alpha);
+    // Cache counters, timings and sizes for the diagnostics reports.
     [[nodiscard]] std::uint64_t world_cache_hits() const noexcept {
         return world_cache_hits_;
     }
@@ -229,13 +274,21 @@ private:
         const simulation::GameObject* object{};
     };
 
+    // A symbol's first address in work RAM (ram_symbol: bank 00 or 7E), in
+    // Super FX RAM (fx_symbol: bank 70) or in ROM (colour_symbol: the 16-bit
+    // address of a colour table); 0 when there is none.
     [[nodiscard]] std::uint32_t ram_symbol(const char *name) const;
     [[nodiscard]] std::uint32_t fx_symbol(const char *name) const;
     [[nodiscard]] std::uint16_t colour_symbol(const char *name) const;
+    // Decoded shape from the cache, decoding it on a miss; null when it does
+    // not decode. A shape that cannot fit the budget becomes the transient,
+    // valid until the next oversized decode of its kind or the next draw.
     [[nodiscard]] const assets::Shape* load_base_shape(
         std::uint16_t shape, std::uint16_t colour, std::uint16_t minimum_colours = 0);
     [[nodiscard]] const assets::Shape* load_lod_shape(const assets::Shape& base,
         std::uint16_t pointer, std::uint16_t colour, std::uint16_t minimum_colours = 0);
+    // Evicts least recently used shapes, never protected_base, until `bytes`
+    // more fit the budget; false when they cannot.
     [[nodiscard]] bool make_shape_cache_room(std::size_t bytes,
         const assets::Shape* protected_base = nullptr);
 
@@ -257,11 +310,11 @@ private:
     render::Framebuffer right_frame_{400U, 240U};
     std::uint8_t stereo_strength_{};
     bool last_draw_stereo_{};
-    // The world is recorded again at every draw. Its former whole-state
-    // cache (a copy of every object, particle and dust point per frame, then
-    // compared at the next) only ever matched a repeated presentation of
-    // one instant, which the game loop does not produce while it runs; a
-    // match kept exactly what recording the same inputs again yields.
+    // The world is recorded again at every draw. A whole-state cache (a copy
+    // of every object, particle and dust point per frame, compared at the
+    // next) would match only a repeated presentation of one instant, which
+    // the running game loop does not produce, and a match would keep exactly
+    // what recording the same inputs again yields.
     // world_cache_misses_ counts the recordings; hits stay zero.
     std::uint64_t last_ppu_memory_revision_{};
     std::uint64_t world_cache_validation_us_{};

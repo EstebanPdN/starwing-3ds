@@ -3,8 +3,14 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+// starwing_clean_device_cache() writes CPU data-cache lines back before a device reads the
+// memory. Used by display_3ds.cpp and native_engine/pica.cpp; tests/3ds_host/cache_clean_test.py
+// exercises it with SVC 83 allowed and denied.
+
 // CPU-to-device handoff only. GPU/DSP-to-CPU reads require invalidation.
 // These callers submit from the main thread; capability state is TU-local.
+// Returns 0 for an empty range, else the Result of svcStoreProcessDataCache
+// or, from its first failure on, of GSPGPU_FlushDataCache.
 static inline Result starwing_clean_device_cache(const void* address, u32 size) {
     static bool service_only;
     if (size == 0U) return 0;

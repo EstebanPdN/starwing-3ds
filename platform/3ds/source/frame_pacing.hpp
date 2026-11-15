@@ -2,6 +2,9 @@
 #include <algorithm>
 #include <cstdint>
 
+// FramePacing: 60 Hz presentation clock in hardware-tick units. Used by game_3ds.cpp;
+// host-tested by tests/frame_pacing_test.cpp.
+
 namespace starfox::platform_3ds {
 // Rational 60 Hz clock: one phase costs ticks_per_second units, while each
 // elapsed hardware tick contributes 60 units. No millisecond quantization or
@@ -15,12 +18,18 @@ public:
     constexpr explicit FramePacing(std::uint64_t ticks_per_second)
         : frequency_(ticks_per_second) {}
     constexpr void reset() noexcept { debt_ = 0U; }
+    // Adds elapsed hardware ticks. One call counts at most 100 ms and the
+    // debt is capped at 12 phases, so a stall or suspend cannot cause a long
+    // catch-up burst.
     constexpr void advance(std::uint64_t elapsed_ticks) noexcept {
         debt_ = std::min(debt_ + std::min(elapsed_ticks, frequency_ / 10U) * 60U,
             frequency_ * 12U);
     }
+    // ready(): at least one phase is due; consume() takes one due phase.
     [[nodiscard]] constexpr bool ready() const noexcept { return debt_ >= frequency_; }
     constexpr void consume() noexcept { if (ready()) debt_ -= frequency_; }
+    // Hardware ticks (or nanoseconds, rounded up) until the next phase is
+    // due, given the ticks elapsed since the last advance().
     [[nodiscard]] constexpr std::uint64_t remaining_ticks(
         std::uint64_t elapsed_since_sample) const noexcept {
         if (ready()) return 0U;

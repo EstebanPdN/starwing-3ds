@@ -20,8 +20,15 @@
 #include <atomic>
 #include <vector>
 
+// Display3ds: top-screen presentation through PICA200 (citro3d/citro2d) with a CPU framebuffer
+// fallback, plus bottom-screen progress panels. Used by game_3ds.cpp, gpu_self_test.cpp and the
+// GPU test programs; 3DS only.
+
 namespace starfox::platform_3ds {
 
+// Once-per-second performance and memory figures for the performance CSV
+// rows and the HUD FPS counter. Times in milliseconds, memory in KiB;
+// audio_core as Audio3ds::effective_core().
 struct DiagnosticSnapshot {
     float fps{}, logic_hz{}, frame_ms{}, game_ms{}, draw_ms{};
     float upload_ms{}, vblank_ms{}, phase_ms{};
@@ -70,16 +77,32 @@ public:
     Display3ds(const Display3ds&) = delete;
     Display3ds& operator=(const Display3ds&) = delete;
 
+    // Sets both screen formats (stereo on New 3DS), citro3d/citro2d, the
+    // textures and targets, and on New 3DS the BG2 plan worker on core 2.
+    // False when the CPU recovery framebuffer or a required GPU resource is
+    // unavailable; true in CPU presentation when the GPU was abandoned.
     [[nodiscard]] bool open();
+    // Releases GPU resources once the queue is idle (bounded wait). A queue
+    // that stops completing switches to CPU presentation and leaves those
+    // resources to process teardown instead of hanging.
     void close() noexcept;
     // False means that no frame was submitted (the GPU is busy, or the
-    // direct-framebuffer fallback is unavailable).
+    // direct-framebuffer fallback is unavailable). Shows up to 400x240 of
+    // `indexed`; `right` is the right-eye image in stereo. reuse_source states
+    // that `indexed` is unchanged, so an equal cached image stays on screen
+    // without a new submission. wait_for_gpu waits up to 100 ms for the
+    // frame instead of failing at once.
     [[nodiscard]] bool present(const render::Framebuffer& indexed,
         const render::Palette256& palette, bool reuse_source = false,
         const render::Framebuffer* right = nullptr, bool wait_for_gpu = false);
     // BG2 tile geometry and palette expansion run on PICA200. The foreground
     // framebuffer must contain only the world, HUD and text; write coverage
     // supplies alpha so an explicitly drawn palette index zero stays opaque.
+    // `scene` (optional) draws native models between BG2 and the foreground.
+    // With `right`, the eyes see BG2 shifted by stereo_strength pixels (at
+    // most 8) in opposite directions. False means nothing new was presented:
+    // with last_frame_timing().gpu_begin_failed the previous frame is still
+    // in flight; otherwise the caller presents a complete software frame.
     [[nodiscard]] bool present_mode2(const simulation::SnesPpuState& ppu,
         std::uint64_t ppu_vram_revision,
         std::int32_t scroll_x, std::int32_t scroll_y,
@@ -98,6 +121,7 @@ public:
         std::uint64_t ppu_vram_revision,
         std::int32_t scroll_x, std::int32_t scroll_y,
         bool core2_available = true);
+    // The GPU is active and the PPU is in Mode 2 without BG2 mosaic.
     [[nodiscard]] bool eligible_mode2(
         const simulation::SnesPpuState& ppu) const noexcept;
     [[nodiscard]] bool bg2_plan_worker_enabled() const noexcept {
@@ -106,18 +130,30 @@ public:
     [[nodiscard]] const DisplayFrameTiming& last_frame_timing() const noexcept {
         return frame_timing_;
     }
+    // Composes the 400x240 background, the native model scene and the
+    // 400x240 foreground (alpha from write coverage). A nonzero revision
+    // names unchanged contents, whose texture is not uploaded again. Returns
+    // as present_mode2() does.
     bool present_native(const render::Framebuffer& background,
         const render::Framebuffer& foreground,const render::Palette256&,
         const native_engine::Scene&, std::uint32_t background_revision = 0U,
         std::uint32_t foreground_revision = 0U);
+    // Draws the Mode 1 layers from retained atlas textures around the native
+    // scene: the layers below the world, the world, BG2 high (and BG3 high
+    // when it has priority), then the foreground. An allocation failure
+    // disables this path from then on. Returns as present_mode2() does.
     bool present_mode1_layers(const Mode1LayerPlan&, const render::Framebuffer& foreground,
         const render::Palette256&, const native_engine::Scene&,
         std::uint32_t foreground_revision = 0U);
+    // Whether present_mode1_layers() can run: GPU and native engine active,
+    // and no allocation failure has disabled the retained layers.
     [[nodiscard]] bool retained_mode1_available() const noexcept {
         return gpu_active_ && native_engine_.ready() && mode1_layers_available_;
     }
     bool native_engine_ready() const noexcept { return native_engine_.ready(); }
     bool open_native_engine() { return native_engine_.open(); }
+    // Frees the retained Mode 1 layer textures once the GPU is idle; false
+    // when it stays busy for 500 ms.
     bool discard_test_atlases() {
         if (!wait_gpu_idle(500U)) return false;
         release_mode1_layers();
@@ -134,7 +170,10 @@ public:
     // Before HOME/POWER: let the last submitted frame finish while the
     // application still owns the GPU. Emits no new GPU work.
     [[nodiscard]] bool wait_gpu_idle(std::uint32_t timeout_ms) noexcept;
+    // True shows the source at native size; false scales its central
+    // 256x224 SNES area to 320x240 (4:3). See top_viewport().
     void set_wide(bool value) noexcept { wide_ = value; }
+    // Counts and byte sizes for the diagnostics reports.
     [[nodiscard]] std::size_t bg2_fragment_count() const noexcept {
         return tile_quads_.size();
     }
@@ -177,11 +216,16 @@ public:
                 * texture_width_ * texture_height_ * sizeof(std::uint16_t),
             bg2_plan_worker_ == nullptr,mode1_texture_bytes(),mode1_index_cache_bytes()};
     }
+    // Full-memory-dump progress panel, drawn on the bottom CPU framebuffer.
+    // False when that framebuffer is unavailable.
     [[nodiscard]] bool show_full_dump_progress(const char* stage,
         std::uint64_t written, std::uint64_t total);
     // Bottom-screen notice of the automatic test tour, in the same panel.
     [[nodiscard]] bool show_test_status(const char* stage, const char* detail,
         unsigned percent);
+    // The framebuffers last handed to scanout, for captures. Noting a top
+    // framebuffer also drops the cached frames of present(), present_native()
+    // and the right eye, so their next frame is drawn in full.
     const u8* top_framebuffer() const noexcept { return last_top_framebuffer_; }
     void note_top_framebuffer(const u8* pixels) noexcept {
         last_top_framebuffer_ = pixels;
@@ -211,6 +255,8 @@ private:
     bool prepare_mode1_layer(const Mode1LayerPlan&,unsigned,const render::Palette256&,bool& reused);
     bool draw_mode1_layer(const Mode1LayerPlan&,unsigned);
     void release_mode1_layers() noexcept;
+    // One BG2 draw: an 8x8 atlas slot, a solid palette colour, or a sample
+    // of the predecoded map texture (affine for rolled rows).
     struct TileQuad {
         std::uint16_t x, y, width, height, slot;
         std::uint16_t first_x, first_y;
@@ -221,6 +267,8 @@ private:
         bool affine_map{};
         std::int32_t map_y_q9{}, map_dy_dx_q8{};
     };
+    // The PPU state that, with the VRAM revision and scroll, decides the
+    // BG2 rectangle plan.
     struct Bg2PlanKey {
         std::uint8_t background_mode{}, mosaic{}, main_screen{}, bg2_screen_size{};
         bool bg2_tile_size_16{};
@@ -239,11 +287,15 @@ private:
         const simulation::SnesPpuState& ppu,
         std::uint64_t ppu_vram_revision,
         const render::Palette256& palette);
+    // Atlas slot of this character in this palette bank, expanded to
+    // RGBA5551 on first use; -1 when all 8192 slots are taken.
     [[nodiscard]] std::int16_t decode_tile(
         const simulation::SnesPpuState& ppu,
         const render::Palette256& palette,
         std::uint16_t character, std::uint8_t palette_bank);
     [[nodiscard]] bool draw_bg2_quads(const render::Palette256& palette);
+    // Refills the 512x512 map texture from the atlas unless its source and
+    // palette are unchanged; false when the atlas runs out of slots.
     [[nodiscard]] bool build_bg2_map(const simulation::SnesPpuState& ppu,
         std::uint64_t ppu_vram_revision, const render::Palette256& palette);
     void remember_bg2_map_source(const simulation::SnesPpuState& ppu,

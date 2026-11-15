@@ -9,6 +9,10 @@
 #include <cstring>
 #include <tuple>
 
+// BottomHudCache: per-part sources of the bottom-screen HUD picture, so a frame redraws only the
+// parts whose sources changed. Used by options_menu_3ds; host-tested by
+// tests/bottom_hud_cache_test.cpp.
+
 namespace starfox::platform_3ds {
 // The bottom picture is a fixed backdrop and eight parts that never share a
 // pixel: the lives readout, the bomb icons, the two meter fills, the
@@ -51,6 +55,7 @@ public:
         bool fps_shown{};
         std::array<char, 24> fps_label{};
     };
+    // Reduces this frame's meters, dialogue and FPS label to part sources.
     // The 59-pixel sockets fill in proportion to the cartridge meters; the
     // communication meter is 48 pixels for a health of 40.
     [[nodiscard]] static Sources sources(const simulation::MeterState& meter,
@@ -100,20 +105,22 @@ public:
     [[nodiscard]] bool valid() const noexcept { return valid_; }
 
     struct Stale {
-        // The parts whose pixels no longer follow from the sources.
+        // The parts whose pixels do not follow from the current sources.
         unsigned elements{};
         // The status OBJ records or their characters changed, so the status
         // layer the lives readout samples must be drawn again.
         bool sprites{};
         // Some source of the picture changed, whether or not a part shows
         // it (a boss meter, a message address while no message is up). The
-        // picture counts as changed then and is presented again, exactly
-        // when it was before it was kept in parts.
+        // picture then counts as changed and is presented again, on the same
+        // frames as a picture redrawn whole on every source change.
         bool changed{};
         // The stale parts that read a palette entry which changed: every
         // pixel of theirs may differ, not only what their sources moved.
         unsigned recoloured{};
     };
+    // Compares this frame's sources with the last capture(). An invalid cache
+    // reports every part stale and recoloured.
     [[nodiscard]] Stale stale(const simulation::SnesPpuState& ppu, std::uint64_t revision,
         const simulation::MeterState& meter, const simulation::DialogueState& dialogue,
         const Sources& sources, const render::Palette256& palette) {

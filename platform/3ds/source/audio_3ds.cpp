@@ -8,6 +8,8 @@
 
 namespace starfox::platform_3ds {
 namespace {
+// Microseconds for the packet timing diagnostics: the ARM11 system tick on
+// 3DS, the stub's millisecond clock in host tests.
 std::uint64_t audio_now_us() {
 #ifdef __3DS__
     const auto ticks=svcGetSystemTick();
@@ -19,6 +21,8 @@ std::uint64_t audio_now_us() {
 }
 
 
+// push_samples() derives the real CSND rate from this timer value:
+// 0x3FEC3FC / 2094, about 32,009.5 frames per second.
 static_assert(CSND_TIMER(audio::Spc700Audio::sample_rate) == 2094U);
 
 Audio3ds::Audio3ds() {
@@ -345,8 +349,8 @@ bool Audio3ds::push_samples(std::span<const std::int16_t> interleaved) {
     // CSND has no application-visible playback cursor. A two-second ring and
     // a 20 ms write guard keep CPU writes away from the estimated read head.
     // The hardware channel is started once; restarting a 50 ms one-shot on
-    // each logic tick used to truncate or gap the waveform as frame time
-    // varied. A missed producer deadline is recorded instead of hidden.
+    // each logic tick would truncate or gap the waveform whenever frame time
+    // varies. A missed producer deadline is recorded instead of hidden.
     if (!playing_) {
         std::memset(pcm_left_, 0, ring_bytes_);
         std::memset(pcm_right_, 0, ring_bytes_);
@@ -465,8 +469,9 @@ bool Audio3ds::push_samples(std::span<const std::int16_t> interleaved) {
         }
         return true;
     };
-    // Initial allocation was zeroed in full. Subsequent updates flush only
-    // the packet plus the newly cleared future segment.
+    // The first packet after a start zeroed both rings in full above, so it
+    // flushes them in full. Later packets flush only the packet, its 32-frame
+    // tail and the newly cleared future segment.
     const bool flushed = !playing_
         ? R_SUCCEEDED(GSPGPU_FlushDataCache(pcm_left_, ring_bytes_))
             && R_SUCCEEDED(GSPGPU_FlushDataCache(pcm_right_, ring_bytes_))
