@@ -4,9 +4,9 @@ Verification is scoped to the environment and workload actually executed.
 Host tests, ARM compilation, emulator execution, and physical-console tests
 are separate evidence. Current status is in [STATUS.md](STATUS.md).
 
-The local **Prueba 4** candidate adds a production-path GPU self-test and
-per-capture gameplay pixel comparisons. See [its guide](PRUEBA-4.md) for output
-paths, scope and the still-pending physical acceptance criteria.
+Console measurements come from the built-in START+SELECT tour, which also runs
+a production-path GPU self-test and per-capture gameplay pixel comparisons. See
+[Hardware test tour](HARDWARE-TESTS.md) for its output and its limits.
 
 ## ROM-free public suite
 
@@ -49,6 +49,17 @@ The engine CMake suite contains additional raster, simulation, audio, BG2,
 collision, strategy, shape, and stereo tests. Some require prepared ROMs,
 symbol maps, or private generated headers. Do not mark an unavailable
 input-dependent test as passed. Follow [Building](BUILDING.md).
+
+Data-dependent tests are registered only when their inputs exist. Pass the
+assembled ROMs and symbol tables with `STARFOX_ROM_FILE`, `STARFOX_SYMBOLS_FILE`,
+`STARFOX_EX_ROM_FILE` and `STARFOX_EX_SYMBOLS_FILE`; the private headers with
+`STARFOX_PRIVATE_INCLUDE_DIR` and `STARWING_UI_INCLUDE_DIR`. Python checks of
+cartridge-derived catalogs skip, naming the missing file, when those catalogs
+are not supplied.
+
+`starfox_comms_timing_*` uses the cartridge as its own oracle: it runs the real
+message routines and compares the host's teammate-meter decision with the
+meter the cartridge draws into its Super FX bitmap on every frame.
 
 Compile and link the actual ARM frontend after module moves. Verify that the
 source version reaches the runtime definition, fingerprint includes linked

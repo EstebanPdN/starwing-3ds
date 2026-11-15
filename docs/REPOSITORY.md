@@ -9,8 +9,8 @@ notices. Implementation, resources and supporting documents are grouped below.
 
 | Location | Responsibility |
 | --- | --- |
-| `AI_DEVELOPMENT.md` | The owner’s explanation of Codex use, development decisions, tests and community discussions. |
-| `src/` | Native engine and platform-independent implementation. |
+| `AI_DEVELOPMENT.md` | The owner’s explanation of Codex and Claude Code use, development decisions, tests and community discussions. |
+| `src/` | Native engine and platform-independent implementation; `src/app/` holds host-only trace and preview tools. |
 | `include/` | Public and internal engine declarations. |
 | `platform/` | Nintendo 3DS device adapters and packaging. |
 | `tools/config/` | Upstream source pins and reproducible source-preparation patches. |

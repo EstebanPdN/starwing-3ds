@@ -13,6 +13,7 @@ performance samples.
 | `L + R + B` | Full capture with additional private state and memory pages. |
 | `L + R + SELECT` | Toggle the diagnostic overlay. |
 | `L + R + X` | Delete generated capture folders, including unfinished captures. |
+| `START + SELECT` | Start the [hardware test tour](HARDWARE-TESTS.md); hold `R` as well for the long tour. |
 
 The overlay also exposes touch cards. If the `overlay` preference is enabled,
 SELECT can toggle it directly. Full capture takes priority when both action

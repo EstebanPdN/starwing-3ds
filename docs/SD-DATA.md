@@ -26,6 +26,7 @@ supported revision. Filenames need `.sfc` or `.smc` for selection.
 | `last-error.txt` | Most recent startup/runtime error; a successful new launch clears the previous record. |
 | `gpu-recovery.txt` | Appended line for each automatic top-screen recovery: build, stage, scene and failure counters. |
 | `dumps/` | Numbered diagnostics; full captures contain private process memory. |
+| `prueba/NN/` | One folder per [hardware test tour](HARDWARE-TESTS.md): results and GPU self-test records. |
 
 SRAM and checkpoints use temporary-file replacement. A failed or incomplete
 write must not be interpreted as a newly completed save. Do not edit a save or

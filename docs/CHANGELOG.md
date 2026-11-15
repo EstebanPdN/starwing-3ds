@@ -2,6 +2,22 @@
 
 Published releases are listed first; earlier entries describe development candidates.
 
+## Unreleased — 1.2-E3 (development)
+
+Not published as a package. See [Status](STATUS.md) for the evidence and its limits.
+
+- Run the cartridge's 65C816 code in a compact interpreter sized for the Old 3DS
+  instruction cache, replacing the ahead-of-time compiled logic.
+- Replace three hot cartridge loops with exact native kernels and copy only
+  changed objects between the host and work RAM.
+- Stop waiting for the audio worker on the main thread; redraw only the changed
+  parts of both HUDs; pack the world raster for the GPU.
+- Add the START+SELECT hardware test tour with a GPU self-test.
+- Fix Star Fox EX levels that could end incorrectly after a map start.
+- Keep build machine paths out of the binaries; label dumps with their build.
+- Remove the retired desktop features, the 0.1 diagnostic application and unused
+  tools from the source; repair and extend the host test suite.
+
 ## 1.2-E2 — 2026-10-21 (experimental)
 
 > ⚠️ **Experimental release — known HOME Menu freeze**

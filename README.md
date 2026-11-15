@@ -102,9 +102,6 @@ See [Updating](docs/UPDATING.md) for installation and recovery.
 
 ## Documentation
 
-- [Repository map and maintenance conventions](docs/REPOSITORY.md)
-
-
 | Guide | Purpose |
 | --- | --- |
 | [Compatibility and current status](docs/COMPATIBILITY.md) | Supported inputs, implemented paths, and validation limits. |
@@ -113,9 +110,12 @@ See [Updating](docs/UPDATING.md) for installation and recovery.
 | [Diagnostics](docs/DIAGNOSTICS.md) | Captures, memory errors, timing fields, and private reporting. |
 | [Building](docs/BUILDING.md) | Pinned toolchain, private inputs, 3DSX, and CIA packaging. |
 | [Architecture](docs/ARCHITECTURE.md) | Runtime flow, module boundaries, ownership, threads, and caches. |
+| [Engine design](docs/ENGINE-ARCHITECTURE.md) | Source ticks and presentation, cartridge code execution, and equivalence testing. |
 | [Testing](docs/TESTING.md) | ROM-free checks, target checks, and the evidence ladder. |
+| [Hardware test tour](docs/HARDWARE-TESTS.md) | The START+SELECT console tour, its GPU self-test, and its files. |
 | [Verification status](docs/STATUS.md) | What was checked for the current source and package. |
 | [Source provenance](docs/UPSTREAM.md) | Upstream revisions and publication boundaries. |
+| [Repository map](docs/REPOSITORY.md) | Where code lives and the maintenance conventions. |
 
 ## Development
 
@@ -127,6 +127,10 @@ cd starwing-3ds
 python3 tools/check-publication.py
 bash tools/test-host.sh
 ```
+
+The `main` branch carries the unreleased 1.2-E3 development line, focused on
+Old 3DS performance; downloads above remain the latest published package. See
+[Status](docs/STATUS.md) for what has and has not been verified.
 
 A full game build additionally needs devkitPro and the locally prepared inputs
 in the [build guide](docs/BUILDING.md). The clean source checkout alone does
@@ -146,7 +150,7 @@ for reproducible reports. Capture shortcuts and sharing precautions are in
   tools, and upstream work; individual credits are in [CREDITS.md](docs/legal/CREDITS.md).
 - Nintendo and Argonaut Software — the original Star Fox / Starwing.
 - devkitPro contributors — devkitARM, libctru, Citro3D, and Citro2D.
-- Esteban PDN — Nintendo 3DS adaptation and repository maintenance, with help from Codex.
+- Esteban PDN — Nintendo 3DS adaptation and repository maintenance, with help from Codex and Claude Code.
 - Snipy44300 — ALttP Community Patches optimization reference.
 
 ## License and legal notice

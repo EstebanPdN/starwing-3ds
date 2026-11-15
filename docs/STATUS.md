@@ -1,6 +1,49 @@
 # Verification status
 
 Current development version: **1.2-E3** (unreleased); CIA internal title version: **103**.
+The latest published package is **1.2-E2** (experimental), described after the
+1.2-E3 section.
+
+## 1.2-E3 development line (unreleased)
+
+This line targets Old 3DS frame rate. Eight hardware test rounds showed where
+the time goes; the changes below follow those measurements. No package has
+been published from it.
+
+### What changed
+
+- The cartridge's 65C816 code runs in a compact two-step interpreter whose
+  opcode handlers are generated from the pinned RetroCPU templates
+  (`tools/generate-lean-65816.py`): the same bus accesses, flags and cycle
+  counts, in about 47 KB of code that fits the Old 3DS instruction cache. It
+  replaces 12.4 MB of ahead-of-time compiled logic that the console ran
+  11.6% slower and that took 13.6 MiB of heap.
+- Exact native kernels replace three hot cartridge loops (collision, object
+  and sprite work), and the object bridge between the host pool and work RAM
+  copies only what changed instead of comparing and copying whole tables.
+- The main thread no longer waits for the audio worker every frame; the top
+  and bottom HUD redraw only what changed; the world raster is packed for the
+  GPU.
+- A START+SELECT [hardware test tour](HARDWARE-TESTS.md) measures 22
+  scenarios and checks the GPU with 60 ROM-free patterns.
+- Fixed: Star Fox EX levels could end incorrectly because starting a map left
+  the object bridge trusting stale work-RAM copies.
+- Builds no longer embed the build machine's paths, and dumps record the
+  build that produced them.
+
+### Evidence
+
+| Kind | Result |
+| --- | --- |
+| Host exactness | Per-tick game state identical to the reference engine over 50 console snapshots × 300 ticks, 64 tour segments and 36 scenes from power-on (Original and EX). |
+| Host test suite | All 85 CMake tests pass on macOS with the private inputs supplied; the ROM-free suite (`tools/test-host.sh`) passes on macOS and runs in GitHub Actions on Ubuntu. |
+| ARM cost simulator | A cycle model calibrated on 3,713 console ticks (median error 3.6%) predicts a mean logic tick of 8.2 ms (26.0 ms for round 8) and 4.0 ms of frame building (9.5 ms for round 8). These are predictions, not measurements. |
+| Console | Round 8 measured drops to 13-14 FPS on Old 3DS while flying. The 1.2-E3 changes have not been measured on a console yet. |
+
+Sustained FPS on Old 3DS, audio on real threads and the HOME Menu freeze
+remain open until a console tour confirms them.
+
+## 1.2-E2 (published experimental release)
 
 > ⚠️ **Experimental release — known HOME Menu freeze**
 >

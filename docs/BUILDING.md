@@ -30,6 +30,33 @@ the existing build environment variables, outside the source checkout:
 
 Missing inputs must stop configuration; do not substitute another version's
 ROM data or publish private inputs to make a source-only check succeed.
+
+### Producing the private inputs
+
+These tools create the inputs above from sources you supply. Their output stays
+local and out of Git.
+
+| Tool | Produces |
+| --- | --- |
+| `tools/build_upstream.ps1`, `tools/build_starfox_ex.ps1` | The assembled UltraStarFox and Star Fox EX ROMs and symbol tables, from the pinned source commits with the DOSBox-X toolchain those projects ship (Windows). |
+| `tools/generate_title_logos.py` | `title_logos.hpp`, the regional title-logo tiles, from the UltraStarFox source data. |
+| `tools/extract_ex_dialogue.py`, `tools/import_dialogue_catalog.py` | The EX and Original dialogue catalogs used for localization. |
+| `tools/generate_dialogue_header.py`, `tools/generate_ex_dialogue_header.py` | The dialogue catalog headers, from those catalogs. |
+| `platform/3ds/tools/make-entry-panel.py` | `entry_panel_art_data.hpp`, the menu entry-panel artwork. |
+| `platform/3ds/tools/fix-makerom-title-indices.py` | A source fix for building `makerom` locally when its title-version names collide. |
+
+`tools/generate_localization_font.py` and `tools/generate_menu_header.py`
+regenerate the tracked font and menu headers. `tools/generate-lean-65816.py`
+regenerates `src/simulation/wdc65816_lean_ops.inl`; its output must stay
+byte-for-byte identical to the tracked file.
+
+### Local test builds
+
+`STARWING_CIA_TITLE` changes only the HOME Menu name of a local CIA. A test
+build also changes `platform/3ds/version.txt` to its label (for example
+`Prueba 10`, which shows the test badge) and raises
+`platform/3ds/cia-version.txt` above the installed title version. Do not commit
+those two edits.
 See [credits](legal/CREDITS.md) and [third-party notices](legal/THIRD_PARTY_NOTICES.md).
 
 ## Native verification
@@ -44,8 +71,10 @@ ctest --test-dir build-host --output-on-failure
 
 The lightweight shell suite is ROM-free. The full CMake engine suite requires
 the same private generated headers as the engine; tests requiring game data
-retain their explicit input checks. Host results do not establish physical
-3DS presentation, HOME/sleep or performance acceptance.
+are registered only when `STARFOX_ROM_FILE`, `STARFOX_SYMBOLS_FILE`,
+`STARFOX_EX_ROM_FILE` and `STARFOX_EX_SYMBOLS_FILE` point at existing files.
+Host results do not establish physical 3DS presentation, HOME/sleep or
+performance acceptance.
 
 ## Network dependencies
 

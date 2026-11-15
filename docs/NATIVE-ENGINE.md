@@ -92,7 +92,7 @@ before the final composite. Frame acquisition and shutdown waits are bounded.
 If completion cannot be established, GPU resources are quarantined instead of
 being freed while hardware might still use them. VBlank is not a completion fence.
 
-See [Prueba 4](PRUEBA-4.md) for the exact validation scope and hardware test files.
+See [Hardware test tour](HARDWARE-TESTS.md) for the GPU self-test, the per-capture pixel comparison and their files.
 
 ## Audio work and exactness
 

@@ -5,6 +5,8 @@ adapter under `platform/3ds/`. This is a SNES Star Fox / Starwing adaptation.
 This branch maintains the 3DS adapter and its shared engine/host verification
 tools. Independent desktop and other-console application shells have been
 retired; shared engine dependencies retain their source and attribution.
+[Engine design](ENGINE-ARCHITECTURE.md) explains how the engine runs the
+cartridge code and how its exactness is tested.
 
 ## Source map
 
@@ -12,13 +14,14 @@ retired; shared engine dependencies retain their source and attribution.
 | --- | --- |
 | `include/starfox/` | Engine interfaces: assets, simulation, rendering, audio, input, timing, and state. |
 | `src/assets/` | Validated ROM, BPS, shape, symbol, and runtime-companion decoding. |
-| `src/simulation/` | Source game flow, objects, strategies, collision, map VM, and remaining 65C816 boundaries. |
+| `src/simulation/` | Source game flow, objects, strategies, the map VM and object bridge, and the 65C816 interpreter and native kernels. |
 | `src/render/` | Indexed rasterization, SNES background/sprite decoding, palettes, and model drawing. |
 | `src/audio/` | SPC state and audio processing. |
 | `platform/3ds/source/` | Console services, presentation, input, menu, storage, and diagnostics. |
 | `platform/3ds/vendor/citro2d/` | Attributed Citro2D fork with scoped cache-flush changes. |
 | `tests/` | Portable, synthetic, and data-dependent regression checks. |
 | `tools/` | Builders, validators, source preparation, and development utilities. |
+| `src/app/` | Host command-line traces and previews used by tests and investigations; not part of the 3DS game. |
 
 ## Console modules
 
@@ -36,6 +39,7 @@ retired; shared engine dependencies retain their source and attribution.
 | `memory_3ds.*` | Allocation-failure context and a pre-unwind memory snapshot. | The failure handler does not allocate or write files. |
 | `updater_3ds.*`, `update_manifest.*` | Stable release metadata, HTTPS transfer, digest checks, and executable replacement. | One worker; installation requires confirmation and package identity. |
 | `diagnostics_3ds.*` | Capture staging, files, checksums, completion markers, and progress. | Whole-process dumps are private process memory. |
+| `test_mode_3ds.hpp`, `gpu_self_test.*` | The START+SELECT [hardware test tour](HARDWARE-TESTS.md), its GPU self-test and pixel comparisons. | Runs only when requested; capture I/O is excluded from measured windows. |
 
 ## Startup and runtime flow
 
