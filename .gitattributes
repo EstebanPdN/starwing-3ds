@@ -3,4 +3,5 @@
 # Preserve exact upstream match strings and vendor patch context.
 tools/config/*.patch -whitespace
 tools/cmake/SpcState.cmake -whitespace
+tools/cmake/SpcPortPipeline.cmake -whitespace
 platform/3ds/update-dependencies/*.patch -whitespace
