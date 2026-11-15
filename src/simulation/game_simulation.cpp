@@ -1,3 +1,9 @@
+// GameSimulation in file order: boot and symbol binding (constructor), setup
+// menu and cheats, presentation snapshots, input and IRQ audio, the pace
+// model, maps and routes, the front-end screens, present_frame() for each
+// 60 Hz raster, the planet-map tick, level exits and stage results, the
+// transfer and view bridges, then tick() for each 20 Hz source update.
+// The save states are in game_state.cpp.
 #include "starfox/render/pixel_filter.hpp"
 #include "starfox/simulation/game_simulation.hpp"
 #include "starfox/simulation/source_painter_order.hpp"
@@ -1878,7 +1884,7 @@ std::uint8_t GameSimulation::game_over_background_subtract() const noexcept {
         return 0U;
     }
     // GAMEOVER_L holds HALFFADE=$1f for fifty TRANSFER_L calls. Its reveal
-    // loop then presents the old value once more before decrementing through
+    // loop then presents $1f once more before decrementing through
     // $1e..$01; the next ordinary transfer is the first zero-subtraction
     // raster. frontend_frames_ is incremented once per completed transfer.
     if (frontend_frames_ <= 51U) return 31U;
@@ -2402,9 +2408,9 @@ constexpr double pace_debt_limit = 2.0;
 // Video phases the current draw list costs, as a real number. The caller
 // rounds it; the fraction is carried in pace_debt_ rather than discarded.
 std::optional<double> GameSimulation::draw_list_pressure() const noexcept {
-    // Fallback for a cold or absent face table: count objects, which is what
-    // this model did before the table existed. Unchanged from 0.0.4.1, so a
-    // build whose host never supplies the table behaves exactly as before.
+    // A cold or absent face table gives no estimate: pace_decision() then
+    // falls back to counting objects, the cadence a host that never supplies
+    // the table always gets.
     if (shape_face_counts_ == nullptr || shape_face_counts_->empty()) {
         return {};
     }
@@ -2457,7 +2463,7 @@ GameSimulation::pace_decision() const noexcept {
     }
     // The intro is choreographed to a roughly 38-second music cue. A handful
     // of large models makes draw-count pressure underestimate its work:
-    // that completed Original in ~25 seconds and EX in ~30. Keep a stable
+    // with it Original completes in ~25 seconds and EX in ~30. Keep a stable
     // approximate cadence for each cartridge's different cinematic script.
     if (flow_state_ == GameFlowState::intro) {
         return {static_cast<std::uint8_t>(starfox_ex_cartridge_
@@ -2474,8 +2480,9 @@ GameSimulation::pace_decision() const noexcept {
             level_clear_player_strategies_.end(), objects_.get(player_).strategy_address)
             != level_clear_player_strategies_.end()) {
         // CL_* map distances and PCSTRATS/GCSTRATS countdowns share one
-        // source-update clock. The launch-only 6/7-raster penalty stretched
-        // the silent gaps between post-boss messages and delayed the tally.
+        // source-update clock. The launch-only 6/7-raster penalty would
+        // stretch the silent gaps between post-boss messages and delay the
+        // tally.
         return {3U, {}};
     }
     // Set by the scramble branch below and applied to the curve at the end.
@@ -2493,8 +2500,8 @@ GameSimulation::pace_decision() const noexcept {
         // SEND_MESSAGE gives post-boss chatter exactly 50 source updates.
         // At this point the boss has left the draw list and the cartridge is
         // back at its 20 Hz ceiling. Counting the lingering debris handles as
-        // live Super FX pressure stretched those 50 updates well past the
-        // original 2.5 seconds in ORIGINAL SPEED mode.
+        // live Super FX pressure would stretch those 50 updates well past the
+        // cartridge's 2.5 seconds in ORIGINAL SPEED mode.
         return {3U, {}};
     }
     // Keep the persistent launch gate, with a minimum while geometry can add cost.
@@ -2909,8 +2916,8 @@ void GameSimulation::enter_continue_screen() {
 
     // BGFOXPAC supplies the 2D Continue artwork, then SETPAL 1 replaces the
     // dedicated 3D palette row used by the interactive Arwing. Without this
-    // second source step the model inherited Fox/background hues (purple in
-    // the retail pack) even after its projection was corrected.
+    // second source step the model takes Fox/background hues (purple in the
+    // retail pack).
     Wdc65816Registers model_palette_registers;
     model_palette_registers.a = 1U;
     model_palette_registers.status = 0x24U;
@@ -2920,7 +2927,7 @@ void GameSimulation::enter_continue_screen() {
         // EX relocates GAMEPALETTES and leaves the first OBJ row holding a
         // gameplay lighting ramp when FOXY_CONTINUE is entered through the
         // host transition. Fox's body is BG2 palette 4, while his animated
-        // arm and shoe are OBJ palette 0; the stale row therefore made only
+        // arm and shoe are OBJ palette 0; the stale row therefore makes only
         // those moving pieces nearly black. The retail screen duplicates the
         // body colours into OBJ entries 1..14 and supplies one darker final
         // brown. Rebuild that row from the active, variant-correct body palette
@@ -2959,8 +2966,8 @@ void GameSimulation::enter_continue_screen() {
     // The Continue Arwing itself is drawn by MSHOWOBJ3 below. Keep one
     // non-presented host slot alive, however: INITGAME_L uses the existing
     // player handle as its bridge while rebuilding EX's stage checkpoint.
-    // Clearing the pool and leaving player_ at zero allowed the route fade
-    // to finish but produced gameplay with no active player afterward.
+    // Clearing the pool and leaving player_ at zero lets the route fade
+    // finish but produces gameplay with no active player afterward.
     const auto player_seed = objects_.allocate_after();
     auto& seed = objects_.at(player_seed);
     seed.shape = static_cast<std::uint16_t>(fox_shape_);
@@ -3069,7 +3076,7 @@ void GameSimulation::enter_ex_pregame_menu(bool model_test) {
     // The hack's experimental MAX FPS modes intertwine transfer IRQ cadence,
     // strategy cadence and APU servicing. The native PC runtime deliberately
     // exposes render FPS separately, so keep EX on its stable/default 20 mode
-    // and do not let a legacy SRAM value silently select 30/60 here.
+    // and do not let a value stored in SRAM select 30/60 here.
     map_.write_native_byte(ex_fps_speed_, 0U);
     map_.write_native_byte(ex_ntsc_pal_swap_, 0U);
     const std::array frame_stops{ex_foxy_self_, ex_restart_};
@@ -3459,12 +3466,13 @@ GameTickResult GameSimulation::tick_end_game_sequence(
     // position/target camera and Super FX matrix calls. Do not call the host
     // camera path here: its bounded angle subroutines would replace the
     // suspended ending task's CPU registers and return stack. But allocation
-    // order is not painter order: it let ships overwrite stage percentages.
+    // order is not painter order: it lets ships overwrite stage percentages.
     // Reuse the source depth/bias/CMP rule without culling or mutating objects.
     draw_order_ = ending_painter_order(map_,*rom_,objects_,view_position_,world_matrix_);
     // ENDSEQ_L runs its own ENDTRANS loop, including DO_CIRCLE_EXPLOSION_L.
     // Unlike a gameplay TRANSFER it never reaches the host's normal circle
-    // snapshot below, so the boss dossier's round wipes were silently lost.
+    // snapshot below, so without this block the boss dossier's round wipes
+    // would not show.
     // Its mroundwipeclear program is screen-centred rather than object-led.
     if (boss_roll_active()) {
         circle_effect_ = {
@@ -3656,9 +3664,8 @@ void GameSimulation::start_initial_route() {
     registers.status = 0x24U;
     map_.call_native_routine(initialize_all_, registers, 5'000'000);
     if (starfox_ex_cartridge_) {
-        // EX's cartridge boot starts on PLANETS2 with routes 4-6. The
-        // original host entered PLANETS unconditionally and therefore hid
-        // the entire second campaign.
+        // EX's cartridge boot starts on PLANETS2 with routes 4-6. Entering
+        // PLANETS here would hide the entire second campaign.
         select_planet_campaign(true);
         map_.write_native_byte(which_route_, 4U);
     }
@@ -3667,7 +3674,7 @@ void GameSimulation::start_initial_route() {
     map_.call_native_routine(initialize_planets_, registers, 5'000'000, true);
     // PLANETSEQ begins with CONVERTROUTE: gameplay's internal routes 0/1
     // are swapped to the selector's NORMAL/EASY display order. Omitting this
-    // made a fresh game show LEVEL 2 while still launching LEVEL1_1.
+    // makes a fresh game show LEVEL 2 while still launching LEVEL1_1.
     auto route = map_.read_native_byte(which_route_);
     if (route < 2U) {
         map_.write_native_byte(
@@ -3728,9 +3735,9 @@ std::uint8_t GameSimulation::redraw_post_level_route() {
     }
     // PLANETSEQ deliberately leaves CURRENTPLANET on the preceding record
     // after its second DRAWPLANETLINES call. MOVESHIPALONGPATH changes it to
-    // the destination only after consuming the authored segment list. The
-    // old host restored the first call's destination here, making the map
-    // visibly select the next level before the Arwing had even departed.
+    // the destination only after consuming the authored segment list.
+    // Restoring the first call's destination here would make the map select
+    // the next level before the Arwing departs.
     map_.write_native_word(current_planet_, route_origin_planet);
     map_.write_native_word(stage_, saved_stage);
     planet_route_blink_frames_ = 0U;
@@ -3845,10 +3852,10 @@ void GameSimulation::enter_planet_map(
     reset_scene_transition_state();
     // SETUP_PLANETS_L zeros W12SEL/W34SEL/WOBJSEL and all of the window
     // logic/mask registers. The native variables can still contain the last
-    // mapendwipe state because PLANETSEQ no longer calls TRANSFER_L, but on
-    // hardware that stale state is no longer visible. Clear the host-facing
-    // latches too so the completed stage's circular wipe cannot be composed
-    // over the freshly initialized planet map.
+    // mapendwipe state, because PLANETSEQ does not call TRANSFER_L, but with
+    // those registers cleared the hardware does not show it. Clear the
+    // host-facing latches too so the completed stage's circular wipe cannot
+    // be composed over the freshly initialized planet map.
     if (!route_display_order_) {
         auto route = map_.read_native_byte(which_route_);
         if (route < 2U) {
@@ -3892,7 +3899,7 @@ void GameSimulation::enter_planet_map(
     // CLEARHVOFS_L resets the cartridge's HDMA work flags, but the host PPU
     // snapshot also retains the last captured gameplay offset tables.  Mode
     // 3 does not use those tables on hardware.  Leaving the host-only flags
-    // armed shifted every scanline of BG2 independently, scrambling the
+    // armed shifts every scanline of BG2 independently, scrambling the
     // labels and boxes on the map reached after a real stage.
     map_.set_bg2_vertical_offsets_enabled(false);
     map_.capture_bg2_horizontal_offsets(0U, false);
@@ -3904,7 +3911,7 @@ void GameSimulation::enter_planet_map(
     // PLANETSEQ copies MYCRAPCHARS immediately after SETUP_PLANETS_L. It is
     // 30 OBJ tiles containing both the four-piece map ship and the route
     // dots. SETUP_PLANETS_L clears VRAM, so omitting this outer-sequence DMA
-    // left valid OAM records pointing at fully transparent character data.
+    // leaves valid OAM records pointing at fully transparent character data.
     std::array<std::uint8_t, 4U * 8U * 30U> planet_objects{};
     for (std::size_t byte = 0U; byte < planet_objects.size(); ++byte) {
         planet_objects[byte] = rom_->read8(
@@ -3932,8 +3939,8 @@ void GameSimulation::enter_planet_map(
     // PLANETSEQ selects the special map track from the destination saved by
     // its first DRAWPLANETLINES call, before its second call leaves
     // CURRENTPLANET on the stage the ship is departing. Testing the latter
-    // made the SPC path miss the black-hole track (while MSU happened to be
-    // selected independently) and could retain the wrong special-map state.
+    // makes the SPC path miss the black-hole track and can retain the wrong
+    // special-map state.
     registers = {};
     registers.status = 0x24U;
     map_.call_native_routine(map_music_, registers, 20'000'000, true);
@@ -3965,8 +3972,8 @@ void GameSimulation::enter_planet_map(
     map_.write_native_word(new_ship_position_, start);
     // DRAWPLANETLINES leaves X1 at the first not-yet-drawn segment. The
     // post-level .switchonloop feeds that cursor straight into
-    // MOVESHIPALONGPATH; clearing it here skipped the authored waypoints and
-    // could leave the Arwing absent or jumping directly to the destination.
+    // MOVESHIPALONGPATH; clearing it here skips the authored waypoints and
+    // can leave the Arwing absent or jumping directly to the destination.
     // A fresh route-selection screen does not travel and may start clean.
     if (selecting_route) map_.write_native_word(route_x_, 0U);
     else if (map_.read_native_word(stage_) == 0U) {
@@ -4033,7 +4040,7 @@ void GameSimulation::animate_planet_frame(bool advance_rotation) {
         // PLANETS.ASM's .shownext loop stores -1 in CURRENTPLANET before each
         // redraw, which makes DRAWPLANETSPRITES include all sixteen map cells.
         // Keep the actual route destination for MOVESHIPALONGPATH below; using
-        // it during the draw omitted that planet and left an empty map box.
+        // it during the draw omits that planet and leaves an empty map box.
         map_.write_native_word(current_planet_, 0xffffU);
     }
     registers = {};
@@ -4055,9 +4062,9 @@ void GameSimulation::animate_planet_frame(bool advance_rotation) {
         map_.write_native_word(route_x_, route_cursor);
         // Y1 is the pixel accumulator paired with X1's path cursor. Host-side
         // buffer priming performs extra native draw calls before .shownext;
-        // retaining only X1 let those calls replace Y1, so the first waypoint
-        // could veer toward unrelated map scratch before later settling at
-        // the correct destination.
+        // retaining only X1 lets those calls replace Y1, so the first waypoint
+        // can veer toward unrelated map scratch before settling at the
+        // correct destination.
         map_.write_native_word(route_y_, route_position);
     }
     if (flow_state_ == GameFlowState::planet_travel
@@ -4158,8 +4165,8 @@ void GameSimulation::prepare_planet_briefing_graphics() {
         fox.size(), fox.begin());
 
     // MCLRPEPPERSCREEN and DMAPEPPERSCREEN install an empty 192x192 4-bpp
-    // character bitmap before DOG.SCR is exposed. Leaving this range full of
-    // the old planet bitmap made the portrait screen appear as random text
+    // character bitmap before DOG.SCR is exposed. Left full of the previous
+    // planet bitmap, this range shows on the portrait screen as random text
     // and map fragments.
     std::array<std::uint8_t, 16U * 24U * 32U> empty_pepper_screen{};
     map_.write_vram(static_cast<std::uint16_t>(
@@ -4266,7 +4273,8 @@ void GameSimulation::present_frame() {
         && frontend_phase_ == FrontendPhase::intro_final_hold) {
         // INTRO_L presents the transfer in which the Arwing crosses the
         // camera before its EXITINTRO check arms the quick fade. Starting
-        // the host fade in the strategy tick hid that completed close pass.
+        // the host fade in the strategy tick would hide that completed close
+        // pass.
         // Preserve its first 60 Hz raster, then begin the source's 11,-2
         // brightness sequence on the following presentation.
         if (++frontend_frames_ >= 2U) {
@@ -4612,8 +4620,9 @@ GameTickResult GameSimulation::tick_planet_map(const input::TickInput& input) {
         }
     } else if (frontend_phase_ == FrontendPhase::planet_route) {
         // The source remains in .switchonloop until MOVESHIPALONGPATH returns
-        // carry. A host timeout used to accept input with a half-advanced ship
-        // and then enter briefing with corrupt planet/path state.
+        // carry. Accepting input earlier, after a host timeout for example,
+        // leaves a half-advanced ship and enters the briefing with corrupt
+        // planet/path state.
         const auto arrived = planet_travel_complete_;
         const auto confirmed = !planet_arrival_confirmation_required_
             || (input.pressed & starfox::input::a) != 0U;
@@ -4663,8 +4672,8 @@ void GameSimulation::service_level_exit() {
     if (flow_state_ == GameFlowState::credits) {
         if (exit == 8U) {
             // CREDITS.ASM intentionally continues presenting its completed
-            // THE END composition. Freezing GameSimulation here stopped its
-            // paths, prevented EX's final score overlay, and ignored the
+            // THE END composition. Freezing GameSimulation here would stop
+            // its paths, prevent EX's final score overlay, and ignore the
             // source's post-credits input loop.
             map_.write_native_word(level_finished_, 0U);
             if (starfox_ex_cartridge_) {
@@ -4718,7 +4727,7 @@ void GameSimulation::service_level_exit() {
     // MAIN.ASM increments the stage belonging to the level that just ran.
     // STAGE is also route-drawing work RAM and can already contain the next
     // record by the time the host observes LEVELFINISHED (notably in EX).
-    // Advancing that live value skipped stage 1 and moved Corneria directly
+    // Advancing that live value skips stage 1 and moves Corneria directly
     // to stage 2. The launch latch is the authoritative completed stage.
     const auto next_stage = static_cast<std::uint16_t>(
         active_route_stage_ + 1U);
@@ -5229,7 +5238,7 @@ void GameSimulation::calculate_view() {
     // a following camera or a fixed-position camera. Native strategies use
     // that synthetic object for distance gates (notably Corneria's gradual
     // ExitBase pullback), as well as positional sound. Leaving VIEWPT on the
-    // player made those gates read a zero distance and collapse instantly.
+    // player makes those gates read a zero distance and collapse instantly.
     map_.write_native_word(view_point_, view_block_);
     if ((map_.read_native_byte(view_type_) & 1U) != 0U) {
         const auto target = map_.read_native_word(view_to_object_);
@@ -5431,7 +5440,7 @@ GameTickResult GameSimulation::tick(const input::TickInput& input) {
     // Snapshot the live encounter track before SETBLACK/background setup or
     // either cartridge's strategies can clear the last boss-health marker.
     // EX does that earlier in its transfer than retail; taking this sample
-    // near the draw-list build missed EX and left both death recovery music
+    // near the draw-list build misses EX and leaves both death recovery music
     // and post-boss communication timing without an encounter boundary.
     if (flow_state_ == GameFlowState::gameplay
         && map_.read_native_byte(boss_max_health_) != 0U
@@ -5550,11 +5559,11 @@ GameTickResult GameSimulation::tick(const input::TickInput& input) {
     }
     if (live_retail_stage_results) {
         // Retail END_LEVEL_SEQ calls TRANSFER_L at the head of every tally
-        // iteration. The old host path returned from tick_stage_results here,
-        // freezing the complete encounter beneath the percentage counter.
-        // Advance only the tally state here, then fall through to the normal
-        // translated transfer below so objects, effects, background and audio
-        // continue exactly as they do in the cartridge loop.
+        // iteration. Returning from tick_stage_results here would freeze the
+        // complete encounter beneath the percentage counter. Advance only the
+        // tally state here, then fall through to the normal translated
+        // transfer below so objects, effects, background and audio continue
+        // exactly as they do in the cartridge loop.
         if (pending_end_game_
             || (frontend_phase_
                     == FrontendPhase::stage_results_fade_to_map
@@ -6255,8 +6264,8 @@ GameTickResult GameSimulation::tick(const input::TickInput& input) {
             if (!restore_is_queued) queue_sound_effect(0x64U);
         }
         // Star Fox EX MAIN.ASM invokes CESTIMER_L after both communications
-        // channels on every scored-mode gameplay frame.  Despite its legacy
-        // name, the shipped routine draws the live SCORE label/value into the
+        // channels on every scored-mode gameplay frame.  Despite its name,
+        // the shipped routine draws the live SCORE label/value into the
         // bitmap; skipping it makes EX's scored mode appear inert.
         if (ex_ces_timer_ != 0U
             && (map_.read_native_byte(ex_scored_) & 1U) != 0U) {
@@ -6272,8 +6281,8 @@ GameTickResult GameSimulation::tick(const input::TickInput& input) {
     // IRQBIT3 uploads PAL0PALETTE to all eight BG palette rows after the
     // source transfer routines have advanced their fades and colour cycles.
     // GAMEPALBUFF is only the stable 3D-palette source used while a new BG2
-    // screen is installed; copying that row alone here discarded live EX
-    // palette effects and could leave both backgrounds and models one state
+    // screen is installed; copying that row alone here would discard live EX
+    // palette effects and can leave both backgrounds and models one state
     // behind the cartridge. Mirror the complete source IRQ DMA instead.
     auto current_background_palette = std::array<std::uint16_t, 8U * 16U>{};
     for (std::size_t index = 0; index < current_background_palette.size(); ++index) {

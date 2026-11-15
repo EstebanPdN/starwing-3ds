@@ -461,7 +461,10 @@ public:
 
     // Settings. Numeric setters store 0 (off or the default) for a value out
     // of range, except set_presentation_fps(); the setup menu changes most
-    // settings directly during tick().
+    // settings directly during tick(). They are saved with the session, except
+    // stereo_output() and the face-count table. The 3DS frontend skips the
+    // setup menu: it sets the timing mode, experience and presentation FPS
+    // itself and reads back only timing_mode() and experience().
     [[nodiscard]] TimingMode timing_mode() const noexcept { return timing_mode_; }
     void set_timing_mode(TimingMode mode) noexcept {
         if (timing_mode_ != mode) pace_debt_ = 0.0;
@@ -533,6 +536,10 @@ public:
         if (shape_face_counts_ != counts) pace_debt_ = 0.0;
         shape_face_counts_ = counts;
     }
+    // Rendering, audio and control preferences of the setup menu. They are
+    // stored and saved, but the 3DS frontend reads none of them (it has its
+    // own options); only host tests read them back. language() also changes
+    // the title logo and the Controls palettes inside the simulation.
     // Effect levels (lighting, bloom, model smoothing, chromatic aberration,
     // HDR) run from 0 (off) to 3; intensities and volumes are percentages;
     // language is 0-5.
@@ -606,34 +613,56 @@ public:
     [[nodiscard]] RenderScale render_scale() const noexcept {
         return render_scale_;
     }
+
+    // Input beyond player 1 for the following ticks, read only by Star Fox
+    // EX: controllers 2-5 (entries after the fourth are ignored, missing
+    // ones count as released), the Mouse or Super Scope sample while
+    // MOUSEMODE or SCOPEMODE is set, and the NTT keypad word while NTTMODE
+    // is set. The 3DS frontend calls none of these; host tests do.
     void set_secondary_inputs(
         std::span<const input::TickInput> controllers) noexcept;
     void set_mouse_input(MouseInputState mouse) noexcept {
         mouse_input_ = mouse;
     }
+    // Whether Star Fox EX has MOUSEMODE or SCOPEMODE set (bus reads).
     [[nodiscard]] bool ex_mouse_control_enabled() const noexcept;
     [[nodiscard]] bool ex_scope_control_enabled() const noexcept;
     [[nodiscard]] bool ex_pointing_control_enabled() const noexcept {
         return ex_mouse_control_enabled() || ex_scope_control_enabled();
     }
     void set_ntt_input(std::uint16_t held) noexcept { ntt_input_ = held; }
+    // Star Fox EX's 64 KiB battery RAM as the cartridge has written it; the
+    // 3DS frontend stores it in the EX save file.
     [[nodiscard]] std::span<const std::uint8_t> ex_save_ram() const noexcept {
         return map_.cartridge_ram();
     }
+    // Whether enough video phases have passed for the next tick(): the pace
+    // model's count, three in a menu preview. No bus side effects.
     [[nodiscard]] bool logic_tick_ready() const noexcept;
+    // How far presentation is from the last source update to the next, 0 to
+    // 1: (phases since the tick + video_phase_fraction) / phases required.
     [[nodiscard]] double logic_interpolation_alpha(
         double video_phase_fraction = 0.0) const noexcept;
+    // Changes whenever a map or front-end screen starts, so presentation
+    // caches keyed on it can be dropped.
     [[nodiscard]] std::uint64_t scene_revision() const noexcept {
         return scene_revision_;
     }
     [[nodiscard]] bool paused() const noexcept { return paused_; }
+    // The HUD meters. meter_state() reads through the bus, updating the
+    // open-bus byte as cartridge code would; peek_meter_state() reads the
+    // same values with no side effects, as presentation code needs.
     [[nodiscard]] MeterState meter_state() const noexcept;
     [[nodiscard]] MeterState peek_meter_state() const noexcept;
+    // Presentation snapshots of the latest source update. They read RAM with
+    // no bus side effects, so presentation may call them at any rate.
     [[nodiscard]] CircleEffectState circle_effect_state() const noexcept;
     [[nodiscard]] ColourMathEffectState colour_math_effect_state() const noexcept {
         return colour_math_effect_;
     }
     [[nodiscard]] WindowWipeState window_wipe_state() const noexcept;
+    // GAME OVER's background colour subtraction (HALFFADE) for this raster:
+    // 31 through raster 51, then 30 down to 1, then 0; 0 elsewhere.
     [[nodiscard]] std::uint8_t game_over_background_subtract() const noexcept;
     [[nodiscard]] DialogueState dialogue_state() const noexcept;
     [[nodiscard]] StageResultsState stage_results_state() const noexcept;
