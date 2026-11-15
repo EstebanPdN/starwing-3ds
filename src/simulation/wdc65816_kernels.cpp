@@ -1,6 +1,16 @@
 // Native equivalents of the hottest loops of the cartridge logic.
 // See wdc65816_kernels.hpp for the contract.
 //
+// Three loops, each entered at its head by the compact interpreter: the pair
+// loop of the collision pass (CHKCOLLNXT, CHKCOLL0, NORMALCOL), the first loop
+// of INIT_STRATS_RAM_L, and RESET_SPRITES. A kernel first checks the
+// loop's bytes where they run, the register widths and the bytes it would
+// store; when anything differs it returns false, leaving the machine as it
+// was, and the interpreter runs the loop. Otherwise it runs whole iterations
+// and stops in front of the first one it cannot prove, leaving work RAM,
+// registers, raw flag words, open bus, cycle and instruction counts exactly
+// as the interpreter would leave them at that instruction boundary.
+//
 // Every iteration below is the original instruction sequence written out:
 // each line names the instructions it stands for and adds their count and
 // their cycles as the compact interpreter charges them (the pinned library's
@@ -241,6 +251,13 @@ bool LeanKernels::Pairs::unchanged(const u8* wram) const noexcept {
 // before a hit, a path no console replay has taken, or the end of the list.
 // It stores to its own variables and to the stack only, never to an object:
 // nothing the watched block's mirror looks at.
+// Declines outside bank $7e, when the three routines do not have the shapes
+// Pairs::capture() reads, without 16-bit X/Y, D = 0, DBR = $7e and binary
+// mode, when a variable it stores to holds a serviced byte, or when the
+// current object does not lie between the stack page and those variables.
+// The last entry, a box-list entry whose word cannot be pushed, and any entry
+// begun with fewer than 128 instructions of budget are left to the
+// interpreter.
 bool LeanKernels::run_pairs(u32 address, u8* w, const std::array<u32, 2>& watch,
     LeanKernelState& k) {
     Pairs& p = pairs_;
@@ -411,6 +428,11 @@ bool LeanKernels::run_pairs(u32 address, u8* w, const std::array<u32, 2>& watch,
 
 // INIT_STRATS_RAM_L, first loop: clears the collision marks of every object
 // in the list. Runs every object but the last.
+// Declines unless the 42 bytes at the head, in bank $7e, are this loop, with an
+// 8-bit accumulator, 16-bit X/Y and D = 0. Stops before an object outside
+// $0200..$1fd0 or one whose bytes $1b..$2d hold a serviced byte, and when
+// fewer than 32 instructions of budget remain. Each object's bytes $1b..$2d
+// are marked in the watched block before they change.
 bool LeanKernels::run_objects(u32 address, const u8* code, u32 room, u8* w,
     const std::array<u32, 2>& watch, LeanWatch& marks, LeanKernelState& k) {
     if ((address >> 16U) != 0x7eU || room < 42U) return false;
@@ -484,6 +506,11 @@ bool LeanKernels::run_objects(u32 address, const u8* code, u32 room, u8* w,
 // RESET_SPRITES: STZ base,X / INX / INX / DEC A / DEC A / BPL. Clears the
 // rest of the sprite block, a word at a time. Runs every turn but the last.
 // The block lies between the two object tables.
+// Declines unless these nine bytes (with any base) are at the head, A and X/Y
+// are 16-bit, the data bank shows low work RAM, A is at most $7fff, 16
+// instructions of budget remain and at least one turn fits, or when the
+// cleared range leaves $0200..$1fff or holds a serviced byte. The range is
+// marked before it is cleared.
 bool LeanKernels::run_sprites(const u8* code, u32 room, const std::array<u32, 2>& watch,
     u8* w, LeanWatch& marks, LeanKernelState& k) {
     if (room < 9U || code[0] != 0x9eU || code[3] != 0xe8U || code[4] != 0xe8U
