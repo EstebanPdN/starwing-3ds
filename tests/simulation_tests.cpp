@@ -2411,6 +2411,18 @@ int main(int argc, char** argv) {
             starfox::simulation::MapDatabase{upstream_rom, upstream_symbols},
             upstream_objects,
             &upstream_symbols};
+        {
+            // A standalone map starts with empty work RAM, but routines such
+            // as INIT_STRATS_RAM_L execute from code the cartridge copies
+            // into work RAM at power-on. Start from a booted game's RAM so
+            // the native calls below find those routines installed.
+            const starfox::simulation::GameSimulation booted{
+                upstream_rom, upstream_symbols, "MAP1_1A"};
+            for (std::uint32_t address = 0x7e0000U; address < 0x800000U; ++address) {
+                upstream_map.write_native_byte(
+                    address, booted.map().read_native_byte(address));
+            }
+        }
         upstream_map.start(map_addresses.front(), upstream_player);
         upstream_map.advance_distance(1);
         require(upstream_objects.active_count() > 1,
