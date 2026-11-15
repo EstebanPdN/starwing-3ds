@@ -2,6 +2,9 @@
 #include "bg2_source_cache.hpp"
 #include "starfox/render/background_renderer.hpp"
 #include <memory>
+// The decoded Mode 1 BG2 tilemap, as low- and high-priority planes of palette
+// indices, used by frame_3ds.cpp and Mode1LayerPlan. Host-tested by
+// tests/mode1_bg2_atlas_test.cpp and tests/mode1_layer_plan_test.cpp.
 
 namespace starfox::platform_3ds {
 // Retain one decoded tilemap. Scroll/HDMA only selects and copies rows;
@@ -12,6 +15,9 @@ public:
     // `vram_revision` is the simulation's name for this PPU's VRAM, when
     // the caller has it: an unchanged source is then recognised without
     // comparing its map and characters again on every frame.
+    // Decodes the whole unscrolled map (no HDMA, tunnel or mosaic) when the
+    // source changed. Returns false outside Mode 1, with BG2 mosaic or a map
+    // above 512x512 pixels; with BG2 off the main screen it keeps the planes.
     bool prepare(render::BackgroundRenderer& renderer,const simulation::SnesPpuState& ppu,
         std::uint64_t vram_revision=0U) {
         const unsigned edge=ppu.bg2_tile_size_16?16U:8U;
@@ -34,7 +40,13 @@ public:
     }
     [[nodiscard]] const render::Framebuffer& low() const noexcept { return low_; }
     [[nodiscard]] const render::Framebuffer& high() const noexcept { return high_; }
+    // Changes each time the planes are decoded again; never 0.
     [[nodiscard]] std::uint32_t revision() const noexcept { return revision_; }
+    // Copies the scrolled BG2 rows into `low` and `high`: equal-sized plain
+    // framebuffers (draw scale 1, no tags, coverage or command buffer).
+    // (origin_x, origin_y) is where SNES pixel (0,0) lands in them, e.g. (72,8)
+    // on the 400x240 canvas. Clears both when BG2 is off the main screen.
+    // Returns false, writing nothing, when the state or targets do not qualify.
     bool draw(render::BackgroundRenderer& renderer,const simulation::SnesPpuState& ppu,
         int scroll_x,int scroll_y,render::Framebuffer& low,render::Framebuffer& high,
         int origin_x,int origin_y,std::uint64_t vram_revision=0U) {
@@ -50,6 +62,9 @@ public:
             ||width*height>512U*512U)return false;
         if(!(ppu.main_screen&2U)) {low.clear();high.clear();return true;}
         if(!prepare(renderer,ppu,vram_revision))return false;
+        // On a canvas wider than the SNES picture, per-line vertical scroll
+        // and the tunnel repeat the map's edge texels instead of wrapping;
+        // where both edge planes are transparent the tunnel wall colour fills.
         const bool expanded=origin_x!=0||low.width()>256U;
         const bool clamped=expanded&&(ppu.bg2_scanline_scroll_enabled||ppu.tunnel_scene);
         const auto wall=expanded&&ppu.tunnel_scene?render::tunnel_wall_index(ppu):0U;

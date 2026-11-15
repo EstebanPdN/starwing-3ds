@@ -149,6 +149,10 @@ void run_gpu_self_test(Display3ds& display,const std::string& folder,bool restor
     unsigned completed=0,failed=0;
     constexpr unsigned cases=60;
     render::Framebuffer bg_expected(400,240);
+    // Cases alternate wide (even) and 4:3 (odd); `world` decides whether the
+    // rectangle is drawn over the picture. 4-7 present flat Mode 2, 8-15 dither
+    // at scales 2-4, 16-19 put palette zero in the dither (18-19 over an opaque
+    // underlay), 20-35 use affine HDMA rows and 36-59 subpixel edge runs.
     for (unsigned test=0;test<cases;++test) {
         if (!aptMainLoop()) { event(test,"apt_exit"); break; }
         const bool wide=(test&1)==0;
@@ -286,6 +290,8 @@ void run_gpu_self_test(Display3ds& display,const std::string& folder,bool restor
             }
         }
     }
+    // The 16 Mode 1 layer cases and 8 line batch cases run only while every
+    // earlier case has completed with the GPU alive; the summary expects 84.
     if (completed==cases && display.gpu_active())
         run_mode1_layer_gpu_tests(display,report,folder,completed,failed);
     if (completed==cases+16U && display.gpu_active())

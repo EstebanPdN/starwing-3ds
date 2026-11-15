@@ -6,24 +6,32 @@
 #include <cmath>
 #include <cstdint>
 
+// Stereoscopic 3D helpers for the top screen: slider strength, the per-eye
+// camera offset and the BG2 shift. Used by game_3ds.cpp, frame_3ds.cpp and
+// display_3ds.cpp; host-tested by tests/stereo_3ds_test.cpp.
+
 namespace starfox::platform_3ds {
 
 // Keep the source word raster stable when the analogue slider jitters. The
 // two parallel eye cameras converge at 256 source units, without toe-in.
+// The slider position (0..1) as strength 0 (off) or 1-8; the eyes use offsets
+// of minus and plus that strength.
 inline std::uint8_t stereo_slider_strength(float slider) noexcept {
     if (!std::isfinite(slider) || slider <= 0.0F) return 0U;
     return static_cast<std::uint8_t>(std::clamp(
         std::lround(std::min(slider, 1.0F) * 8.0F), 1L, 8L));
 }
 
+// Moves a pose's camera sideways by `eye` source units for one eye's view.
 inline void apply_stereo_eye(render::RenderPose& pose, int eye) noexcept {
     pose.x -= eye;
     pose.stereo_eye_offset = eye;
 }
 
 // BG2 has no geometry depths. Treat it as the far scenery plane, behind
-// every projected world object. Copying it unchanged into both eyes put
-// distant mountains on the screen while nearer objects receded behind them.
+// every projected world object. Copied unchanged into both eyes, distant
+// mountains would sit on the screen while nearer objects receded behind them.
+// Shifts each row by `eye` pixels, repeating the edge pixel into the gap.
 inline void stereo_background(const render::Framebuffer& source,
     render::Framebuffer& target, int eye) {
     const int width = static_cast<int>(source.width());

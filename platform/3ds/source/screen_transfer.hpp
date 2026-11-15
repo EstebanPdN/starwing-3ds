@@ -5,8 +5,16 @@
 #include "top_viewport.hpp"
 #include "bottom_damage.hpp"
 #include "test_build_label.hpp"
+// CPU conversion of pictures into the 3DS screens' framebuffer layout: one
+// 240-word column per screen column, Y reversed. Used by game_3ds.cpp,
+// display_3ds.cpp and the GPU self test; host-tested by
+// tests/screen_transfer_test.cpp.
 
 namespace starfox::platform_3ds {
+// Fills the 400x240 RGB565 top framebuffer from an indexed picture through
+// `view`. `stride` is the source's stored row width and `scale` its draw
+// scale; `colours` maps the 256 palette indices to RGB565. Pixels outside the
+// viewport are black.
 inline void transfer_indexed_screen(const std::uint8_t* source,unsigned stride,
     unsigned scale,const TopViewport& view,const std::uint16_t* colours,
     std::uint16_t* destination) {
@@ -181,6 +189,8 @@ private:
     unsigned presentations_{};
     bool continues_{};
 };
+// A row-major RGBA8 picture, `width` x 240 (red in the high byte), into an
+// RGB565 framebuffer at brightness 0..15; game_3ds.cpp uses it for the top screen.
 inline void transfer_rgb565_screen(const std::uint32_t* source,
     std::uint16_t* destination, int width, unsigned brightness) {
     for (int by=0;by<240;by+=8) for (int bx=0;bx<width;bx+=8) {

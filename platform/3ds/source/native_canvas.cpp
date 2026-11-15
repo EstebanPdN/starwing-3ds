@@ -20,6 +20,7 @@ bool compose_native_mode1_background(const render::Framebuffer& source,
         ||!native(bg2)||!native(bg3_low)||!native(bg3_high)||!native(target)
         ||target.layer_tags_enabled()||target.tracks_write_coverage()||target.command_buffer())return false;
     const auto read=[](const std::uint8_t* p){std::uint32_t v;std::memcpy(&v,p,4U);return v;};
+    // Four palette indices per word: each byte of `top` wins unless it is 0.
     const auto over=[](std::uint32_t bottom,std::uint32_t top){
         const auto nonzero=((((top&0x7f7f7f7fU)+0x7f7f7f7fU)|top)>>7U)&0x01010101U;
         return top|(bottom&~(nonzero*255U));
@@ -98,6 +99,8 @@ void compose_native_mode1(const render::Framebuffer& source,
 
 namespace {
 
+// The most frequent palette index in column x of the 256x224 source over rows
+// [first_y, last_y); ties go to the lowest index.
 std::uint8_t dominant_edge(const render::Framebuffer& source,
     std::uint32_t x, std::uint32_t first_y = 0U,
     std::uint32_t last_y = 224U) noexcept {
@@ -109,6 +112,7 @@ std::uint8_t dominant_edge(const render::Framebuffer& source,
         std::max_element(counts.begin(), counts.end())));
 }
 
+// The same for an eight-line band of a 224-entry edge column.
 std::uint8_t dominant_band(std::span<const std::uint8_t> colours,
     std::uint32_t first_y) noexcept {
     std::array<std::uint8_t, 256U> counts{};
@@ -119,6 +123,8 @@ std::uint8_t dominant_band(std::span<const std::uint8_t> colours,
         std::max_element(counts.begin(), counts.end())));
 }
 
+// The CGRAM index nearest a 5-bit-per-channel target colour among mid-tone
+// entries (squared distance below 251), or 0 when none qualifies.
 std::uint8_t nearest_star_colour(const simulation::SnesPpuState& ppu,
     std::uint32_t target_red, std::uint32_t target_green,
     std::uint32_t target_blue) noexcept {
@@ -150,6 +156,8 @@ std::uint8_t nearest_star_colour(const simulation::SnesPpuState& ppu,
     return best;
 }
 
+// The CGRAM index nearest a 5-bit-per-channel target colour, skipping entries
+// whose brightest channel is below 8; 0 when none qualifies.
 std::uint8_t nearest_colour(const simulation::SnesPpuState& ppu,
     int red,int green,int blue) noexcept {
     std::uint8_t best=0U;
@@ -167,6 +175,8 @@ std::uint8_t nearest_colour(const simulation::SnesPpuState& ppu,
     return best;
 }
 
+// A star in 400x240 canvas coordinates; `cross` also lights the four
+// neighbouring pixels.
 struct StarPoint {
     std::uint16_t x;
     std::uint8_t y;
@@ -291,6 +301,10 @@ void build_native_panorama_atlas(const render::Framebuffer& source_low,
         std::copy_n(high.data() + y * width, width,
             wide_high.data() + y * atlas_width + native_panorama_padding);
     }
+    // Each eight-line band fills the padding outward from both map edges, one
+    // 8x8 patch at a time, with a patch of the same band: the one whose detail
+    // is nearest the band average, used least, and whose edge best matches the
+    // neighbouring column and the row above.
     const auto patches = width / 8U;
     std::vector<unsigned> density(patches), uses(patches);
     std::vector<bool> allowed(patches);
@@ -598,6 +612,8 @@ void capture_native_coverage_spans(const render::Framebuffer& source,
     for (std::uint32_t y = 0U; y < 224U; ++y) {
         const auto row = y * 256U;
         for (std::uint32_t x = 0U; x < 256U;) {
+            // Coverage bytes are 0 or 1: skip and extend runs four at a time,
+            // then finish byte by byte.
             while(x+4U<=256U) { std::uint32_t lanes;std::memcpy(&lanes,coverage.data()+row+x,4U);if(lanes)break;x+=4U; }
             while (x < 256U && coverage[row + x] == 0U) ++x;
             const auto first = x;

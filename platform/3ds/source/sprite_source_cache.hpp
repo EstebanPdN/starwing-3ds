@@ -5,6 +5,10 @@
 #include <array>
 #include <cstring>
 
+// Exact change detection for the OBJ sources of retained sprite layers, used
+// by frame_3ds and BottomHudCache. Host-tested by
+// tests/sprite_source_cache_test.cpp.
+
 namespace starfox::platform_3ds {
 
 // An indexed OBJ layer depends on selected OAM records and their character
@@ -13,10 +17,16 @@ namespace starfox::platform_3ds {
 // 32-byte VRAM characters, including wrapped names and 64x64 objects.
 class SpriteSourceCache {
 public:
+    // The OAM records a layer reads: objects that are not HUD elements
+    // (foreground), HUD elements other than comms (status_hud), or those plus
+    // the bomb and life records the bottom panel reads (bottom_hud).
     enum class Selection { foreground, status_hud, bottom_hud };
     explicit SpriteSourceCache(Selection selection) : selection_(selection) {}
     [[nodiscard]] std::size_t character_count() const noexcept { return character_count_; }
 
+    // Whether the selected records and their character bytes equal the
+    // captured ones. An unchanged vram_revision skips comparing the bytes,
+    // except for bottom_hud, which always compares them.
     [[nodiscard]] bool matches(const simulation::SnesPpuState& ppu,
         std::uint64_t vram_revision) noexcept {
         if (!valid_ || object_select_ != ppu.object_select
@@ -35,6 +45,7 @@ public:
         return true;
     }
 
+    // Records the selected OAM records and copies the characters they use.
     void capture(const simulation::SnesPpuState& ppu,
         std::uint64_t vram_revision) noexcept {
         object_select_ = ppu.object_select;
@@ -69,6 +80,8 @@ public:
 
 private:
     using Record = std::array<std::uint8_t, 5U>;
+    // The object's four OAM bytes and two high-table bits when the selection
+    // reads it; all zeros otherwise.
     [[nodiscard]] Record record(const simulation::SnesPpuState& ppu,
         std::size_t object) const noexcept {
         const auto low = object * 4U;

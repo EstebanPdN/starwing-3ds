@@ -1,4 +1,6 @@
 #pragma once
+// Corner placement for a HUD element whose label/icons sit above its meter, in
+// screen pixels. Used by frame_3ds.cpp; tests/simulation_tests.cpp checks it.
 
 namespace starfox::platform_3ds {
 
@@ -7,6 +9,7 @@ struct StackedHudLayout { HudRect upper,bar; };
 
 // The source label/icons and meter are independent layers. Anchor the meter
 // to the corner, then put the label/icons above it with a visible gap.
+// Bottom-right corner when `right`, else bottom-left; 8-pixel margin, 4-pixel gap.
 constexpr StackedHudLayout stack_hud(int upper_w,int upper_h,
     int bar_w,int bar_h,bool right,int screen_w=400,int screen_h=240) {
     constexpr int margin=8,gap=4;

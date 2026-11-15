@@ -4,6 +4,8 @@
 #include <array>
 #include <cstring>
 #include <vector>
+// Dirty 8x8 block tracking for the retained Mode 1 layer textures uploaded by
+// display_3ds.cpp. Host-tested by tests/indexed_atlas_updates_test.cpp.
 
 namespace starfox::platform_3ds {
 // Exact source bytes identify changed 8x8 texture blocks. Palette changes
@@ -11,6 +13,11 @@ namespace starfox::platform_3ds {
 // heap storage; only the final RGBA textures occupy linear GPU memory.
 class IndexedAtlasUpdates {
 public:
+    // Compares the top-left width x height pixels of `source` with the retained
+    // copy and records which 8x8 blocks changed. A new size marks every block.
+    // source_changed false skips the byte comparison; palette_changed flags the
+    // entries whose colour changed. Returns false, changing nothing, unless both
+    // sizes are nonzero multiples of 8 within the source at draw scale 1.
     bool update(const render::Framebuffer& source,unsigned width,unsigned height,
         bool source_changed,const std::array<bool,256>& palette_changed) {
         if (!width || !height || ((width|height)&7U) || width>source.width()
@@ -52,11 +59,14 @@ public:
         }
         return true;
     }
+    // Forces a full upload, e.g. after a failed texture clean or allocation.
     void mark_all() noexcept { std::fill(dirty_.begin(),dirty_.end(),1U); }
     [[nodiscard]] bool dirty(unsigned tile_x,unsigned tile_y) const noexcept {
         return dirty_[std::size_t(tile_y)*(width_/8U)+tile_x]!=0U;
     }
+    // Whether any retained pixel uses palette index `colour`.
     [[nodiscard]] bool used(unsigned colour) const noexcept { return counts_[colour]!=0U; }
+    // True when every retained pixel is index 0 (transparent).
     [[nodiscard]] bool empty() const noexcept { return counts_[0]==indices_.size(); }
     [[nodiscard]] const std::uint8_t* row(unsigned y) const noexcept {return indices_.data()+std::size_t(y)*width_;}
     [[nodiscard]] std::size_t storage_capacity_bytes() const noexcept {return indices_.capacity()+dirty_.capacity();}

@@ -1,6 +1,9 @@
 #pragma once
 #include <cstdint>
 #include <string_view>
+// The build label (STARWING_BUILD_VERSION) and the badge that test builds,
+// whose label starts with "Prueba", draw on the bottom screen. Used by
+// screen_transfer.hpp, test_mode_3ds.hpp and gpu_self_test.cpp.
 namespace starfox::platform_3ds {
 #ifdef STARWING_BUILD_VERSION
 inline constexpr std::string_view test_build_label=STARWING_BUILD_VERSION;
@@ -19,6 +22,8 @@ inline constexpr TestBuildLabelArea test_build_label_area=
             +static_cast<int>(test_build_label.size())*12+8,240}
     : TestBuildLabelArea{0,0,0,0};
 // Persistent diagnostic badge, in the native rotated bottom framebuffer.
+// Draws "Prueba" and the label's digits in white on a dark box along the
+// bottom edge; does nothing for other labels.
 inline void draw_test_build_label(std::uint32_t* framebuffer) {
     if(!test_build_label.starts_with("Prueba"))return;
     constexpr unsigned char letters[7][7] = {

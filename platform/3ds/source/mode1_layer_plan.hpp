@@ -7,6 +7,9 @@
 #include <array>
 #include <cstdint>
 #include <vector>
+// Copy rectangles that present Mode 1 BG2/BG3 on the 400x240 top screen from
+// retained atlases. Built by frame_3ds.cpp, drawn by display_3ds.cpp; host-tested
+// by tests/mode1_layer_plan_test.cpp and on console by mode1_layer_gpu_test.hpp.
 
 namespace starfox::platform_3ds {
 
@@ -14,14 +17,21 @@ namespace starfox::platform_3ds {
 // address the decoded, unscrolled atlases and keep SNES priority explicit.
 // Each rectangle is either a 1:1 copy or a repeated edge texel/row. No
 // filtering, affine approximation, or scene-dependent pixel search is used.
+// SNES pixel (0,0) lands at (72,8); the 8 rows above and below the 224
+// SNES lines repeat the nearest line.
 class Mode1LayerPlan {
 public:
+    // One plane per background and SNES tile priority.
     enum Layer : unsigned { bg3_low, bg3_high, bg2_low, bg2_high, layer_count };
+    // The atlas behind a layer, its revision and the extent the plan reads.
     struct Source {
         const render::Framebuffer* frame{};
         std::uint32_t revision{};
         unsigned width{}, height{};
     };
+    // A screen rectangle and the atlas rectangle it copies. A source width or
+    // height of 1 repeats that column or row; `solid` fills with palette index
+    // `colour` instead (the tunnel wall). Index 0 is transparent.
     struct Rect {
         std::uint16_t x{}, y{}, width{}, height{};
         std::uint16_t source_x{}, source_y{}, source_width{}, source_height{};
@@ -32,6 +42,8 @@ public:
     Mode1LayerPlan() {
         for (auto& rects : rectangles_) rects.reserve(768);
     }
+    // Mode 1 without BG2/BG3 mosaic, a BG2 map of at most 512x512 pixels and
+    // a BG3 map at most 512 pixels tall.
     [[nodiscard]] static bool eligible(const simulation::SnesPpuState& p) noexcept {
         const unsigned bg2_edge=p.bg2_tile_size_16?16U:8U;
         const unsigned bg2_width=((p.bg2_screen_size&1U)?64U:32U)*bg2_edge;
@@ -47,6 +59,9 @@ public:
     // for the tunnel wall, PPU memory. Between two source ticks all of them
     // repeat, and the plan of the previous frame is the plan of this one:
     // it is then kept instead of being rebuilt row by row.
+    // panorama_* are the BG3 atlas planes (native_canvas.hpp) and tiles_* the
+    // BG2 planes (Mode1Bg2Atlas). Returns false, leaving the plan invalid, when
+    // the state is not eligible or a source has an unexpected size.
     bool build(const simulation::SnesPpuState& p, int scroll_x, int scroll_y,
         const render::Framebuffer& panorama_low, const render::Framebuffer& panorama_high,
         std::uint32_t panorama_revision, const render::Framebuffer& tiles_low,
@@ -167,7 +182,10 @@ private:
     }
 public:
     [[nodiscard]] bool valid() const noexcept { return valid_; }
+    // The BG3 priority bit of the planned state.
     [[nodiscard]] bool high_priority() const noexcept { return bg3_high_priority_; }
+    // BG2's high plane, and BG3's high plane when the BG3 priority bit is set,
+    // are drawn over the world; the other planes below it.
     [[nodiscard]] bool above_world(unsigned layer) const noexcept {
         return layer==bg2_high || (layer==bg3_high && bg3_high_priority_);
     }
@@ -199,6 +217,10 @@ private:
     static bool plain(const render::Framebuffer& f) noexcept {
         return f.draw_scale()==1U && f.pixels().size()==std::size_t(f.width())*f.height();
     }
+    // Adds one screen row at a time. A rectangle of the previous row grows
+    // down when the new piece has the same columns and source columns and
+    // either repeats its source row or continues to the next one. A row holds
+    // at most four pieces.
     struct RowBuilder {
         std::vector<Rect>& out;
         std::array<std::size_t,4> previous{},current{};

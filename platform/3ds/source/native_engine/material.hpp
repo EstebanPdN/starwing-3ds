@@ -3,8 +3,14 @@
 #include "starfox/render/palette.hpp"
 #include <algorithm>
 #include <array>
+// Encoding of the native engine's dithered rectangles for pica.cpp: the even
+// colour is the vertex colour, the odd colour a texel of a 16x16 palette
+// texture, and an 8x8 checker texture picks between them per pixel.
+// Host-tested by tests/native_material_test.cpp and tests/native_pica_test.cpp.
 
 namespace starfox::platform_3ds::native_engine {
+// Texel offset of palette entry i (column i & 15, row i >> 4) in the 16x16
+// palette texture's tiled layout: 8x8 Morton-ordered tiles.
 constexpr unsigned palette_texel_offset(unsigned i) noexcept {
     const unsigned x=i&15U,y=i>>4;
     return (x&1U)|((y&1U)<<1)|((x&2U)<<1)|((y&2U)<<2)
@@ -21,14 +27,19 @@ inline render::Rgba8 material_display_colour(render::Rgba8 colour) noexcept {
     return {std::uint8_t((r<<3U)+4U),std::uint8_t((g<<2U)+2U),
         std::uint8_t((b<<3U)+4U),colour.a};
 }
+// Palette entry `index` as a Citro2D vertex colour (red in the low byte).
+// Index 0 gets alpha 0 (transparent), here and in material_colour.
 inline std::uint32_t material_vertex_colour(const render::Palette256& palette,std::uint8_t index) noexcept {
     const auto c=material_display_colour(palette[index]);
     return std::uint32_t(c.r)|(std::uint32_t(c.g)<<8)|(std::uint32_t(c.b)<<16)|(index?0xff000000U:0U);
 }
+// The same colour as an RGBA8 texel word (red in the high byte).
 inline std::uint32_t material_colour(const render::Palette256& palette,std::uint8_t index) noexcept {
     const auto c=material_display_colour(palette[index]);
     return (std::uint32_t(c.r)<<24)|(std::uint32_t(c.g)<<16)|(std::uint32_t(c.b)<<8)|(index?255U:0U);
 }
+// Fills one 8x8 Morton-ordered tile (64 words) with a checkerboard: `even`
+// where x + y is even, `odd` elsewhere.
 inline void write_material(std::uint32_t* pixels,std::uint32_t even,std::uint32_t odd) noexcept {
     // Morton index bit 0 is x parity, bit 1 is y parity.
     for (unsigned i=0;i<64;++i) pixels[i]=((i^(i>>1))&1U)?odd:even;
@@ -49,11 +60,11 @@ constexpr MaterialPaletteCoordinates material_palette_coordinates() noexcept {
 }
 // The four batch vertices of one rectangle, written in place. `Vertex` has
 // the members of C2D_Vertex: pos[3], texcoord[2], ptcoord[2], color. Each
-// float is produced by the operations material_quad() and the former
-// per-vertex loop applied to it: a division by 16 is the same exact scaling
-// as a product by 1/16, 1/(8*1) is exactly 1/8, and the palette coordinates
-// come from the table above. What changes is that nothing is divided per
-// rectangle and no intermediate quad is built and copied.
+// float equals what material_quad() computes for it, converted vertex by
+// vertex: a division by 16 is the same exact scaling as a product by 1/16,
+// 1/(8*1) is exactly 1/8, and the palette coordinates come from the table
+// above. Nothing is divided per rectangle and no intermediate quad is built
+// or copied. `colour` is the even colour (material_vertex_colour).
 template<class Vertex>
 inline void write_material_quad(const Rectangle& r,std::uint32_t colour,
     const MaterialPaletteCoordinates& palette,Vertex* out) noexcept {
@@ -80,6 +91,9 @@ inline void write_material_quad(const Rectangle& r,std::uint32_t colour,
     write(out[2],bottom_left,bottom,bottom_v);
     write(out[3],bottom_right,bottom,bottom_v);
 }
+// A rectangle's corners (top-left, top-right, bottom-left, bottom-right) in
+// pixels with their checker coordinates, by plain division: the reference
+// that tests/native_material_test.cpp checks.
 struct MaterialVertex { float x,y,u,v; };
 inline std::array<MaterialVertex,4> material_quad(const Rectangle& r) noexcept {
     const float left=r.slanted?r.top_left/16.0F:float(r.left);

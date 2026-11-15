@@ -142,6 +142,9 @@ OptionsMenu3ds::OptionsMenu3ds(const assets::RomImage& rom,
     load();
 }
 
+// Reads this model's settings file, or the shared options.cfg while it does
+// not exist. Speed, interpolation and the FPS limit come only from the model's
+// own file, which is rewritten once if saved under an older FPS policy.
 void OptionsMenu3ds::load() {
     std::FILE* file=std::fopen(config_path_,"rb");
     const bool own_profile=file!=nullptr;
@@ -285,6 +288,8 @@ int OptionsMenu3ds::row_count() const {
     default:return 0;
     }
 }
+// Lists the files in sdmc:/3ds/Starwing that rom_probe identifies as a
+// supported cartridge, sorted by their upper-case names.
 void OptionsMenu3ds::scan_roms() {
     roms_.clear();
     if(auto* directory=opendir("sdmc:/3ds/Starwing")) {
@@ -308,6 +313,8 @@ void OptionsMenu3ds::scan_roms() {
     selection_=0;
     rom_scroll_=0;
 }
+// Activates `row` of the open page: toggles and saves a setting, changes page
+// or returns the action for the caller. Ignored while an update installs.
 MenuAction OptionsMenu3ds::hit_row(int row) {
     if (update_status_.state == UpdateState::installing) return MenuAction::none;
     if(page_==MenuPage::root) {
@@ -526,9 +533,9 @@ MenuAction OptionsMenu3ds::touch(int x,int y,bool controls_screen) {
 }
 void OptionsMenu3ds::draw_entry(bool map_stars,std::uint32_t sky) {
     hud_cache_.invalidate();
-    // Match the actual upper-screen sky for this menu. The old entry path
-    // painted black, while the unrelated title starfield also painted black.
-    // Both controls and planet selection use this same cartridge sky style.
+    // Match the actual upper-screen sky for this menu rather than black, which
+    // belongs to the unrelated title starfield. Both controls and planet
+    // selection use this same cartridge sky style, so map_stars changes nothing.
     (void)map_stars;
     if(sky != 0U) entry_sky_=sky;
     std::fill(bottom_.begin(),bottom_.end(),entry_sky_);

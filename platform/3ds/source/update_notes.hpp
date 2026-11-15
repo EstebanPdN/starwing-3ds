@@ -6,8 +6,14 @@
 #include <string_view>
 #include <vector>
 
+// Release notes turned into upper-case lines that the cartridge font can draw,
+// for the Options update page. Host-tested by tests/update_notes_test.cpp.
+
 namespace starfox::platform_3ds {
 // Normalize metadata to the cartridge font without dropping accented letters.
+// ASCII is upper-cased, Latin-1 accented letters become their base letter and
+// common typographic punctuation its ASCII form; combining marks are dropped
+// and any other character, or invalid UTF-8, becomes '?'.
 inline std::string menu_text_ascii(std::string_view input) {
     std::string out;
     for(std::size_t i=0;i<input.size();) {
@@ -44,6 +50,11 @@ inline std::string menu_text_ascii(std::string_view input) {
     return out;
 }
 // Release Markdown becomes bounded text in the game's own font.
+// Uses the first 12288 bytes, from "## Changelog" up to "## Bug reports" when
+// those headings exist, without Markdown or HTML markup. Lines break at a space
+// where possible so that measure(line) <= width, with at most 80 characters
+// each and 768 lines in all.
+// An empty result becomes the single line "NO CHANGELOG AVAILABLE".
 template<class Measure>
 std::vector<std::string> update_note_lines(std::string_view body, Measure measure,
     int width) {

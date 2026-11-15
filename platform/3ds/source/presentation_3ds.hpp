@@ -2,6 +2,10 @@
 
 #include "starfox/simulation/math.hpp"
 
+// How a model's rotation composes with the view for presentation. frame_3ds.cpp
+// applies the same rule with render::word; tests/presentation_3ds_test.cpp
+// checks it.
+
 namespace starfox::platform_3ds {
 
 inline simulation::MatrixQ15 compose_model_view_matrix(

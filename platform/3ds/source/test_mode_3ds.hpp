@@ -19,7 +19,11 @@ namespace starfox::platform_3ds {
 
 class TestMode3ds {
 public:
+    // What poll() asks of the game loop: enter the scenario's map, write the
+    // window's quick dump, or end the tour.
     enum class Request { none, enter_map, capture, finish };
+    // map: the level symbol entered directly, or BOOT. menus: START taps drive
+    // the intro and menus instead of the flight script.
     struct Scenario { const char* map; bool menus; };
     // BOOT plays the intro, title and menus with START taps. The rest are
     // the direct entries of the three routes and the two secret stages.
@@ -33,6 +37,8 @@ public:
         {"LEVEL3_4", false}, {"LEVEL3_5", false}, {"LEVEL3_6", false},
         {"LEVEL3_7", false}, {"LEVEL_BLACKHOLE", false}, {"LEVEL_SPECIAL", false},
     }};
+    // Waits after entering a map (settle_ms) and between windows (resettle_ms),
+    // the measured window length, and windows per level or menu scenario.
     struct Timing {
         std::uint32_t settle_ms, resettle_ms, window_ms;
         unsigned level_windows, menu_windows;
@@ -126,6 +132,8 @@ public:
         }
     }
 
+    // The loop's answer to enter_map. Logs the entry; a failure moves on to the
+    // next scenario, a success restarts the script and settles.
     void map_entered(bool ok, const std::string& message, std::uint64_t now_ms) {
         if (state_ != State::entering) return;
         char line[200]{};

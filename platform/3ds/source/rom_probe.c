@@ -9,7 +9,8 @@ typedef struct KnownRom {
     const char *revision;
 } KnownRom;
 
-/* These checksums are the retail validation table in src/app/starfox_pc.cpp. */
+/* The supported retail dumps. regional_patch() in asset_stage.cpp maps the same
+   CRCs to their USA 1.2 patches and rejects any other, so keep both in step. */
 static const KnownRom known_roms[] = {
     {0x8fc4e6d0u, "Star Fox USA 1.2"},
     {0x41a60b3fu, "Star Fox Japan 1.0"},

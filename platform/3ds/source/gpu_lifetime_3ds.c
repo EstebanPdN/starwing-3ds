@@ -4,6 +4,8 @@
 
 // Linker seams around Citro3D 1.7.1's queue binding and APT suspend fence.
 // Keep the public queue handle; no assumptions about C3D_Context layout.
+// The __wrap_ functions replace their __real_ targets through the -Wl,--wrap
+// options in platform/3ds/CMakeLists.txt.
 static gxCmdQueue_s* render_queue;
 static atomic_bool abandoned;
 static atomic_bool callback_pending;
@@ -18,6 +20,7 @@ void __real_GX_BindQueue(gxCmdQueue_s* queue);
 void __real_gxCmdQueueRun(gxCmdQueue_s* queue);
 bool __real_gxCmdQueueWait(gxCmdQueue_s* queue, s64 timeout);
 
+// Citro3D binds its render queue here; that queue is the one fenced below.
 void __wrap_GX_BindQueue(gxCmdQueue_s* queue) {
     render_queue = queue;
     __real_GX_BindQueue(queue);
@@ -34,6 +37,9 @@ static void finish_render_queue(gxCmdQueue_s* queue) {
     atomic_store_explicit(&callback_pending, false, memory_order_release);
 }
 
+// For the render queue, interposes finish_render_queue as the completion
+// callback and marks it pending, so waits also cover citro3d's screen swap.
+// Nothing runs on that queue once the GPU is abandoned.
 void __wrap_gxCmdQueueRun(gxCmdQueue_s* queue) {
     if (queue == render_queue) {
         if (starwing_gpu_abandoned() || queue->lastEntry >= queue->numEntries) return;
@@ -48,6 +54,9 @@ void __wrap_gxCmdQueueRun(gxCmdQueue_s* queue) {
     __real_gxCmdQueueRun(queue);
 }
 
+// The render queue counts as idle only when its commands and the completion
+// callback have both finished. Returns false at once when the GPU is abandoned.
+// A zero timeout polls once; a negative one waits until idle or abandoned.
 bool __wrap_gxCmdQueueWait(gxCmdQueue_s* queue, s64 timeout) {
     if (queue != render_queue) return __real_gxCmdQueueWait(queue, timeout);
     const u64 start = svcGetSystemTick();
@@ -101,6 +110,9 @@ void starwing_swap_cpu_top(void) {
     cpu_top_back ^= 1U;
 }
 
+// Citro3D's APT suspend hook calls this and would wait forever for a queue whose
+// GX interrupt was lost. Wait at most a quarter second (SYSCLOCK_ARM11 / 4
+// ticks), then abandon the GPU instead of reporting the queue as finished.
 void __wrap_C3Di_RenderQueueWaitDone(void) {
     if (starwing_gpu_abandoned() || !render_queue) return;
     const u64 deadline = svcGetSystemTick() + SYSCLOCK_ARM11 / 4U;

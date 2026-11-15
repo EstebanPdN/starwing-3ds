@@ -1,6 +1,7 @@
 #pragma once
 // Indexed-to-16-bit texel expansion for the PICA staging buffers. Kept free
 // of libctru so the exact word paths can be compared on the host.
+// Used by display_3ds.cpp; host-tested by tests/texel_expand_test.cpp.
 #include "starfox/render/framebuffer.hpp"
 
 #include <array>
@@ -10,6 +11,8 @@
 
 namespace starfox::platform_3ds {
 
+// The 16-bit texel of each palette index: RGB565 for an opaque background,
+// RGBA5551 for a foreground.
 using Colours16 = std::array<std::uint16_t, 256U>;
 
 inline std::uint32_t load_word(const std::uint8_t* bytes) noexcept {
@@ -49,6 +52,7 @@ inline void expand_masked_row(const std::uint8_t* pixels, const std::uint8_t* ma
     for (; x < width; ++x) out[x] = mask[x] != 0U ? colours[pixels[x]] : 0U;
 }
 
+// Indexed row to 16-bit texels with every pixel opaque, four pixels per step.
 inline void expand_opaque_row(const std::uint8_t* pixels, const Colours16& colours,
     std::uint16_t* out, unsigned width) noexcept {
     unsigned x = 0U;
@@ -90,9 +94,10 @@ struct ForegroundRows {
 // expansion still reads and rewrites every one of them on each upload. Here
 // a row without a covered pixel is recognised by its coverage words alone
 // and, when the buffer row already holds that many zeros, is left as it is.
-// Every other row is expanded as before. The buffer contents afterwards are
-// those of expand_frame. Returns the number of rows written. One shared copy
-// (three presenters call it), so the row loop stays in the instruction cache.
+// Every other row is expanded as expand_frame does. The buffer contents
+// afterwards are those of expand_frame. Returns the number of rows written.
+// One shared copy (three presenters call it), so the row loop stays in the
+// instruction cache.
 __attribute__((noinline)) inline std::uint32_t expand_foreground_rows(const render::Framebuffer& frame,
     const Colours16& colours, std::uint16_t* out, std::uint32_t stride,
     ForegroundRows& rows) noexcept {

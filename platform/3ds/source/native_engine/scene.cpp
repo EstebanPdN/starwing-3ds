@@ -5,6 +5,10 @@
 #include <limits>
 
 namespace starfox::platform_3ds::native_engine {
+// Appends in painter order. Trailing rectangles that `r` covers entirely are
+// dropped (it overwrites them), and `r` extends the last, unslanted rectangle
+// when it continues it downward or rightward with the same colours and scale.
+// Empty input is ignored; false, with overflow set, when the scene is full.
 bool Scene::append(Rectangle r) {
     if (r.left >= r.right || r.top >= r.bottom) return true;
     while (!rectangles_.empty()) {

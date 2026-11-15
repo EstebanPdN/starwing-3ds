@@ -1,3 +1,19 @@
+// Starwing 3DS application. main() selects the ROM and runs sessions;
+// run_game() is one session of the original game or Star Fox EX and owns the
+// simulation, renderer, display, audio, Options menu, saves and diagnostics.
+//
+// Logic ticks and presented frames are separate clocks. Each pass of the
+// session loop runs the 60 Hz video phases that are due (FramePacing, at most
+// three per pass); a phase runs a logic tick when the timing mode makes one
+// due, and every three phases hand the ticks' APU writes to the SPC as one
+// 50 ms packet. A frame is presented when the FPS limit allows it and the loop
+// is not catching up; with interpolation on, frames between two ticks show
+// in-between poses.
+//
+// Loop sections, in order: GPU loss and HOME/sleep resume, updater status,
+// START+SELECT test tour, input and menus, test tour requests, phases and
+// logic ticks, SPC packets, presentation of both screens (GPU fallbacks and a
+// watchdog), autosave, pacing sleep, per-second telemetry, diagnostic captures.
 #include "asset_stage.h"
 #include "asset_stage.hpp"
 #include "audio_3ds.hpp"
@@ -73,6 +89,7 @@ using starfox::platform_3ds::restore_autosave;
 using starfox::platform_3ds::write_autosave;
 using starfox::platform_3ds::write_ex_save;
 
+// ARM11 system ticks to microseconds, split so the product cannot overflow.
 std::uint64_t session_microseconds(std::uint64_t ticks) noexcept {
     return ticks / SYSCLOCK_ARM11 * 1'000'000ULL
         + ticks % SYSCLOCK_ARM11 * 1'000'000ULL / SYSCLOCK_ARM11;
@@ -96,6 +113,9 @@ const char* autosave_path(bool ex) noexcept {
     return ex?autosave_ex:autosave_original;
 }
 
+// Shows a menu picture (row-major RGBA8, 400x240 top or 320x240 bottom) on
+// `screen` at brightness 0..15 and swaps. False when the framebuffer is
+// missing or not of that size.
 // `bottom_damage` is for the retained level HUD: what its owner rewrote in
 // `pixels` since the HUD was last presented. Without it the bottom image is
 // taken as a new picture and converted whole.
@@ -135,6 +155,7 @@ bool present_menu_pixels(const std::vector<std::uint32_t>& pixels,
     return true;
 }
 
+// Shows a saved copy of the top framebuffer (400x240 RGB565 as scanned out).
 void present_frozen_top(std::span<const u8> pixels,
     starfox::platform_3ds::Display3ds& display) {
     constexpr std::size_t top_bytes=400U*240U*2U;
@@ -147,9 +168,12 @@ void present_frozen_top(std::span<const u8> pixels,
     display.note_top_framebuffer(output);
     starwing_swap_cpu_top();
 }
+// Results of main()'s New 3DS speedup calls (ptmSysmInit and
+// PTMSYSM_ConfigureNew3DSCPU), for diagnostics; -1 when not attempted.
 Result speedup_init_result = -1;
 Result speedup_config_result = -1;
 
+// Upper-case flow name for logs, the overlay and captures.
 const char* flow_label(starfox::simulation::GameFlowState flow) noexcept {
     using starfox::simulation::GameFlowState;
     switch (flow) {
@@ -194,6 +218,7 @@ void write_build_info(bool new_3ds, const char* launch_path) {
     }
 }
 
+// Basenames of the supported retail dumps in sdmc:/3ds/Starwing, sorted.
 std::vector<std::string> retail_roms() {
     DIR *directory = opendir(app_dir);
     if (directory == nullptr) return {};
@@ -216,6 +241,10 @@ std::string locate_retail_rom() {
     return files.empty() ? std::string{} : std::string{app_dir} + "/" + files.front();
 }
 
+// The runtime payload (game ROMs and symbols) from the asset bundle derived
+// from the selected ROM, or from the first supported ROM when none is
+// selected. A missing or unreadable bundle is rebuilt from the ROM. Throws a
+// player-facing message when no supported ROM is available.
 starfox::assets::RuntimeBundlePayload load_assets(
     const std::string& selected_rom) {
     if(!selected_rom.empty()) {
@@ -258,6 +287,8 @@ starfox::assets::RuntimeBundlePayload load_assets(
     return starwing_load_runtime_payload(bundle_path);
 }
 
+// Writes last-error.txt (with the allocation snapshot when one was taken) and
+// shows the message on the top screen until START or the application closes.
 void show_error(const char *message) {
     if (FILE* log = std::fopen("sdmc:/3ds/Starwing/last-error.txt", "wb")) {
         std::fprintf(log, "Starwing 3DS startup/runtime error\n%s\n", message);
@@ -288,6 +319,7 @@ void show_error(const char *message) {
     }
 }
 
+// The ROM and edition the next session starts with.
 struct RunRequest {std::string rom_path; bool ex{};};
 
 
@@ -307,6 +339,11 @@ void write_gpu_recovery(const char* stage, const char* flow,
     }
 }
 
+// One session of the original game (ex false) or Star Fox EX from
+// `selected_rom` (empty: the default bundle). choose_on_start opens the ROM
+// picker first; launch_path is the running executable, for the updater.
+// Returns the session to start next (another ROM or edition, or a fresh one
+// after a test tour), or nothing when the application should exit.
 std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
     bool choose_on_start=false, const char* launch_path="") {
     bool new_3ds = false;
@@ -333,7 +370,9 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
         ex_save_file=path;
     }
     if (profile.old_3ds) {
-        // Keep legacy split-stem checkpoints intact.
+        // Old 3DS checkpoints hold single-SPC (cartridge-routed) audio state;
+        // a separate file leaves split-stem checkpoints, the New 3DS format,
+        // intact.
         autosave_file.insert(autosave_file.size()-4U,"-old3ds");
     }
     auto rom_bytes = ex ? std::move(payload.starfox_ex_rom)
@@ -388,8 +427,9 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
     }
     display.set_wide(menu->wide());
     audio.set_master_volume(menu->volume());
-    // Preload behind black. Existing scene fades own the level transitions;
-    // startup/resume uses only a brief reveal, with no loading text or timer.
+    // Preload behind black. The cartridge's own scene fades cover level
+    // transitions; startup/resume uses only a brief reveal (120 ms, see
+    // reveal_brightness), with no loading text or timer.
     bool preload_new_3ds = false;
     APT_CheckNew3DS(&preload_new_3ds);
     menu->draw_black();
@@ -401,7 +441,7 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
     const auto heap_capacity = std::uint64_t{envGetHeapSize()};
     const auto heap_used = static_cast<std::uint64_t>(preload_heap.uordblks);
     // Stage loads and the stationary panorama atlas need headroom after
-    // startup, including the temporary source planes used to build an atlas.
+    // startup, including the temporary source planes an atlas is built from.
     constexpr auto runtime_reserve = 12ULL * 1024U * 1024U;
     const auto available_for_catalog = heap_capacity > heap_used + runtime_reserve
         ? heap_capacity - heap_used - runtime_reserve : 0ULL;
@@ -433,8 +473,9 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
     unsigned save_clock = 0U;
     starfox::platform_3ds::Diagnostics3ds diagnostics;
     // Automatic hardware test tour: START+SELECT (hold R for the long one).
-    // Once it starts, this session no longer holds the player's game, so
-    // nothing is saved from it and it ends by restarting the session.
+    // From its start the session holds the tour's simulation, not the
+    // player's game: nothing is saved from it, and it ends by restarting the
+    // session.
     starfox::platform_3ds::TestMode3ds test_mode;
     bool test_chord_latched = false;
     bool test_session_touched = false;
@@ -451,6 +492,8 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
 #endif
     auto presentation_metrics = std::make_unique<starfox::platform_3ds::PresentationMetrics>();
     starfox::platform_3ds::PresentationMetrics::Interval presentation_interval{};
+    // The dashboard_ counters accumulate over about one second; each
+    // performance row reports them and resets them.
     starfox::platform_3ds::DiagnosticSnapshot snapshot{};
     std::array<float, 256> frame_times{};
     unsigned frame_time_count = 0U;
@@ -532,6 +575,8 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
     std::optional<starfox::platform_3ds::OverlayMetrics>
         last_overlay_metrics;
 
+    // Scales a brightness up over the 120 ms after the first nonzero one in
+    // this session, then passes it through unchanged.
     std::optional<std::uint64_t> loading_reveal_start;
     const auto reveal_brightness = [&](std::uint8_t brightness) {
         if (brightness == 0U) return brightness;
@@ -621,6 +666,10 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
     unsigned gpu_world_retries = 0U;
     bool options_presented=false;
     starfox::platform_3ds::UpdateStatus last_options_update;
+    // The session loop. Before a HOME or POWER transition, main_loop()
+    // silences audio and waits up to 500 ms for the GPU. A GPU that the APT
+    // suspend fence (gpu_lifetime_3ds.c) abandoned moves presentation to the
+    // CPU below.
     while (apt_audio_pause.main_loop([&] { return display.wait_gpu_idle(500U); })) {
         if (starwing_gpu_abandoned() && display.gpu_active()) {
             display.use_cpu_presentation();
@@ -640,7 +689,8 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
 #endif
         if (apt_audio_pause.take_resumed()) {
             // Returning from HOME/sleep: no catch-up burst, full redraw.
-            // Sleep leaves the old ring looping; restart it from silence.
+            // Sleep leaves the PCM ring looping its last samples; restart it
+            // from silence.
             audio.stop_playback_no_wait();
             audio.reapply_cpu_quota();
             previous_ticks = svcGetSystemTick();
@@ -652,6 +702,8 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
             display.note_top_framebuffer(display.top_framebuffer());
             top_failing_since_ms = 0U;
         }
+        // Updater status and notes for the menu; a finished install ends the
+        // session (the game must be reopened).
         const auto update = updater.status();
         menu->set_update_status(update);
         if(update_notes_revision!=update.notes_revision) {
@@ -667,6 +719,8 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
         input.sample_display_frame();
         const auto raw_keys_down = hidKeysDown();
         const auto raw_keys_held = hidKeysHeld() | raw_keys_down;
+        // START+SELECT outside the menus saves the player's progress, starts
+        // the tour and runs the GPU self test; START during the tour cancels it.
         constexpr u32 test_chord = KEY_START | KEY_SELECT;
         const bool test_chord_held = (raw_keys_held & test_chord) == test_chord;
         if (!test_mode.running() && test_chord_held && !test_chord_latched
@@ -738,6 +792,8 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
         const bool clear_requested = diagnostics.poll_clear_shortcut(
             keys_down, keys_held);
         if (clear_requested) capture_requested = false;
+        // Touch and buttons for the entry buttons, the Options menu and its
+        // questions, and the L+R+SELECT overlay; then the menu's actions.
         touchPosition touch{};
         hidTouchRead(&touch);
         if (test_mode.running()) touch = {};
@@ -826,6 +882,8 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
             }
             break;
         }
+        // Settings apply every pass. The 4:3 view is for gameplay and
+        // training only; every other scene is shown wide.
         const bool wide_view = menu->wide()
             || (game.flow_state()!=starfox::simulation::GameFlowState::gameplay
                 && game.flow_state()!=starfox::simulation::GameFlowState::training);
@@ -839,6 +897,8 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
         renderer.set_native_engine(profile.pica_world && !gpu_world_disabled
             && display.gpu_active() && display.native_engine_ready(), true);
         renderer.set_retained_mode1_layers(display.retained_mode1_available());
+        // MAIN MENU: hold black for 900 ms, return the game to its title, then
+        // fade the title in over 350 ms.
         if(main_menu_transition==MainMenuTransition::black_hold) {
             if(osGetTime()<black_until_ms) {
                 menu->draw_black();
@@ -858,6 +918,9 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
             previous_ticks = svcGetSystemTick();
             pacing.reset(); presentation_metrics->reset_epoch();
         }
+        // While Options or a question is shown the game is frozen: no phases
+        // or ticks run and the pass ends here unless a capture was requested.
+        // With Options open the SPC keeps producing a packet every 50 ms.
         if(menu->open()) {
             if(frozen_options_top.empty()&&display.top_framebuffer()!=nullptr) {
                 // Hold the exact last presented game/menu image while all
@@ -934,6 +997,8 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
         double pixel_comparison_alpha=1.0;
         starfox::render::Palette256 pixel_comparison_palette{};
         const char* pixel_comparison_backend="unknown";
+        // The tour's requests: enter its next map, capture the window just
+        // measured, or finish and restart the session.
         switch (test_mode.poll(osGetTime())) {
         case starfox::platform_3ds::TestMode3ds::Request::enter_map: {
             // A fresh simulation at the level entry, built as a new game
@@ -1002,6 +1067,10 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
             break;
         }
         if (test_finished) break;
+        // Video phases: run the 60 Hz phases due since the last pass, at most
+        // max_video_phases_per_presentation, so a late pass presents before
+        // the next tick. A phase runs a logic tick when the simulation is due
+        // one; the tick takes the input latched since the previous tick.
         const auto loop_begin = svcGetSystemTick();
         const auto audio_wait_before=audio.diagnostics().wait_total_us;
         std::uint32_t loop_instructions=0U;
@@ -1157,11 +1226,11 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
         // slows or a render misses a display deadline; APU writes from
         // intervening game ticks are applied to this packet in order.
         // Start it after this presentation's ticks, so it runs on its core
-        // during the render. Started between two phases of one batch, the
-        // next tick of the same batch waited for the whole packet: about
-        // 20 ms per frame on Old 3DS, where every batch has three phases.
-        // A tick still reads the ports of the packet holding the previous
-        // tick's writes, as before.
+        // during the render. Started between two phases of one batch, it
+        // would make the next tick of that batch wait for the whole packet:
+        // about 20 ms per frame on Old 3DS, where every batch has three
+        // phases. A tick reads the ports of the packet holding the previous
+        // tick's writes.
         while (audio_video_phases >= 3U) {
             // The packets queue behind the one being rendered: nothing here
             // waits for it. A tick that reads the sound ports still waits
@@ -1188,6 +1257,10 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
         const bool catching_up = pacing.ready() && !logic_advanced;
         const bool render_due = test_capture || (video_phases!=0U && !catching_up
             && cadence_due);
+        // Presentation: draw the top screen (or reuse the last frame when
+        // nothing changed) and submit it; a failed PICA path falls back to a
+        // software-rendered frame. Then refresh the bottom screen and run the
+        // watchdog.
         if (render_due) {
             dashboard_coalesced_phases += video_phases ? video_phases - 1U : 0U;
             const auto dashboard_render_tick = svcGetSystemTick();
@@ -1666,6 +1739,8 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                 game.synchronize_apu_output_ports(audio.output_ports());
             dashboard_audio_ms += osGetTime() - audio_wait_begin;
         }
+        // Autosave in gameplay or training at most every 30 s, and only between
+        // SPC packets so the saved audio state matches the game's.
         const auto autosave_now=osGetTime();
         const auto autosave_flow=game.flow_state();
         if(menu->auto_save()&&!test_session_touched&&!audio.pending()
@@ -1696,7 +1771,8 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
                 ticks_to_microseconds(svcGetSystemTick() - loop_begin), logic_advanced);
         const auto dashboard_vblank_start = osGetTime();
         // Sleep until the next 60 Hz phase, which may precede the next VBlank.
-        // Keep the CSV's legacy vblank_wait name for this pacing sleep.
+        // The performance CSV keeps the column name vblank_wait_us for this
+        // pacing sleep, for compatibility.
         const auto pacing_wait_begin = svcGetSystemTick();
         const auto pacing_sleep_ns = pacing.remaining_nanoseconds(
             pacing_wait_begin - previous_ticks);
@@ -1708,6 +1784,8 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
         dashboard_vblank_ms += osGetTime() - dashboard_vblank_start;
         const auto dashboard_now_ms = osGetTime();
         const auto dashboard_elapsed = dashboard_now_ms - dashboard_start_ms;
+        // About once a second: fill the snapshot (overlay, captures), append a
+        // performance row, feed the tour and reset the dashboard_ counters.
         if (dashboard_elapsed >= 1000U) {
             const auto attempts = std::max(1U,
                 dashboard_presented + dashboard_missed);
@@ -1966,6 +2044,10 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
             if(overlay_visible) present_new_overlay();
             else present_bottom_pixels(menu->bottom_pixels());
         }
+        // L+R+X deletes the diagnostic dumps. A capture (shortcut, overlay
+        // card, Options or a tour window) writes a dump and, for a mono
+        // gameplay frame, the pixel comparison. Both exclude their I/O time
+        // from pacing and telemetry.
         if (clear_requested) {
             bottom_presentation = BottomPresentation::unknown;
             last_overlay_metrics.reset();
@@ -2419,6 +2501,9 @@ std::optional<RunRequest> run_game(bool ex,const std::string& selected_rom,
 
 } // namespace
 
+// Starts the remembered ROM and edition (last-rom.cfg), or the first supported
+// ROM, opening the picker when several exist and none is remembered. Sessions
+// run until one returns no next game; a std::exception ends in show_error().
 int main(int argc, char** argv) {
     std::set_new_handler(capture_allocation_failure);
     gfxInitDefault();

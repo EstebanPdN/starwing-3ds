@@ -4,11 +4,15 @@
 #include <cstdio>
 #include <memory>
 #include <string>
+// Sixteen on-console GPU cases for retained Mode 1 layers, run by
+// run_gpu_self_test (gpu_self_test.cpp) after its own 60 cases. 3DS only.
 
 namespace starfox::platform_3ds {
 // Differential device check: the established two-screen-texture presenter
 // and the retained atlas presenter must produce identical RGB565 output.
 // The separate host plan test checks the integer scroll/HDMA oracle.
+// Appends one JSON line per case (numbered 60-75) to `report`, adds to
+// `completed` and `failed`, and saves both pictures of a mismatch in `folder`.
 inline void run_mode1_layer_gpu_tests(Display3ds& display,FILE* report,
     const std::string& folder,unsigned& completed,unsigned& failed) {
     auto p=std::make_unique<simulation::SnesPpuState>();

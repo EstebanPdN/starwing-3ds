@@ -4,8 +4,14 @@
 #include "top_viewport.hpp"
 #include <algorithm>
 #include <cstdio>
+// Eight on-console GPU cases for source line batches, run by run_gpu_self_test
+// (gpu_self_test.cpp) as its last suite. 3DS only.
 
 namespace starfox::platform_3ds {
+// Each case draws 192 seeded random lines (thickness and dither scale 1-4) as
+// source_line_runs rectangles through the native presenter and compares every
+// top-screen pixel with a CPU Bresenham reference. Appends JSON lines to
+// `report` (cases 76-83, up to eight mismatches each) and adds to the counters.
 inline void run_line_batch_gpu_tests(Display3ds& display,FILE* report,
     unsigned& completed,unsigned& failed) {
     std::uint32_t state=0x165c816U;

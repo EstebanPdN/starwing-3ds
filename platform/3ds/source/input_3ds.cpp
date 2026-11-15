@@ -7,6 +7,7 @@
 namespace starfox::platform_3ds {
 namespace {
 
+// Raw Circle Pad deflection beyond which an axis counts as a held direction.
 constexpr int kCircleThreshold = 48;
 
 void add_button(input::ButtonMask& result, u32 held, u32 physical,
@@ -33,6 +34,8 @@ void Input3ds::sample_display_frame() noexcept {
     } else if (reserve_select_) {
         held &= ~KEY_SELECT;
     }
+    // L+R+X clears diagnostic dumps and L+R with A or B captures one
+    // (Diagnostics3ds); neither chord reaches the game.
     if ((held & (KEY_L | KEY_R | KEY_X))
         == (KEY_L | KEY_R | KEY_X)) {
         held &= ~(KEY_L | KEY_R | KEY_X);

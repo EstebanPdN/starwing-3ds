@@ -1,5 +1,7 @@
 #pragma once
 #include "starfox/assets/shape.hpp"
+// Byte estimate of a decoded shape, charged against the shape cache budget in
+// frame_3ds.cpp.
 
 namespace starfox::platform_3ds {
 // Conservative retained-storage estimate (capacities, not current lengths).

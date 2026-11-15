@@ -8,6 +8,8 @@
 
 namespace starfox::platform_3ds {
 namespace {
+// The string member `key`, or nullptr when it is missing, not a string or
+// contains a NUL byte.
 const char* json_text(const json_t* object, const char* key) {
     const auto* value = json_object_get(object, key);
     const auto* text = json_string_value(value);
@@ -49,6 +51,7 @@ bool update_is_newer(std::string_view candidate, std::string_view installed) {
 }
 
 namespace {
+// One release object: the qualifying asset described in the header, or nothing.
 std::optional<UpdateRelease> parse_asset(const json_t* root, bool homebrew, bool experimental) {
     if (!json_is_object(root) || !json_is_false(json_object_get(root, "draft"))
         || !json_is_boolean(json_object_get(root, "prerelease"))

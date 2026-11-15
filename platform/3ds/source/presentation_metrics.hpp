@@ -6,6 +6,10 @@
 #include <cstdio>
 #include <string>
 
+// Per-presentation timing of the 3DS main loop (game_3ds.cpp): the last 2048
+// submissions as CSV for diagnostic captures, and frame gap statistics per
+// interval. Host-tested by tests/presentation_metrics_test.cpp.
+
 namespace starfox::platform_3ds {
 
 // Submission intervals include simulation, rendering and pacing. They do
@@ -13,6 +17,9 @@ namespace starfox::platform_3ds {
 // Intentional menus/dumps reset the epoch instead of producing fake stalls.
 class PresentationMetrics {
 public:
+    // One submitted presentation. Times are microseconds: session_us since the
+    // session start, the others for this frame. held is the 3DS key mask;
+    // append() computes gap_us.
     struct Frame {
         std::uint64_t session_us{};
         std::uint32_t gap_us{}, work_us{}, renderer_us{}, presentation_us{};
@@ -27,11 +34,16 @@ public:
         bool mode1_retained_layers{};
         std::uint32_t mode1_layer_converted_bytes{};
     };
+    // Gaps between submissions since the last finish_interval(): percentiles
+    // in milliseconds (of the first 256 gaps), counts, the OR of held keys and
+    // the frames with a direction held.
     struct Interval {
         float gap_p50_ms{}, gap_p95_ms{}, gap_max_ms{}, gap_p99_ms{};
         unsigned gaps{}, over_25_ms{}, over_50_ms{}, held_or{}, moving_frames{};
     };
+    // The next append() records no gap.
     void reset_epoch() noexcept { last_us_ = 0U; }
+    // Stores the frame in the ring and adds its gap to the current interval.
     void append(Frame frame) noexcept {
         if (last_us_ != 0U)
             frame.gap_us = static_cast<std::uint32_t>(
@@ -53,6 +65,7 @@ public:
             static_cast<float>(frame.gap_us) / 1000.0F);
         if (gap_count_ < gaps_.size()) gaps_[gap_count_++] = frame.gap_us;
     }
+    // Returns the current interval's statistics and starts a new interval.
     [[nodiscard]] Interval finish_interval() noexcept {
         if (gap_count_ != 0U) {
             std::sort(gaps_.begin(), gaps_.begin() + gap_count_);
@@ -65,6 +78,7 @@ public:
         gap_count_ = 0U;
         return result;
     }
+    // A header row, then the stored frames, oldest first.
     [[nodiscard]] std::string csv() const {
         std::string result = "session_us,gap_us,work_us,renderer_us,presentation_us,held,phases,bg2_quads,plan_us,plan_wait_us,bg2_x,bg2_y,roll_first,roll_last,alpha_milli,bg2,plan_hit,paused,effective_held,scripted_tick,logic_instructions,audio_wait_us,spc_compute_us,spc_queue_us,world_record_us,scene_compile_us,native_commands,native_rectangles,native_sampled_pixels,mode1_layer_rectangles,mode1_layer_quads,mode1_layer_upload_bytes,mode1_retained_layers,mode1_layer_converted_bytes\n";
         char row[512];

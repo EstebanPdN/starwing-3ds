@@ -3,14 +3,20 @@
 #include <cstdio>
 #include <string>
 #include <vector>
+// The last launched ROM and edition, kept by game_3ds.cpp in a two-line text
+// file (basename, then 1 for Star Fox EX or 0). Host-tested by
+// tests/launch_selection_test.cpp.
 
 namespace starfox::platform_3ds {
 // Store only a basename; startup must still validate it against scanned ROMs.
 struct LaunchSelection { std::string filename; bool ex{}; };
+// A plain file name: 1-255 characters, not "." or "..", with no path
+// separator, drive colon or line break.
 inline bool valid_rom_basename(const std::string& name) {
     return !name.empty() && name.size() <= 255 && name != "." && name != ".."
         && name.find_first_of("/\\\r\n:") == std::string::npos;
 }
+// Returns an empty selection when the file is missing or malformed.
 inline LaunchSelection read_launch_selection(const char* path) {
     LaunchSelection result;
     if (auto* file = std::fopen(path, "rb")) {
@@ -27,6 +33,8 @@ inline LaunchSelection read_launch_selection(const char* path) {
     }
     return result;
 }
+// Writes through `path`.tmp and a rename; false for an invalid basename or a
+// failed write.
 inline bool write_launch_selection(const char* path, const LaunchSelection& value) {
     if (!valid_rom_basename(value.filename)) return false;
     const auto temporary = std::string{path} + ".tmp";
@@ -45,6 +53,7 @@ inline bool write_launch_selection(const char* path, const LaunchSelection& valu
         value.filename.c_str(), value.ex ? 1 : 0) > 0;
     return std::fclose(file) == 0 && fallback_wrote;
 }
+// True when the selection names one of the scanned ROM basenames.
 inline bool selection_available(const LaunchSelection& selection,
     const std::vector<std::string>& filenames) {
     return valid_rom_basename(selection.filename)

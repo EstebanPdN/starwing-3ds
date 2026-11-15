@@ -64,6 +64,8 @@ bool Pica::draw(const Scene& scene,const render::Palette256& palette) {
     C3D_SetScissor(GPU_SCISSOR_DISABLE,0,0,512,256);
     C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
     C3D_AlphaTest(false,GPU_ALWAYS,0);
+    // Replace, not blend: a later rectangle overwrites colour and alpha, so
+    // palette zero (alpha 0) erases geometry drawn before it.
     C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
     // Both texcoord0 and texcoord1 are outputs of the standard Citro2D
     // shader, in every mode. Unit 1 keeps this valid texture bound through
@@ -80,6 +82,7 @@ bool Pica::draw(const Scene& scene,const render::Palette256& palette) {
         stats_.vertices=std::uint32_t(scene.rectangles().size()*4U);
     }
     C2D_Flush();stats_.draws=stats_.vertices?1:0;
+    // Restore alpha blending and Citro2D's depth test for the passes that follow.
     C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
     C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_ALL);
     stats_.build_us=elapsed(begin)-stats_.flush_us;
