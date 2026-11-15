@@ -7,6 +7,7 @@
 #include "top_viewport.hpp"
 #include "screen_transfer.hpp"
 #include "diagnostic_sha256.hpp"
+#include "test_build_label.hpp"
 #include <cstdio>
 #include <memory>
 
@@ -99,10 +100,11 @@ void write_presentation_snapshot(const std::string& folder,const simulation::Sne
         texels_saved=save("native-texels.bin",commands.texels.data(),commands.texels.size());
     }
     if(auto* f=std::fopen((folder+"/presentation-state.json").c_str(),"wb")) {
-        std::fprintf(f,"{\"schema\":1,\"prueba\":6,\"ppu_layout\":\"native_SnesPpuState_little_endian\","
+        std::fprintf(f,"{\"schema\":2,\"build\":\"%.*s\",\"ppu_layout\":\"native_SnesPpuState_little_endian\","
             "\"ppu_bytes\":%u,\"ppu_saved\":%s,\"scroll_x\":%d,\"scroll_y\":%d,\"alpha\":%.9f,"
             "\"native\":%s,\"width\":%u,\"height\":%u,\"command_stride\":%u,\"command_count\":%u,"
             "\"commands_saved\":%s,\"texels_saved\":%s}\n",
+            static_cast<int>(test_build_label.size()),test_build_label.data(),
             unsigned(sizeof(ppu)),ppu_saved?"true":"false",scroll_x,scroll_y,alpha,native?"true":"false",
             unsigned(commands.width()),unsigned(commands.height()),unsigned(sizeof(render::RasterCommand)),
             native?unsigned(commands.commands.size()):0,commands_saved?"true":"false",texels_saved?"true":"false");

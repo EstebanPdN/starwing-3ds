@@ -5,6 +5,7 @@
 // machine, the controller script and the text reports. It makes no console
 // call, so the host test runs exactly this code.
 #include "starfox/input/buttons.hpp"
+#include "test_build_label.hpp"
 
 #include <algorithm>
 #include <array>
@@ -280,7 +281,8 @@ private:
     }
     void write_window_files(const std::string& dump_dir, const char* line) const {
         if (FILE* file = std::fopen((dump_dir + "/prueba.txt").c_str(), "w")) {
-            std::fprintf(file, "schema=2\nprueba=8\ninput_script=starwing-tour-v1\ninput_clock=source_logic_tick\nescenario=%s\nventana=%u\nrecorrido=%s\n%s",
+            std::fprintf(file, "schema=3\nbuild=%.*s\ninput_script=starwing-tour-v1\ninput_clock=source_logic_tick\nescenario=%s\nventana=%u\nrecorrido=%s\n%s",
+                static_cast<int>(test_build_label.size()), test_build_label.data(),
                 map(), window_ + 1U, long_ ? "largo" : "corto", line);
             std::fclose(file);
         }

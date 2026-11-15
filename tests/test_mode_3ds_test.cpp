@@ -143,6 +143,7 @@ int main() {
         for (const auto& dump : run.dumps) {
             const auto note = read_text(fs::path{dump} / "prueba.txt");
             assert(count(note, "escenario=") == 1U && count(note, "recorrido=corto") == 1U);
+            assert(note.rfind("schema=3\nbuild=Prueba\n", 0) == 0);
             const auto frames = read_text(fs::path{dump} / "cuadros.csv");
             assert(frames.rfind("t_us,trabajo_us,tick,effective_held,scripted_tick\n0,", 0) == 0);
             const auto rows = count(frames, "\n") - 1U;
