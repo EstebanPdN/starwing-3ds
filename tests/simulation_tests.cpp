@@ -4463,8 +4463,10 @@ int main(int argc, char** argv) {
         game.map().write_native_byte(opening_address,4);
         require(!game.dialogue_state().meter_visible,"meter appeared during portrait opening");
         game.map().write_native_byte(opening_address,5);
-        game.map().write_native_byte(count_address,0);
-        require(!game.dialogue_state().meter_visible,"meter remained during portrait closing");
+        // Closing is not checked by zeroing MSG_COUNT1 here: the meter follows
+        // the phase latched when the cartridge submitted the portrait, not
+        // counters edited afterwards. comms_timing_test.cpp checks closing
+        // against the meter the cartridge draws into its own bitmap.
         game.map().write_native_byte(count_address,20);
         game.map().write_native_byte(friend_address,0);
         require(!game.dialogue_state().meter_visible,"Fox inherited a teammate meter");

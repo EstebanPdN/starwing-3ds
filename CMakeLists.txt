@@ -348,6 +348,8 @@ if(STARFOX_BUILD_TESTS)
     add_test(NAME starfox_3ds_stereo_tests COMMAND starfox_3ds_stereo_tests)
     add_executable(starfox_collision_pair_tests tests/collision_pair_test.cpp)
     target_link_libraries(starfox_collision_pair_tests PRIVATE starfox_core)
+    add_executable(starfox_comms_timing_tests tests/comms_timing_test.cpp)
+    target_link_libraries(starfox_comms_timing_tests PRIVATE starfox_core)
     add_executable(starfox_deferred_apu_sync_tests tests/deferred_apu_sync_test.cpp)
     target_link_libraries(starfox_deferred_apu_sync_tests PRIVATE starfox_core)
     target_compile_features(starfox_deferred_apu_sync_tests PRIVATE cxx_std_20)
@@ -427,6 +429,8 @@ if(STARFOX_BUILD_TESTS)
             "${STARFOX_ROM_FILE}" "${STARFOX_SYMBOLS_FILE}")
         add_test(NAME starfox_collision_pair_original COMMAND starfox_collision_pair_tests
             "${STARFOX_ROM_FILE}" "${STARFOX_SYMBOLS_FILE}")
+        add_test(NAME starfox_comms_timing_original COMMAND starfox_comms_timing_tests
+            "${STARFOX_ROM_FILE}" "${STARFOX_SYMBOLS_FILE}")
         add_test(NAME starfox_collision_accelerator_original COMMAND starfox_collision_accelerator_tests
             "${STARFOX_ROM_FILE}" "${STARFOX_SYMBOLS_FILE}")
         add_test(NAME starfox_transfer_accelerator_original COMMAND starfox_transfer_accelerator_tests
@@ -444,6 +448,8 @@ if(STARFOX_BUILD_TESTS)
     endif()
     if(EXISTS "${STARFOX_EX_ROM_FILE}" AND EXISTS "${STARFOX_EX_SYMBOLS_FILE}")
         add_test(NAME starfox_collision_pair_ex COMMAND starfox_collision_pair_tests
+            "${STARFOX_EX_ROM_FILE}" "${STARFOX_EX_SYMBOLS_FILE}")
+        add_test(NAME starfox_comms_timing_ex COMMAND starfox_comms_timing_tests
             "${STARFOX_EX_ROM_FILE}" "${STARFOX_EX_SYMBOLS_FILE}")
         add_test(NAME starfox_collision_accelerator_ex COMMAND starfox_collision_accelerator_tests
             "${STARFOX_EX_ROM_FILE}" "${STARFOX_EX_SYMBOLS_FILE}")
