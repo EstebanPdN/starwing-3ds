@@ -2,6 +2,16 @@ cmake_minimum_required(VERSION 3.22)
 
 project(starfox_enhanced VERSION 0.0.6.7 LANGUAGES C CXX)
 
+# Name files relative to the source and build trees in __FILE__ strings and
+# debug information, so binaries do not carry the paths of the machine that
+# built them. GCC applies the last matching map first, so the build tree,
+# which may sit inside the source tree, comes last.
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(
+        "-ffile-prefix-map=${CMAKE_SOURCE_DIR}/="
+        "-ffile-prefix-map=${CMAKE_BINARY_DIR}/=")
+endif()
+
 # The application target lives in platform/3ds. This project builds its
 # shared engine and optional native regression/data tools.
 option(STARFOX_BUILD_TESTS "Build deterministic host engine tests" ON)

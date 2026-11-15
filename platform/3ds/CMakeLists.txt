@@ -2,6 +2,12 @@ cmake_minimum_required(VERSION 3.20)
 project(starwing_3ds_diagnostic VERSION 0.1 LANGUAGES C CXX ASM)
 
 set(STARFOX_SOURCE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")
+# Name files relative to the repository and build tree in __FILE__ strings and
+# debug information; see the top-level CMakeLists.txt.
+cmake_path(NORMAL_PATH STARFOX_SOURCE_ROOT OUTPUT_VARIABLE STARFOX_SOURCE_ROOT_NORMAL)
+add_compile_options(
+    "-ffile-prefix-map=${STARFOX_SOURCE_ROOT_NORMAL}="
+    "-ffile-prefix-map=${CMAKE_BINARY_DIR}/=")
 set(STARWING_ICON "${CMAKE_CURRENT_LIST_DIR}/assets/icon-48.png" CACHE FILEPATH "HOME Menu icon")
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/version.txt" STARWING_VERSION LIMIT_COUNT 1)
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/cia-version.txt" STARWING_CIA_VERSION LIMIT_COUNT 1)
