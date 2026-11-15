@@ -14,12 +14,15 @@ for TEST in dsp_counter irq_palette; do
     "${ROOT}/tests/${TEST}_test.cpp" -o "${TEST_BUILD}/${TEST}_test"
   "${TEST_BUILD}/${TEST}_test"
 done
-for TEST in bottom_hud_cache native_material; do
-  "${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -I"${ROOT}/include" \
-    -I"${ROOT}/platform/3ds/source" "${ROOT}/tests/${TEST}_test.cpp" \
-    -o "${TEST_BUILD}/${TEST}_test"
-  "${TEST_BUILD}/${TEST}_test"
-done
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -I"${ROOT}/include" \
+  -I"${ROOT}/platform/3ds/source" "${ROOT}/tests/native_material_test.cpp" \
+  -o "${TEST_BUILD}/native_material_test"
+"${TEST_BUILD}/native_material_test"
+# The bottom HUD cache asks the engine where the meters are drawn.
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -I"${ROOT}/include" \
+  -I"${ROOT}/platform/3ds/source" "${ROOT}/tests/bottom_hud_cache_test.cpp" \
+  "${ROOT}/src/render/sprite_renderer.cpp" -o "${TEST_BUILD}/bottom_hud_cache_test"
+"${TEST_BUILD}/bottom_hud_cache_test"
 "${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -I"${ROOT}/tests/native_pica_host" \
   -I"${ROOT}/include" -I"${ROOT}/platform/3ds/source" \
   "${ROOT}/tests/native_pica_test.cpp" "${ROOT}/platform/3ds/source/native_engine/pica.cpp" \
