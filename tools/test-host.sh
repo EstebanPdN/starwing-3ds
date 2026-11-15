@@ -58,6 +58,11 @@ done
   "${ROOT}/tests/audio_suspend_test.cpp" \
   "${ROOT}/platform/3ds/source/audio_3ds.cpp" -o "${TEST_BUILD}/audio_suspend_test"
 "${TEST_BUILD}/audio_suspend_test"
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra \
+  -I"${ROOT}/tests/audio_3ds_host" -I"${ROOT}/platform/3ds/source" \
+  "${ROOT}/tests/audio_ring_test.cpp" \
+  "${ROOT}/platform/3ds/source/audio_3ds.cpp" -o "${TEST_BUILD}/audio_ring_test"
+"${TEST_BUILD}/audio_ring_test" "${TEST_BUILD}/audio-ring.bin"
 "${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -pthread -DSTARWING_AUDIO_REAL_THREADS \
   -I"${ROOT}/tests/audio_3ds_host" -I"${ROOT}/platform/3ds/source" \
   "${ROOT}/tests/audio_ports_fence_test.cpp" \
@@ -67,6 +72,10 @@ done
   -I"${ROOT}/include" -I"${ROOT}/platform/3ds/source" \
   "${ROOT}/tests/test_mode_3ds_test.cpp" -o "${TEST_BUILD}/test_mode_3ds_test"
 "${TEST_BUILD}/test_mode_3ds_test"
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -I"${ROOT}/platform/3ds/source" \
+  "${ROOT}/tests/diagnostic_png_test.cpp" -o "${TEST_BUILD}/diagnostic_png_test"
+mkdir -p "${TEST_BUILD}/diagnostic-png"
+"${TEST_BUILD}/diagnostic_png_test" "${TEST_BUILD}/diagnostic-png"
 "${CC:-cc}" -std=c11 -O2 -Wall -Wextra -I"${ROOT}/tests/gpu_3ds_host" \
   -c "${ROOT}/platform/3ds/source/gpu_lifetime_3ds.c" -o "${TEST_BUILD}/gpu_lifetime.o"
 "${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -pthread -I"${ROOT}/tests/gpu_3ds_host" \

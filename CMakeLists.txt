@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(starfox_enhanced VERSION 0.0.6.7 LANGUAGES CXX)
+project(starfox_enhanced VERSION 0.0.6.7 LANGUAGES C CXX)
 
 # The application target lives in platform/3ds. This project builds its
 # shared engine and optional native regression/data tools.
@@ -327,6 +327,19 @@ if(STARFOX_BUILD_TESTS)
         platform/3ds/source/native_canvas.cpp)
     target_link_libraries(starfox_native_mode1_canvas_tests PRIVATE starfox_core)
     add_test(NAME starfox_native_mode1_canvas_tests COMMAND starfox_native_mode1_canvas_tests)
+    add_executable(starfox_native_canvas_tests tests/native_canvas_test.cpp
+        platform/3ds/source/native_canvas.cpp)
+    target_include_directories(starfox_native_canvas_tests PRIVATE tests/3ds_host)
+    target_link_libraries(starfox_native_canvas_tests PRIVATE starfox_core)
+    add_test(NAME starfox_native_canvas_tests COMMAND starfox_native_canvas_tests)
+    add_executable(starfox_native_panorama_motion_tests tests/native_panorama_motion_test.cpp
+        platform/3ds/source/native_canvas.cpp)
+    target_include_directories(starfox_native_panorama_motion_tests PRIVATE tests/3ds_host)
+    target_link_libraries(starfox_native_panorama_motion_tests PRIVATE starfox_core)
+    add_test(NAME starfox_native_panorama_motion_tests COMMAND starfox_native_panorama_motion_tests)
+    add_executable(starfox_word_math_tests tests/word_math_test.cpp)
+    target_link_libraries(starfox_word_math_tests PRIVATE starfox_core)
+    add_test(NAME starfox_word_math_tests COMMAND starfox_word_math_tests)
     add_executable(starfox_3ds_stereo_tests tests/stereo_3ds_test.cpp
         platform/3ds/source/frame_3ds.cpp platform/3ds/source/native_canvas.cpp
         platform/3ds/source/native_engine/scene.cpp)
@@ -384,6 +397,31 @@ if(STARFOX_BUILD_TESTS)
     add_executable(starfox_framebuffer_transparent_tests tests/framebuffer_transparent_test.cpp)
     target_link_libraries(starfox_framebuffer_transparent_tests PRIVATE starfox_core)
     add_test(NAME starfox_framebuffer_transparent_tests COMMAND starfox_framebuffer_transparent_tests)
+    # Cartridge audio replays: each writes a transcript for byte comparisons
+    # (tests/run_audio_3ds_differential.py) and checks its own invariants.
+    add_executable(starfox_cartridge_audio_tests tests/cartridge_audio_test.cpp)
+    target_link_libraries(starfox_cartridge_audio_tests PRIVATE starfox_core)
+    add_executable(starfox_audio_buffer_reuse_tests tests/audio_buffer_reuse_test.cpp)
+    target_link_libraries(starfox_audio_buffer_reuse_tests PRIVATE starfox_core)
+    # The Options menu draws private, locally generated artwork headers.
+    set(STARWING_UI_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/platform/3ds/source" CACHE PATH
+        "Private generated UI artwork headers")
+    set(STARWING_MENU_TESTS)
+    if(EXISTS "${STARWING_UI_INCLUDE_DIR}/fps_panel_art_data.hpp")
+        file(STRINGS platform/3ds/version.txt STARWING_TEST_VERSION LIMIT_COUNT 1)
+        file(STRINGS platform/3ds/cia-version.txt STARWING_TEST_CIA_VERSION LIMIT_COUNT 1)
+        foreach(MENU_TEST IN ITEMS menu_layout timing_menu)
+            add_executable(starfox_${MENU_TEST}_tests tests/${MENU_TEST}_test.cpp
+                platform/3ds/source/options_menu_3ds.cpp platform/3ds/source/rom_probe.c)
+            target_include_directories(starfox_${MENU_TEST}_tests PRIVATE
+                tests/updater_host platform/3ds/source "${STARWING_UI_INCLUDE_DIR}")
+            target_compile_definitions(starfox_${MENU_TEST}_tests PRIVATE
+                STARWING_BUILD_VERSION="${STARWING_TEST_VERSION}"
+                STARWING_CIA_VERSION=${STARWING_TEST_CIA_VERSION})
+            target_link_libraries(starfox_${MENU_TEST}_tests PRIVATE starfox_core)
+            list(APPEND STARWING_MENU_TESTS ${MENU_TEST})
+        endforeach()
+    endif()
     if(EXISTS "${STARFOX_ROM_FILE}" AND EXISTS "${STARFOX_SYMBOLS_FILE}")
         add_test(NAME starfox_3ds_frame_tests COMMAND starfox_3ds_frame_tests
             "${STARFOX_ROM_FILE}" "${STARFOX_SYMBOLS_FILE}")
@@ -395,6 +433,14 @@ if(STARFOX_BUILD_TESTS)
             "${STARFOX_ROM_FILE}" "${STARFOX_SYMBOLS_FILE}")
         add_test(NAME starfox_strategy_batch_original COMMAND starfox_strategy_batch_tests
             "${STARFOX_ROM_FILE}" "${STARFOX_SYMBOLS_FILE}")
+        add_test(NAME starfox_cartridge_audio_original COMMAND starfox_cartridge_audio_tests
+            "${STARFOX_ROM_FILE}" "${STARFOX_SYMBOLS_FILE}" cartridge-audio-original.bin)
+        add_test(NAME starfox_audio_buffer_reuse_original COMMAND starfox_audio_buffer_reuse_tests
+            "${STARFOX_ROM_FILE}" "${STARFOX_SYMBOLS_FILE}" audio-buffer-reuse-original.bin)
+        foreach(MENU_TEST IN LISTS STARWING_MENU_TESTS)
+            add_test(NAME starfox_${MENU_TEST}_tests COMMAND starfox_${MENU_TEST}_tests
+                "${STARFOX_ROM_FILE}" "${STARFOX_SYMBOLS_FILE}" ${MENU_TEST})
+        endforeach()
     endif()
     if(EXISTS "${STARFOX_EX_ROM_FILE}" AND EXISTS "${STARFOX_EX_SYMBOLS_FILE}")
         add_test(NAME starfox_collision_pair_ex COMMAND starfox_collision_pair_tests
@@ -405,6 +451,10 @@ if(STARFOX_BUILD_TESTS)
             "${STARFOX_EX_ROM_FILE}" "${STARFOX_EX_SYMBOLS_FILE}")
         add_test(NAME starfox_strategy_batch_ex COMMAND starfox_strategy_batch_tests
             "${STARFOX_EX_ROM_FILE}" "${STARFOX_EX_SYMBOLS_FILE}")
+        add_test(NAME starfox_cartridge_audio_ex COMMAND starfox_cartridge_audio_tests
+            "${STARFOX_EX_ROM_FILE}" "${STARFOX_EX_SYMBOLS_FILE}" cartridge-audio-ex.bin)
+        add_test(NAME starfox_audio_buffer_reuse_ex COMMAND starfox_audio_buffer_reuse_tests
+            "${STARFOX_EX_ROM_FILE}" "${STARFOX_EX_SYMBOLS_FILE}" audio-buffer-reuse-ex.bin)
     endif()
 
     add_executable(starfox_state_tests tests/state_tests.cpp)
