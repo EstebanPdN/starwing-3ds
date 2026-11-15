@@ -3,6 +3,10 @@
 #include <cstddef>
 #include <cstdint>
 
+// Exact native kernels for three hot cartridge loops, entered by the compact
+// interpreter (wdc65816_lean.cpp). STARFOX_VERIFY_KERNELS builds repeat every
+// kernel run in the interpreter and compare the results.
+
 namespace starfox::simulation::detail {
 
 struct LeanWatch;
@@ -36,7 +40,8 @@ public:
     // `code` is the host address of the loop head, `room` the bytes of plain
     // memory that follow it; `wram` is $7e0000. `serviced` holds the offsets
     // in work RAM of the bytes a store may not touch, or ~0. Stores into the
-    // watched block leave their marks in `marks`.
+    // watched block leave their marks in `marks`. True when at least one
+    // iteration ran; false leaves `state`, memory and marks untouched.
     bool run(Kind kind, std::uint32_t address, const std::uint8_t* code, std::uint32_t room,
         std::uint8_t* wram, const std::array<std::uint32_t, 2>& serviced, LeanWatch& marks,
         LeanKernelState& state);

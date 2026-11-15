@@ -1,3 +1,5 @@
+// Envelope of starfox/state/container.hpp: "SFESTATE", schema, ROM CRC32 and payload length
+// (little-endian u32s), the payload (64 MiB at most), then a CRC32 of all bytes before it.
 #include "starfox/state/container.hpp"
 #include "starfox/state/archive.hpp"
 #include "starfox/assets/bps.hpp"

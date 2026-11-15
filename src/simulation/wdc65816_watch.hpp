@@ -6,6 +6,10 @@
 #include <span>
 #include <vector>
 
+// Store marks and checkpoints over the object tables in work RAM. The compact
+// interpreter, the kernels and Wdc65816's other writers record their stores
+// here; MapVm's object bridge reads them through Wdc65816.
+
 namespace starfox::simulation::detail {
 
 // Marks left by stores into one block of work RAM (the object tables), so
@@ -39,9 +43,9 @@ struct LeanWatch {
     std::uint32_t trap{~std::uint32_t{0}};
     // A writer that leaves no marks ran: any byte may have changed.
     bool all{true};
-    // While a checkpoint is open, the old bytes of each chunk (and the byte
-    // after it) at its first store: `logged` lists the chunks in the order
-    // they were stored to, `log` holds kept_size bytes for each.
+    // While a checkpoint is open, the contents of each chunk (and the byte
+    // after it) just before its first store: `logged` lists the chunks in the
+    // order they were stored to, `log` holds kept_size bytes for each.
     bool logging{};
     std::uint32_t logged_count{};
     Marks logged{};
@@ -101,7 +105,8 @@ struct LeanWatch {
         }
         all = true;
     }
-    // From here on the first store to each chunk keeps its old bytes.
+    // From here on the first store to each chunk keeps the chunk's previous
+    // contents.
     void open_checkpoint() noexcept {
         seen = {}; kept = {};
         logged_count = 0U;

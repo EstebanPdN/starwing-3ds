@@ -21,8 +21,16 @@
 #include <unordered_map>
 #include <vector>
 
+// GameSimulation: one session of Star Fox or Star Fox EX, advanced in
+// deterministic 20 Hz source updates that run the cartridge code on the 65C816
+// core. It also owns the front-end flow, the user settings and the
+// presentation state that the 3DS frontend, the host tools and tests read.
+
 namespace starfox::simulation {
 
+// What one tick() produced: 65C816 instructions run outside the strategy pass,
+// the strategy pass itself, the APU port writes to forward to the SPC700, and
+// the commands the IRQ sound queue sent to APU port 3.
 struct GameTickResult {
     std::size_t prelude_instructions{};
     StrategyTickStats strategies{};
@@ -33,6 +41,7 @@ struct GameTickResult {
     bool presentation_unchanged{};
 };
 
+// The screen or scene the session is in; tick() dispatches on it.
 enum class GameFlowState {
     pregame_menu,
     title,
@@ -51,11 +60,16 @@ enum class GameFlowState {
     finished,
 };
 
+// Video phases (60 Hz rasters) per source update. unlocked_20_fps always
+// uses three, the cartridge's 20 Hz ceiling; original_speed lets the pace
+// model add phases for heavy gameplay scenes, approximating the console's
+// slowdown.
 enum class TimingMode {
     unlocked_20_fps,
     original_speed,
 };
 
+// Which game's presentation rules the frontend follows (HUD, sprites).
 enum class Experience {
     original,
     starfox_ex,
@@ -85,6 +99,7 @@ enum class RenderScale : std::uint8_t {
 
 inline constexpr std::size_t render_scale_count = 4U;
 
+// Pages of the setup menu.
 enum class PregamePage {
     main,
     options,
@@ -93,6 +108,8 @@ enum class PregamePage {
     cheats,
 };
 
+// Row ids of each setup page in display order. pregame_selection() holds one
+// of these ids, not a row position.
 inline constexpr std::array<std::uint8_t, 12> main_menu_order{
     0,1,2,3,4,5,6,20,21,14,15,16};
 inline constexpr std::array<std::uint8_t, 5> two_d_menu_order{8,18,13,24,23};
@@ -142,6 +159,9 @@ enum class TwoDFilterMode : std::uint8_t {
 
 inline constexpr std::size_t two_d_filter_mode_count = 6U;
 
+// The HUD meters as the cartridge keeps them: the player's shield (damage)
+// and boost bars, boss health, and on Star Fox EX the second player's bars
+// and health bar size (`extended` is set).
 struct MeterState {
     [[nodiscard]] bool operator==(const MeterState&) const = default;
     std::uint8_t damage{};
@@ -161,6 +181,9 @@ struct MeterState {
     std::uint8_t player_health_max{36U};
 };
 
+// The circular colour window of DO_CIRCLE_EXPLOSION_L (explosions and round
+// wipes), captured once per source update; the centre is in the 256x224
+// coordinates of the SNES colour window.
 struct CircleEffectState {
     bool active{};
     std::int16_t centre_x{};
@@ -172,6 +195,8 @@ struct CircleEffectState {
     std::uint8_t affected_layers{};
 };
 
+// The window wipe of DO_WINDOW_WIPE_L: per source scanline, the left and
+// right window edges, and the window logic byte.
 struct WindowWipeState {
     bool active{};
     std::uint8_t logic{};
@@ -197,11 +222,18 @@ struct ColourMathEffectState {
     std::uint8_t blue{};
 };
 
+// Presentation-only blend between two source updates' wipes (alpha 0..1).
+// Window edges interpolate while both wipes are active with the same logic;
+// a recognized horizontal shutter (logic $aa) opens smoothly, including its
+// final step. Any other change cuts to `current`.
 [[nodiscard]] WindowWipeState interpolate_window_wipe(
     const WindowWipeState& previous,
     const WindowWipeState& current,
     double alpha) noexcept;
 
+// The communication window: whether a channel is open, its portrait frame,
+// the 24-bit address of its text, and the teammate health meter. Only one
+// channel shows; Star Fox EX's second channel wins (alternate_portraits).
 struct DialogueState {
     bool active{};
     bool text_visible{};
@@ -213,6 +245,8 @@ struct DialogueState {
     std::uint8_t meter_health{};
 };
 
+// The end-of-stage tally: this stage's percentage (and the part counted so
+// far), hits, the running total and the three teammates' health.
 struct StageResultsState {
     bool active{};
     std::uint8_t percentage{};
@@ -224,6 +258,8 @@ struct StageResultsState {
     bool credit_bonus{};
 };
 
+// The planet briefing text: how many characters of the message and of the
+// planet name are revealed, and the ROM addresses of both strings.
 struct BriefingState {
     bool active{};
     std::uint8_t visible_message_characters{};
@@ -232,6 +268,9 @@ struct BriefingState {
     std::uint32_t planet_name_address{};
 };
 
+// Planet-map transitions after a destination is chosen: the fade around the
+// selected planet's 30x30 box (amount 0..31), the briefing layers, Pepper's
+// portrait brightness and the fade into the level.
 struct PlanetPresentationState {
     bool isolate_fade{};
     std::uint8_t isolate_amount{};
@@ -260,10 +299,15 @@ struct MouseInputState {
 
 // A deterministic 20 Hz game-state shell around the original player/map/
 // strategy data. Presentation deliberately lives outside this class.
+// The runtime calls present_frame() once per 60 Hz video phase and tick()
+// whenever logic_tick_ready(); both run on one thread. Holds pointers to the
+// ROM image and symbol map, which must outlive it.
 class GameSimulation {
 public:
+    // Diagnostics, never saved.
     // Last completed gameplay tick, in milliseconds. Kept in RAM only;
     // presentation diagnostics copy this into the owner-requested dump.
+    // Measured on 3DS builds only; zeros elsewhere.
     [[nodiscard]] const std::array<double, 11>& tick_phase_ms() const noexcept {
         return tick_phase_ms_;
     }
@@ -297,6 +341,16 @@ private:
         std::uint32_t address, Wdc65816Registers& registers,
         std::uint32_t instruction_limit, std::uint8_t request_flags);
 public:
+    // Lifecycle and timing.
+    // Boots the cartridge as its outer loop would (WRAM routines, INITIALISE_L,
+    // music, sprites, 3D setup, MAPP's player objects), then enters
+    // `initial_map`: a ROM map label such as LEVEL1_1 (run through INITGAME_L
+    // when source_initialize_direct_map is set), or one of the host entries
+    // BOOT, PLANETSELECT, TITLEMAP, INTROMAP, CONTMAP, GAMEOVER, CONTINUE and
+    // CREDITSMAP. `cartridge_ram` is Star Fox EX's 64 KiB battery RAM, empty
+    // for a fresh one. Throws std::runtime_error for a missing symbol or a
+    // failed boot step, std::invalid_argument for cartridge RAM of the wrong
+    // size or given with a retail ROM.
     GameSimulation(
         const assets::RomImage& rom,
         const assets::SymbolMap& symbols,
@@ -304,22 +358,37 @@ public:
         std::span<const std::uint8_t> cartridge_ram = {},
         bool source_initialize_direct_map = false);
 
+    // One source update with the input latched for it. Video phases the pace
+    // model still requires are presented first. In gameplay this runs
+    // TRANS.ASM's sequence (INIT_STRATS_L, UPDATE_OBJECTS_L, the strategy
+    // pass, view, particles, collisions) and services the IRQ-side audio once
+    // per video phase. Errors from cartridge code propagate.
     [[nodiscard]] GameTickResult tick(const input::TickInput& input);
+    // The whole session: host fields, objects, the 65C816 machine, particles
+    // and dust, tied to this ROM's CRC32 (see game_state.cpp).
     [[nodiscard]] std::vector<std::uint8_t> save_state() const;
     // Keep sibling object addresses stable: construct a complete replacement
     // and let the runtime atomically swap its owning pointer after audio loads.
+    // Throws std::runtime_error for another format or ROM, a damaged archive
+    // or out-of-range settings; this object is not changed.
     [[nodiscard]] std::unique_ptr<GameSimulation> restored_state(
         std::span<const std::uint8_t> bytes) const;
     // Commit an already validated replacement without changing this object's
     // address (the renderer and runtime retain references to it).
     void swap_state(GameSimulation& other) noexcept;
+    // One 60 Hz video phase: IRQ-side fades and scrolls, deferred MSU-1
+    // starts and the front-end raster timers.
     void present_frame();
+    // Starts the map script at ROM label `symbol` for the current player and
+    // runs its first records; throws std::runtime_error for an unknown label.
     void start_map(const std::string& symbol);
+    // The SPC700's output latch, for the cartridge's reads of $2140-$2143.
     void synchronize_apu_output_ports(
         const std::array<std::uint8_t, 4>& ports) noexcept {
         map_.set_apu_output_ports(ports);
     }
 
+    // Simulation state.
     [[nodiscard]] ObjectHandle player() const noexcept { return player_; }
     [[nodiscard]] const ObjectPool& objects() const noexcept { return objects_; }
     [[nodiscard]] ObjectPool& objects() noexcept { return objects_; }
@@ -327,12 +396,21 @@ public:
     [[nodiscard]] MapVm& map() noexcept { return map_; }
     [[nodiscard]] const ParticleSystem& particles() const noexcept { return particles_; }
     [[nodiscard]] const DustSystem& dust() const noexcept { return dust_; }
+    // Points of the dust field in use (see kNormalDustPoints).
     [[nodiscard]] std::size_t dust_point_count() const noexcept;
+    // The objects the view pass found in view, in drawing order. Built once
+    // per source update; a handle can be inactive by the time it is read.
     [[nodiscard]] const std::vector<ObjectHandle>& draw_order() const noexcept {
         return draw_order_;
     }
+    // The 16 colours of GAMEPALBUFF, the 3D model palette, read without bus
+    // effects.
     [[nodiscard]] std::array<std::uint16_t, 16> palette_words() const noexcept;
     [[nodiscard]] GameFlowState flow_state() const noexcept { return flow_state_; }
+
+    // Front-end and setup menu.
+    // Leaves the Controls screens, planet selection or paused gameplay and
+    // training for the title screen; does nothing elsewhere.
     void return_to_title_from_menu() {
         if (flow_state_ == GameFlowState::controls_type
             || flow_state_ == GameFlowState::controls_choice
@@ -345,6 +423,9 @@ public:
             enter_title();
         }
     }
+    // Opens the setup menu over the running scene, which stops advancing, or
+    // closes it again. False when the boot setup menu or a menu preview is
+    // already showing.
     bool toggle_runtime_options() noexcept {
         if(runtime_options_open_) {runtime_options_open_=false;menu_preview_=false;video_phases_since_tick_=runtime_options_video_phase_;return true;}
         if(in_setup_menu()) return false;
@@ -357,6 +438,8 @@ public:
     [[nodiscard]] bool in_setup_menu() const noexcept {
         return menu_preview_ || flow_state_ == GameFlowState::pregame_menu;
     }
+    // Setup row 16 toggles preview_requested(); START during a menu preview
+    // sets preview_start_requested().
     [[nodiscard]] bool preview_requested() const noexcept { return preview_requested_; }
     [[nodiscard]] bool preview_start_requested() const noexcept { return preview_start_requested_; }
     void enable_menu_preview() noexcept {
@@ -366,6 +449,8 @@ public:
         pregame_selection_ = 16U;
         pregame_page_ = PregamePage::main;
     }
+    // The ending task is in ENDSEQ's TRANS_FLAG 26..32 handshake (the boss
+    // roll). Reads through the bus.
     [[nodiscard]] bool boss_roll_active() const {
         const auto transfer = map_.read_native_byte(0U);
         return ending_task_active_ && transfer >= 26U && transfer <= 32U;
@@ -373,6 +458,10 @@ public:
     [[nodiscard]] bool final_score_active() const noexcept {
         return credits_complete_ && flow_state_ == GameFlowState::finished;
     }
+
+    // Settings. Numeric setters store 0 (off or the default) for a value out
+    // of range, except set_presentation_fps(); the setup menu changes most
+    // settings directly during tick().
     [[nodiscard]] TimingMode timing_mode() const noexcept { return timing_mode_; }
     void set_timing_mode(TimingMode mode) noexcept {
         if (timing_mode_ != mode) pace_debt_ = 0.0;
@@ -394,9 +483,16 @@ public:
         return pregame_page_;
     }
     [[nodiscard]] bool god_mode() const noexcept { return god_mode_; }
+    // Star Fox EX's big-head options: 4 (M_BIGGERHEADMODE), 2 (M_BIGHEADMODE)
+    // or 1, the factor the renderers apply to model coordinates.
     [[nodiscard]] std::uint8_t model_scale_multiplier() const noexcept;
+    // The colour table that Star Fox EX's NAN modes 1-5 put on every model;
+    // empty otherwise.
     [[nodiscard]] std::optional<std::uint16_t>
         model_colour_table_override() const noexcept;
+    // Invincibility through the cartridge's own no-collision flag
+    // (PSHIPFLAGS3 bit 3), reasserted each gameplay tick with a floor of three
+    // bombs; turning it off clears the flag again.
     void set_god_mode(bool enabled) noexcept;
     [[nodiscard]] bool infinite_bombs() const noexcept { return infinite_bombs_; }
     [[nodiscard]] bool infinite_lives() const noexcept { return infinite_lives_; }
@@ -404,6 +500,8 @@ public:
     [[nodiscard]] bool infinite_boost() const noexcept { return infinite_boost_; }
     void set_infinite_bombs(bool value) noexcept { infinite_bombs_ = value; }
     void set_infinite_boost(bool value) noexcept { infinite_boost_ = value; }
+    // Laser level 0-2 granted once at the next gameplay tick; pickups and
+    // damage change it afterwards as usual.
     [[nodiscard]] std::uint8_t default_laser() const noexcept { return default_laser_; }
     void set_default_laser(std::uint8_t value) noexcept {
         default_laser_ = value <= 2U ? value : 0U;
@@ -415,11 +513,15 @@ public:
     void set_stereo_output(std::uint8_t value) noexcept {
         stereo_output_ = value <= 2U ? value : 0U;
     }
+    // Stores 0 unless `value` is one of selectable_levels(): 0, then every
+    // route/stage code whose LEVEL<route>_<stage> label the cartridge has.
     void set_selected_level(std::uint8_t value);
     [[nodiscard]] std::vector<std::uint8_t> selectable_levels() const;
+    // "OFF" or the map label, such as "LEVEL1_1".
     [[nodiscard]] std::string selected_level_name() const;
     // Shared front-end level-select launch, including route/stage setup.
     // OFF and an open native options overlay leave gameplay untouched.
+    // Returns whether a level was launched.
     bool launch_selected_level();
     // Face count per shape id, for the ORIGINAL SPEED pace estimate. The host
     // owns this because it is the side that decodes shapes; the simulation
@@ -431,6 +533,9 @@ public:
         if (shape_face_counts_ != counts) pace_debt_ = 0.0;
         shape_face_counts_ = counts;
     }
+    // Effect levels (lighting, bloom, model smoothing, chromatic aberration,
+    // HDR) run from 0 (off) to 3; intensities and volumes are percentages;
+    // language is 0-5.
     [[nodiscard]] bool show_fps() const noexcept { return show_fps_; }
     [[nodiscard]] bool anti_aliasing() const noexcept {
         return anti_aliasing_mode_ != AntiAliasingMode::off;
@@ -459,6 +564,8 @@ public:
     void set_chromatic_aberration(std::uint8_t value) noexcept { chromatic_aberration_ = value <= 3 ? value : 0; }
     [[nodiscard]] std::uint8_t hdr_effect() const noexcept { return hdr_effect_; }
     void set_hdr_effect(std::uint8_t value) noexcept { hdr_effect_ = value <= 3 ? value : 0; }
+    // Also reapplies the title logo and, on the Controls screens, the
+    // controller artwork's palettes.
     void set_language(std::uint8_t value);
     [[nodiscard]] std::uint8_t effect_intensity() const noexcept { return effect_intensity_; }
     [[nodiscard]] TwoDFilterMode two_d_filter() const noexcept {
@@ -468,6 +575,7 @@ public:
     [[nodiscard]] RendererMode renderer_mode() const noexcept {
         return renderer_mode_;
     }
+    // MSU-1 music stays off while the frontend reports it unavailable.
     [[nodiscard]] bool msu1_music() const noexcept { return msu1_music_; }
     void set_msu1_music(bool enabled) noexcept {
         msu1_music_ = enabled && msu1_available_;

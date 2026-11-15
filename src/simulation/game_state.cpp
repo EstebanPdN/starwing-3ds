@@ -1,3 +1,6 @@
+// GameSimulation save states: the host fields, then the ObjectPool, MapVm
+// (which carries the 65C816 machine), particle and dust archives, packed by
+// state::pack with schema 0x47414d01 and the ROM's CRC32.
 #include "starfox/simulation/game_simulation.hpp"
 #include "starfox/assets/bps.hpp"
 #include "starfox/state/archive.hpp"
@@ -77,11 +80,11 @@ std::unique_ptr<GameSimulation> GameSimulation::restored_state(
     std::vector<std::uint8_t> objects, map, particles, dust;
     a(objects, map, particles, dust);
     const bool legacy_cheats_menu=a.empty();
-    if(!a.empty()) a(result->infinite_lives_); // Older archives default OFF.
+    if(!a.empty()) a(result->infinite_lives_); // Archives without it keep OFF.
     if(!a.empty()) a(result->host_god_mode_override_);
     a.finish();
-    // Before Infinite Lives was added, row five was Back. Preserve the
-    // action selected by older archives rather than enabling a new cheat.
+    // In archives without Infinite Lives, cheats row five is Back. Select
+    // Back (row six of this menu) rather than the cheat on row five.
     if(legacy_cheats_menu && result->pregame_page_==PregamePage::cheats
         && result->pregame_selection_==5U) result->pregame_selection_=6U;
     auto valid_enum = [](auto value, auto last) {
@@ -109,7 +112,8 @@ std::unique_ptr<GameSimulation> GameSimulation::restored_state(
         || result->bloom_2d_ > 3U || result->model_smoothing_ > 3U
         || result->chromatic_aberration_ > 3U || result->hdr_effect_ > 3U)
         throw std::runtime_error{"Invalid game host state"};
-    // Older archives may have stopped on the removed Enhanced Shadows row.
+    // An archive can hold selection 26 on the 3D page, the Enhanced Shadows
+    // row this menu does not have; resume on row 29.
     if(result->pregame_page_==PregamePage::three_d && result->pregame_selection_==26U)
         result->pregame_selection_=29U;
     // Campaign selection rebinds ROM entry points and writes one RAM flag.

@@ -1,12 +1,12 @@
 // Compact 65C816 interpreter for the cartridge logic.
 //
 // The Old 3DS has 16 KB of first-level instruction cache and nothing behind
-// it: a miss costs about as much as thirty instructions. The translated
-// blocks this replaces were 12 MB of code and the template interpreter 350 KB;
-// both spent most of their time missing that cache. This loop is a few
-// kilobytes: instructions that reach memory share one step per addressing
-// mode and one per operation, the registers live in locals, operands are read
-// through a host pointer and page tables are looked at only for data.
+// it: a miss costs about as much as thirty instructions. Translated blocks of
+// the cartridge code take 12 MB and a template interpreter 350 KB; both spend
+// most of their time missing that cache. This loop is a few kilobytes:
+// instructions that reach memory share one step per addressing mode and one
+// per operation, the registers live in locals, operands are read through a
+// host pointer and page tables are looked at only for data.
 //
 // Behaviour is the pinned RetroCPU's, access by access: same bus accesses in
 // the same order, same raw flag words, same cycle and instruction counts, same
@@ -306,10 +306,10 @@ LEAN_LOOP_ATTRIBUTES std::size_t lean_execute(::WDC65C816& cpu, const Fast65816T
 #else
 #define LEAN_SLOW_FLAG(r_) do { if (LEAN_UNLIKELY((r_) >= lean_look)) { attention = 1U; pc_limit = nullptr; } } while (false)
 // A store is about to land at host address p_. Inside the watched block the
-// first store to each 64-byte chunk is noted (and its old bytes kept, when a
-// checkpoint is open). A store that can reach a byte the caller services (the
-// first byte of work RAM, or the trap chunk) sends the next dispatch through
-// `slow`, which looks at those bytes.
+// first store to each 64-byte chunk is noted (and the chunk's previous bytes
+// kept, when a checkpoint is open). A store that can reach a byte the caller
+// services (the first byte of work RAM, or the trap chunk) sends the next
+// dispatch through `slow`, which looks at those bytes.
 #define LEAN_WATCH(p_) do { \
         const uptr w_ = reinterpret_cast<uptr>(p_) - watch_base; \
         if (w_ < watch_size) { \

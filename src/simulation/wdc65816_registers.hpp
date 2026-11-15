@@ -15,6 +15,9 @@
 #define STARFOX_FAST_UNLIKELY(condition) (condition)
 #endif
 
+// The compact interpreter's (wdc65816_lean.cpp) local copy of the library's CPU
+// state, and the inlining and branch-hint macros it is compiled with.
+
 namespace starfox::simulation::detail {
 
 // The CPU state the compact interpreter borrows from the library's WDC65C816

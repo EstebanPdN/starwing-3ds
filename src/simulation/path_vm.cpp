@@ -48,6 +48,8 @@ std::int8_t signed_byte(std::uint8_t value) noexcept {
     return std::bit_cast<std::int8_t>(value);
 }
 
+// Sign and magnitude: the magnitude is (((2 * |left|) mod 256) * |right|) >> 8,
+// negated when the signs differ.
 std::int8_t multiply_original(std::int8_t left, std::int8_t right) noexcept {
     const auto left_bits = bits(left);
     const auto right_bits = bits(right);
@@ -72,6 +74,8 @@ std::int8_t signed_difference8(std::uint8_t left, std::uint8_t right) noexcept {
     return signed_byte(static_cast<std::uint8_t>(left - right));
 }
 
+// LoROM address plus a byte offset, crossing into the $8000 half of the next
+// bank as the ROM image is contiguous.
 std::uint32_t add_lorom_offset(
     std::uint32_t address, std::uint16_t offset) noexcept {
     const auto linear = static_cast<std::uint32_t>(

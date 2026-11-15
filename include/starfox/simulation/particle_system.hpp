@@ -9,10 +9,16 @@
 #include <span>
 #include <vector>
 
+// Particle pool of the Super FX object drawing. GameSimulation ticks it once
+// per source frame and saves it with the game state; render::ParticleRenderer
+// draws particles() relative to each owner object.
+
 namespace starfox::simulation {
 
 inline constexpr std::size_t kMaximumParticles = 300;
 
+// A free slot has life 0. x/y/z are the offset from the owner object and
+// previous_* the offset before the last move.
 struct ParticleState {
     [[nodiscard]] bool operator==(const ParticleState&) const = default;
     std::uint8_t life{};
@@ -31,8 +37,11 @@ struct ParticleState {
 };
 
 // Native equivalent of MPART.MC's persistent 300-entry Super FX pool.
+// Keeps a pointer to `rom`, which must outlive it.
 class ParticleSystem {
 public:
+    // Reads PARTFADETAB and PARTICLE_CIRCLE; throws std::runtime_error when
+    // either symbol is missing.
     ParticleSystem(
         const assets::RomImage& rom,
         const assets::SymbolMap& symbols);
@@ -41,9 +50,17 @@ public:
         std::uint32_t fade_table,
         std::uint32_t circle_table) noexcept;
 
+    // Frees every slot and reseeds the generator with $1234.
     void reset() noexcept;
     [[nodiscard]] std::vector<std::uint8_t> save_state() const;
+    // Throws std::runtime_error for another version, other table addresses,
+    // or an owner handle above kMaximumObjects; this object is unchanged then.
     void load_state(std::span<const std::uint8_t> bytes);
+    // MDRAWLIS.MC's particle pass over the active objects with strategy flag
+    // bit 4 set and the invisible bit (27) clear: one with a particle type in
+    // scratch_bytes[2] emits scratch_bytes[0] particles of life
+    // scratch_bytes[1], then its particles move. Every particle then ages; one
+    // whose owner was skipped is freed. Does nothing when `enabled` is false.
     void tick(const ObjectPool& objects, bool enabled);
 
     [[nodiscard]] const std::array<ParticleState, kMaximumParticles>& particles()

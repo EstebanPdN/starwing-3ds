@@ -1,3 +1,5 @@
+// Wdc65816::Impl holds the bus with its I/O devices, the native Super FX routines (launch_superfx)
+// and the IRQ-side transfer servicing (service_transfer); the call and task loops close the file.
 #include "starfox/simulation/irq_palette.hpp"
 #include "starfox/simulation/wdc65816.hpp"
 #include "wdc65816_entry.hpp"
@@ -78,8 +80,8 @@ inline void step_cartridge_cpu(WDC65C816& cpu) {
         WDC65C816::EmulateInstruction(&cpu);
     } else {
         // The same fetch and dispatch as EmulateInstruction, kept in this
-        // loop: with the bus read inline, an opcode fetch from ROM no longer
-        // leaves the caller. Tracing stays on the library path above.
+        // loop so that the inline bus read serves an opcode fetch from ROM
+        // without leaving the caller. Tracing stays on the library path above.
         std::uint8_t opcode;
         cpu.ReadU8(state.GetCanonicalAddress(), opcode);
         cpu.current_instruction_set[opcode](&cpu);
@@ -435,7 +437,8 @@ struct Wdc65816::Impl {
                 throw std::runtime_error{"invalid saved MSU register"};
             core.pending_interrupts.store(interrupts,std::memory_order_relaxed);
         }
-        // Append-only CPU snapshot extension: Prueba 4 remains readable.
+        // Appended last and optional on load, so CPU snapshots written
+        // without this field still load.
         if constexpr (std::same_as<Archive,state::Reader>) {
             if (!archive.empty()) archive(dialogue_speaking);
         } else archive(dialogue_speaking);
@@ -539,9 +542,9 @@ struct Wdc65816::Impl {
             *data = static_cast<std::uint8_t>(
                 self.multiply_result >> ((low - 0x4216U) * 8U));
         } else if (low >= 0x3000U && low < 0x3300U) {
-            // The geometry processor is currently represented as an
-            // immediately completing coprocessor. In particular SFR's GO
-            // flag ($3030 bit 5) is clear when the 65C816 polls it.
+            // The geometry processor is represented as an immediately
+            // completing coprocessor. In particular SFR's GO flag ($3030
+            // bit 5) is clear when the 65C816 polls it.
             *data = self.superfx_registers[low - 0x3000U];
         }
     }
@@ -1882,9 +1885,9 @@ struct Wdc65816::Impl {
     void write_planet_pixel(std::int32_t x, std::int32_t y, std::uint8_t colour) noexcept {
         if (x < 0 || y < 0 || x >= 128 || y >= 128 || colour == 0U) return;
         // SETCHARMAPPLAN_L lays the 16x16 8-bpp bitmap out column-major:
-        // moving one tile right adds 16, while moving down adds one. Using a
-        // conventional row-major index only became obvious during the zoom,
-        // where it transposed each tile into a block of apparent static.
+        // moving one tile right adds 16, while moving down adds one. A
+        // conventional row-major index transposes each tile into a block of
+        // apparent static, which shows during the zoom.
         const auto tile = static_cast<std::uint32_t>(x >> 3) * 16U
             + static_cast<std::uint32_t>(y >> 3);
         const auto row = static_cast<std::uint32_t>(y & 7);
@@ -2235,7 +2238,7 @@ struct Wdc65816::Impl {
     void draw_planet_sprite32() {
         const auto sprite = read_superfx16(msprite);
         // PLANETS marks spherical entries with bit 7, then clears that bit
-        // immediately before launching MDRAWTSPHERE. RetroCPU currently
+        // immediately before launching MDRAWTSPHERE. The pinned RetroCPU
         // misses the 8-bit BMI on this path, so the marker can arrive at the
         // translated flat-sprite entry instead. Recover the source branch
         // here instead of indexing TEXTUREADDRTAB with the bogus $80 bit.
@@ -2316,9 +2319,9 @@ struct Wdc65816::Impl {
         // PLANETS stores the sphere marker in bit 7 and may retain unrelated
         // high-byte scratch bits in M_SPRITE while entering MDRAWSPHERE. The
         // original GSU consumes only the 7-bit texture index. Indexing the
-        // host pointer table with the full word (for Venom this was $0838)
-        // wandered into unrelated ROM bytes and eventually tried to sample
-        // $70:0c6d as LoROM.
+        // host pointer table with the full word ($0838 for Venom) wanders
+        // into unrelated ROM bytes and eventually tries to sample $70:0c6d
+        // as LoROM.
         const auto sprite = static_cast<std::uint16_t>(
             read_superfx16(msprite) & 0x007fU);
         const auto source = texture_pointer(sprite);
@@ -2916,8 +2919,8 @@ struct Wdc65816::Impl {
         case 26U:
             // ENDSEQ's first IRQ is the same upper-bitmap DMA as FOXIRQ1,
             // but it advances through the dedicated 26/28/30/32 handshake.
-            // Clearing an unfamiliar 26 here left ENDTRANS waiting forever
-            // for TRANSBMP1 and eventually trapped END_GAME_SEQ in its
+            // Clearing 26 as an unknown request would leave ENDTRANS waiting
+            // forever for TRANSBMP1 and eventually trap END_GAME_SEQ in its
             // $1fe334 TRANS_FLAG polling loop.
             if (bitmap1 != 0U && vmap1 != 0U) {
                 copy_superfx_to_vram(static_cast<std::uint16_t>(bitmap1),
@@ -2950,7 +2953,7 @@ struct Wdc65816::Impl {
             // display pages, then returns to the idle ENDSEQBIT0 state. The
             // source IRQ holds at 30 while NOIRQBIT3 is clear; a bounded host
             // call has already completed the frame's display work when it
-            // reaches this service point, so the swap is now safe.
+            // reaches this service point, so the swap is safe here.
             if (noirqbit3 != 0U
                 && wram[static_cast<std::uint16_t>(noirqbit3)] == 0U) {
                 break;
@@ -2985,8 +2988,8 @@ struct Wdc65816::Impl {
         case 38U:
         case 40U:
             // IRQSETMODE1/2 reset the outgoing scene's scroll/effect state.
-            // Acknowledging only BGMODE let boss/black-hole scratch leak into
-            // the next stage and left a tunnel's HDMA channel enabled.
+            // Acknowledging only BGMODE would let boss/black-hole scratch leak
+            // into the next stage and leave a tunnel's HDMA channel enabled.
             for (const auto address : mode_reset_bytes)
                 if (address != 0U) write8(address, 0U);
             for (const auto address : mode_reset_words)
@@ -3001,8 +3004,9 @@ struct Wdc65816::Impl {
             }
             // IRQSETMODE2SP writes $22 to BGMODE: Mode 2 with 16x16 BG2
             // characters. Several EX tunnel/special-stage transitions use
-            // this third setup request. Treating it as an unknown transfer
-            // left the previous mode active and decoded its tilemap as 8x8.
+            // this third setup request. Treated as an unknown transfer, it
+            // would leave the previous mode active and decode its tilemap as
+            // 8x8.
             write_ppu(0x2105U, flag == 36U ? 0x01U
                 : flag == 40U ? 0x22U : 0x02U);
             ppu.main_screen = 0x13U;
@@ -3014,8 +3018,8 @@ struct Wdc65816::Impl {
             wram[0] = 0U;
             break;
         default:
-            // Other transfer modes are presentation paths that are not
-            // entered by bounded gameplay/background calls yet.
+            // Other transfer modes are presentation paths that bounded
+            // gameplay/background calls do not enter.
             wram[0] = 0U;
             break;
         }
@@ -3456,9 +3460,10 @@ std::array<std::uint64_t,6> Wdc65816::native_dispatch_counts() const noexcept {
 std::size_t Wdc65816::call(
     std::uint32_t address, Wdc65816Registers& registers,
     std::size_t instruction_limit, bool service_transfer_flag, bool long_return) {
-    // Keep collision code inside the fast loop: handing short blocks back
-    // to the library repeatedly copied the CPU state and broke dispatch
-    // locality. The same instruction implementations now run continuously.
+    // Collision code stays inside the lean loop: handing short blocks to the
+    // library copies the CPU state each time and breaks dispatch locality.
+    // Only RESTART_L and DOBGREQ_L, called with transfer servicing, take the
+    // variant that also groups the SPC upload and screen fill loops.
     if (service_transfer_flag && address != 0U
         && (address == impl_->transfer_restart_entry
             || address == impl_->transfer_background_entry))
@@ -3639,10 +3644,9 @@ std::size_t Wdc65816::call_impl(
             instructions += ran;
             continue;
         }
-        // The service handler can leave another transfer pending. This path
-        // has always executed one instruction before servicing it again.
-        // Keep that boundary: one instruction with the service check
-        // suppressed never permits a second one.
+        // The service handler can leave another transfer pending. Exactly
+        // one instruction runs before it is serviced again: a budget of one
+        // with the service check suppressed never permits a second one.
         auto single_call = fast_call;
         single_call.budget = 1U;
         single_call.service[0] = single_call.service[1] = nullptr;

@@ -195,8 +195,8 @@ StrategyTickStats NativeStrategyScheduler::tick_all(
 
         if (!objects_->is_active(object)) {
             // A native strategy can remove itself and its following object.
-            // Restarting at ALLST reran already-completed player/boss logic
-            // in the same source tick (irrespective of Original pace).
+            // Restarting at ALLST would rerun already-completed player/boss
+            // logic in the same source tick (irrespective of Original pace).
             object = objects_->is_active(prior_next) ? prior_next : next_unvisited();
             continue;
         }

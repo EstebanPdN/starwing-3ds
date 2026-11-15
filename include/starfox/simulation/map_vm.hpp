@@ -12,19 +12,29 @@
 #include <unordered_map>
 #include <vector>
 
+// MapVm: the WORLD.ASM map-script interpreter, and the owner of the 65C816
+// machine (Wdc65816) that runs the cartridge code. Its object bridge keeps the
+// host ObjectPool and the object tables in work RAM in step around every
+// cartridge call. GameSimulation owns one; the trace tools and host tests
+// build their own.
+
 namespace starfox::simulation {
 
+// One ISTRATS entry: a strategy's 24-bit address and its default shape id.
 struct StrategyEntry {
     std::uint32_t address{};
     std::uint8_t default_shape_id{};
 };
 
+// The ROM's SHAPES (16-bit shape addresses) and ISTRATS tables, indexed by
+// the ids that map records use. Keeps a pointer to `rom`.
 class MapDatabase {
 public:
     MapDatabase(
         const assets::RomImage& rom,
         std::uint32_t shapes_table,
         std::uint32_t strategies_table) noexcept;
+    // Throws std::runtime_error when SHAPES or ISTRATS is missing.
     MapDatabase(const assets::RomImage& rom, const assets::SymbolMap& symbols);
 
     [[nodiscard]] std::uint16_t shape(std::uint8_t id) const;
@@ -43,57 +53,102 @@ struct StrategyBatchCounters {
     std::uint64_t payload_passes{}, payload_slots{}, checkpoint_bytes{};
 };
 
+// Between cartridge calls the ObjectPool and the work-RAM tables describe the
+// same objects, except inside a strategy batch, where work RAM leads and only
+// the lists are imported after each call. The bridge compares and copies only
+// what the pool's touched marks and the processor's store marks allow, and it
+// must leave work RAM, the lists and the open-bus byte exactly as a full copy
+// would.
 class MapVm {
     friend class GameSimulation;
 public:
+    // `symbols` (may be null) supplies the work-RAM addresses of WORLD.ASM's
+    // variables; without it the retail addresses apply. Throws
+    // std::runtime_error when AL_SIZE is not 56 or 57 or NUMBER_AL differs
+    // from the pool's capacity. Keeps pointers to `rom`, `objects` and
+    // `symbols`, which must outlive it.
     MapVm(
         const assets::RomImage& rom,
         MapDatabase database,
         ObjectPool& objects,
         const assets::SymbolMap* symbols = nullptr);
 
+    // Starts the map script at ROM `address` with an empty call stack and no
+    // loop counters, and forgets the bridge's copies. `player` must be 0 or
+    // active (std::invalid_argument otherwise).
     void start(std::uint32_t address, ObjectHandle player);
+    // The interpreter fields and the CPU snapshot (schema 0x4d415001).
     [[nodiscard]] std::vector<std::uint8_t> save_state() const;
     [[nodiscard]] const StrategyBatchCounters& strategy_batch_counters() const noexcept {
         return strategy_batch_counters_;
     }
     // ObjectPool is restored separately by the enclosing game transaction.
+    // Throws std::runtime_error for a damaged or foreign archive; this object
+    // is unchanged then.
     void load_state(std::span<const std::uint8_t> bytes);
+    // `player` must be 0 or active (std::invalid_argument otherwise).
     void set_player(ObjectHandle player);
+    // Whether a work-RAM object pointer (into ALBLKS) names an active object.
     [[nodiscard]] bool is_native_object_active(std::uint16_t pointer) const noexcept {
         return objects_->is_active(native_object_handle(pointer));
     }
+    // Moves the player `distance` map units on: the countdown drops by it and,
+    // once negative, records run until one waits again. Writes the interpreter
+    // state to work RAM. Throws std::runtime_error on an unsupported map
+    // control or after 65,536 records in one call.
     void advance_distance(std::int16_t distance);
 
+    // Interpreter state: script address (24-bit), distance left before the
+    // next record, end reached, last object the script created, last setbgm
+    // value and CURRENTBG.
     [[nodiscard]] std::uint32_t cursor() const noexcept { return cursor_; }
     [[nodiscard]] std::int16_t countdown() const noexcept { return countdown_; }
     [[nodiscard]] bool ended() const noexcept { return ended_; }
     [[nodiscard]] ObjectHandle last_spawned() const noexcept { return last_spawned_; }
     [[nodiscard]] std::uint8_t background_music() const noexcept { return background_music_; }
     [[nodiscard]] std::uint16_t background() const noexcept { return background_; }
+    // DOTSFLAG from work RAM; GameSimulation runs the dust field while it is
+    // negative.
     [[nodiscard]] std::int8_t dots_mode() const noexcept;
+    // Display state taken from FADEDIR, FADE and XINIDISP1 after each call
+    // into the cartridge, and stepped by tick_video_phase().
     [[nodiscard]] bool screen_enabled() const noexcept { return screen_enabled_; }
     [[nodiscard]] std::int8_t fade_direction() const noexcept { return fade_direction_; }
     [[nodiscard]] std::uint8_t fade_value() const noexcept { return fade_value_; }
     [[nodiscard]] std::uint8_t display_brightness() const noexcept {
         return display_brightness_;
     }
+    // A steady display at `brightness` (low four bits), also written to
+    // INIDISP ($2100).
     void set_display_brightness(std::uint8_t brightness);
+    // Starts an IRQ.ASM fade: negative fades down (-2 two steps per raster,
+    // -3 only on even GAMEFRAME), positive fades up (2 three steps).
     void start_display_fade(std::int8_t direction);
+    // A map record or routine asked for a new background (BGFLAGS bit 2);
+    // complete_background_request() ends it.
     [[nodiscard]] bool background_request_pending() const noexcept {
         return background_request_pending_;
     }
+    // Message numbers the script's message controls sent, oldest first.
     [[nodiscard]] const std::vector<std::uint8_t>& messages() const noexcept { return messages_; }
     void clear_messages() noexcept { messages_.clear(); }
+    // One 60 Hz raster of IRQ-side work: the ending and background scroll
+    // hooks, the BG2 scroll override and one fade step.
     void tick_video_phase();
+    // Whether a communication channel (the EX second one when `alternate`)
+    // was speaking at its last MCOPYFACE launch; empty before one.
     [[nodiscard]] std::optional<bool> dialogue_speaking(bool alternate) const noexcept {
         return cpu_.dialogue_speaking(alternate);
     }
     void refresh_background_metadata();
+    // Clears BG_DMALIST, as the NMI-side mode change does when it finishes,
+    // and lets a script waiting on the background (control 100) continue.
     void complete_background_request();
     // Import WORLD.ASM interpreter registers after an original routine such
     // as RESTART_L has advanced the native map directly.
     void restore_map_state_from_native();
+    // Bus accesses through the emulated memory map: they update the open-bus
+    // byte and run I/O side effects. Presentation code uses peek_ram_*().
     void write_native_byte(std::uint32_t address, std::uint8_t value);
     [[nodiscard]] std::uint8_t read_native_byte(std::uint32_t address) const noexcept;
     [[nodiscard]] std::array<std::uint64_t,4> native_execution_counts() const noexcept {
@@ -110,6 +165,8 @@ public:
         return cpu_.peek_ram16(address);
     }
     void write_native_word(std::uint32_t address, std::uint16_t value);
+    // Forwarders to the Wdc65816 members of the same names, documented there
+    // (the scroll overrides below are MapVm's own).
     [[nodiscard]] bool load_cartridge_ram(
         std::span<const std::uint8_t> bytes) noexcept {
         return cpu_.load_cartridge_ram(bytes);
@@ -174,6 +231,8 @@ public:
     void set_bg2_scroll(std::int16_t x, std::int16_t y) noexcept {
         cpu_.set_bg2_scroll(x, y);
     }
+    // (BG2HOFSREQ, BG2VOFSREQ) while BG2VOFSOVERRIDE is set, else empty.
+    // Reads through the bus.
     [[nodiscard]] std::optional<std::array<std::int16_t, 2>>
         background_scroll_override() const;
     // Presentation capture must not perform emulated bus reads.
@@ -194,12 +253,24 @@ public:
         std::uint16_t source, bool enabled) noexcept {
         cpu_.capture_bg2_horizontal_offsets(source, enabled);
     }
+    // Diagnostic hook for the map trace tool and tests: when set, map
+    // conditional branches (control 44) take this result instead of calling
+    // their 65C816 predicate.
     void set_unknown_condition_result(std::optional<bool> result) noexcept {
         unknown_condition_result_ = result;
     }
+    // Fixed-size map controls the interpreter skipped, in order, since start().
     [[nodiscard]] const std::vector<std::uint8_t>& unsupported_controls() const noexcept {
         return unsupported_controls_;
     }
+    // Calls a JSL/RTL routine with X and Y both pointing at `object`'s al_
+    // record, as TRANS.ASM's strategy loop does, then imports the objects and
+    // the display state. Pushes the host pool first when
+    // sync_objects_before_call is set or the pool was marked modified. Throws
+    // std::invalid_argument for an inactive handle, Wdc65816ExecutionError
+    // when the routine leaves mapped ROM or exceeds instruction_limit, and
+    // std::runtime_error when it leaves invalid object lists. Returns the
+    // instructions executed.
     std::size_t call_native_object_routine(
         std::uint32_t address,
         ObjectHandle object,
@@ -213,6 +284,12 @@ public:
     void mark_object_pool_host_modified() noexcept {
         object_pool_needs_native_sync_ = true;
     }
+    // Calls a JSL/RTL routine with `registers`, which receive the registers
+    // it returns with. With sync_objects the host pool is pushed before
+    // (unless sync_objects_before_call is false) and imported after; the
+    // display state is always imported. service_transfer_flag completes the
+    // transfer requests the routine raises (Wdc65816::call_long()). Throws
+    // Wdc65816ExecutionError as Wdc65816 does; returns the instructions run.
     std::size_t call_native_routine(
         std::uint32_t address,
         Wdc65816Registers& registers,
@@ -220,11 +297,16 @@ public:
         bool service_transfer_flag = false,
         bool sync_objects = true,
         bool sync_objects_before_call = true);
+    // The JSR/RTS form, for same-bank helpers; always syncs the objects.
     std::size_t call_native_near_routine(
         std::uint32_t address,
         Wdc65816Registers& registers,
         std::size_t instruction_limit = 1'000'000,
         bool service_transfer_flag = false);
+    // Resumable tasks (see Wdc65816::begin_long_task()). Both begins push the
+    // host pool; begin_native_near_task() also imports it after, and
+    // resume_native_task() only with sync_objects: a front-end task stopped
+    // in its frame loop borrows object-list fields as scratch.
     Wdc65816TaskResult begin_native_task(
         std::uint32_t address,
         Wdc65816Registers& registers,
@@ -308,9 +390,13 @@ private:
     std::array<std::uint32_t, 4> message_routines_{};
     std::vector<std::uint32_t> call_stack_;
     std::unordered_map<std::uint32_t, std::uint16_t> loop_counters_;
+    // The last byte write_native_byte() stored at each address; saved with
+    // the state, never read back.
     std::unordered_map<std::uint32_t, std::uint8_t> native_memory_;
     std::optional<bool> unknown_condition_result_;
     std::vector<std::uint8_t> unsupported_controls_;
+    // Object table geometry and variable addresses, resolved from the symbols
+    // in the constructor; the initializers are the retail values.
     std::uint16_t object_base_{0x0338U};
     std::uint16_t object_size_{56U};
     std::uint16_t object_count_{70U};
@@ -377,8 +463,10 @@ private:
     // The pool's list epoch at which its lists last equalled the scratch
     // lists above; mutable because finding that out is a const question.
     mutable std::uint64_t object_bridge_list_epoch_{~std::uint64_t{0}};
-    // The checkpoint of the strategy batch is kept by the processor (the old
-    // bytes of what the call stores to) instead of being copied here.
+    // Set while the processor's write watch holds the checkpoint of the
+    // current strategy call (the pre-call contents of each chunk the call
+    // stores to). Otherwise strategy_checkpoint_base_/extended_ hold a copy
+    // of the first strategy_checkpoint_size_ bytes of each table.
     bool strategy_checkpoint_marked_{};
     std::size_t strategy_checkpoint_size_{};
 #ifdef STARFOX_VERIFY_BRIDGE

@@ -558,8 +558,8 @@ void MapVm::capture_strategy_checkpoint() {
 #ifdef STARFOX_VERIFY_BRIDGE
     if (strategy_checkpoint_marked_) verify_strategy_checkpoint();
 #endif
-    // The processor keeps the old bytes of whatever this call stores to: a
-    // strategy touches a handful of objects, the tables are 8 KB.
+    // The processor saves the pre-call contents of each chunk this call
+    // stores to: a strategy touches a handful of objects, the tables are 8 KB.
     strategy_checkpoint_marked_ = cpu_.wram_block_watched(object_base_, tables)
         && cpu_.wram_block_watched(extended_object_base_, tables)
         && cpu_.open_wram_checkpoint();
@@ -811,7 +811,7 @@ MapVm::BridgeVerifyStats bridge_stats{};
 }
 MapVm::BridgeVerifyStats MapVm::bridge_verify_stats() noexcept { return bridge_stats; }
 
-// The bridge's test as it was before the marks: everything compared.
+// The test the marks stand in for: everything compared.
 bool MapVm::object_bridge_unchanged_reference() const {
     if(!object_bridge_memory_valid_
         || !objects_->lists_match(object_bridge_active_scratch_,object_bridge_free_scratch_)
@@ -1046,8 +1046,9 @@ void MapVm::sync_objects_to_cpu() {
         write_link(base, next_pointer);
         last_free = handle;
     }
-    // The old bridge's final WRAM write left this byte on the emulated bus.
-    // Preserve it when every link and payload already matched its snapshot.
+    // A full copy ends with a store to this byte, which leaves it on the
+    // emulated bus. Read it so that open bus holds the same byte when every
+    // link and payload already matched and nothing was stored.
     if (last_free != 0U) {
         (void)cpu_.read8(object_base_ + (last_free - 1U) * object_size_ + 1U);
     } else if (last_active != 0U) {
@@ -1213,9 +1214,9 @@ void MapVm::sync_object_payloads_from_cpu(bool checkpoint) {
         object.immune_object = object_handle(word(base_bytes, 25U));
         object.collision_object = object_handle(word(base_bytes, 27U));
         // Ordinary extended bytes have no semantic mirror. Their common
-        // unchanged case needs no accessor dispatch or write at all. Mirror
-        // fields still go through write_path_byte to preserve the original
-        // import behavior even when a host path changed a semantic member.
+        // unchanged case needs no accessor dispatch or write at all. Mirrored
+        // bytes always go through write_path_byte, which also resets the
+        // semantic member from WRAM when a host path changed only the member.
         const auto mirror_shift = object_size_ == 57U ? 2U : 0U;
         for (std::size_t offset = 0; offset < extended_object_bytes_; ++offset) {
             const bool mirrored = offset == 18U || offset == 19U || offset == 20U
@@ -1355,6 +1356,10 @@ void MapVm::spawn_direct_object() {
     cursor_ += 14U;
 }
 
+// Runs map records from cursor_ until one waits (a nonzero countdown) or the
+// script ends. Object records allocate through the host pool; inline code
+// (120), mapcode JSL (122), conditions (44) and the message controls call the
+// cartridge's 65C816 routines.
 void MapVm::execute_ready_records() {
     for (std::size_t operations = 0; operations < 65'536; ++operations) {
         const auto opcode = rom_->read8(cursor_);
@@ -1404,7 +1409,7 @@ void MapVm::execute_ready_records() {
             background_music_ = rom_->read8(cursor_ + 1U);
             // WORLD.ASM setbgmdo updates the live IRQ music handshake unless
             // the player has already reached zero HP.  Keeping only the host
-            // diagnostic field made every in-level setbgm silently inert.
+            // diagnostic field would make every in-level setbgm inert.
             if ((read_native_byte(player_ship_flags_2_address_) & 0x80U)
                 == 0U) {
                 write_native_byte(background_music_address_,

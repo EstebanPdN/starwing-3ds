@@ -24,6 +24,8 @@ void DustSystem::load_state(std::span<const std::uint8_t> bytes) {
     *this=std::move(restored);
 }
 
+// The carry left by one call feeds the next call's rotate, so carry_ is
+// saved with the seed.
 std::uint16_t DustSystem::next_random() noexcept {
     const auto swapped = static_cast<std::uint16_t>(
         (random_ << 8U) | (random_ >> 8U));

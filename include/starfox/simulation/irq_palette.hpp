@@ -3,16 +3,28 @@
 #include <cstdint>
 #include <string>
 
+// Star Fox EX's IRQ palette animations (CHECKWATER, CHECKSECTORK, CHECKSUN and
+// the title's CHECKTITL) and IRQ.ASM's IRQRAND, over caller-supplied RAM
+// accessors. GameSimulation and Wdc65816 apply the EX cycles; only host tests
+// call irq_random_byte() and irq_palette_flashes().
+
 namespace starfox::simulation {
+// Symbol addresses of one animated palette (0 where a symbol is absent): the
+// <NAME>FADE enable byte, the <NAME>FRAME counter and the 16-colour tables
+// <NAME>1..8. Each table is shown for `hold` frames, uploaded at CGRAM colour
+// index `destination`.
 struct IrqPaletteCycle {
     std::uint32_t enabled{},frame{};
     std::array<std::uint32_t,8> tables{};
     unsigned hold{},destination{};
 };
+// The title's cycle: TITLFADE, TITLFRAME and nine table pairs, TITL1..9 for
+// colours 16..31 and TITL01..09 for colours 0..15.
 struct TitlePaletteCycle {
     std::uint32_t enabled{},frame{};
     std::array<std::uint32_t,9> foreground{},background{};
 };
+// `find(name)` returns a symbol's address, or 0 when the cartridge lacks it.
 template<class Find> TitlePaletteCycle ex_title_palette_cycle(Find find) {
     TitlePaletteCycle c;c.enabled=find("TITLFADE");c.frame=find("TITLFRAME");
     for(unsigned i=0;i<9;++i) {
@@ -21,6 +33,9 @@ template<class Find> TitlePaletteCycle ex_title_palette_cycle(Find find) {
     }
     return c;
 }
+// One raster of CHECKTITL. While TITLFADE is set and COLORTRIP is not, it
+// calls upload(table address, first CGRAM colour) for the current pair (two
+// frames each) and advances TITLFRAME. Does nothing if a symbol is missing.
 template<class ReadByte,class WriteByte,class Upload>
 void apply_ex_title_palette_cycle(const TitlePaletteCycle& c,bool color_trip,
     ReadByte read,WriteByte write,Upload upload) {
@@ -34,6 +49,8 @@ void apply_ex_title_palette_cycle(const TitlePaletteCycle& c,bool color_trip,
     upload(c.background[stage],0U);
     write(c.frame,std::uint8_t(frame+1));
 }
+// WATER, SECTORK and SUN in that order: two frames per table for WATER and
+// SUN, three for SECTORK; uploaded at CGRAM colour 64, 64 and 48.
 template<class Find> auto ex_irq_palette_cycles(Find find) {
     std::array<IrqPaletteCycle,3> result{};
     unsigned i=0;
@@ -78,6 +95,7 @@ inline std::uint8_t irq_random_byte(std::array<std::uint8_t,4>& state) {
 }
 // Source ordering matters: the tunnel test consumes its random byte first.
 // EX and Original RNGMODE=2 read RAND without advancing it here.
+// Returns bit 0 for a tunnel flash (byte < 51) and bit 1 for a sky flash (< 5).
 inline unsigned irq_palette_flashes(std::array<std::uint8_t,4>& random,
     bool tunnel,bool sky,bool advance) {
     unsigned result=0;

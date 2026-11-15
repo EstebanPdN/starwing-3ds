@@ -44,6 +44,7 @@ std::int8_t signed_byte(std::uint8_t value) noexcept {
     return std::bit_cast<std::int8_t>(value);
 }
 
+// Super FX DIV2: an arithmetic shift right, except that -1 gives 0.
 std::int8_t div2(std::int8_t value) noexcept {
     if (value == -1) return 0;
     return static_cast<std::int8_t>(arithmetic_shift_right(value, 1));

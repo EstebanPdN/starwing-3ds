@@ -6,6 +6,10 @@
 #include <span>
 #include <cstring>
 #include <type_traits>
+// CollisionMemory, the inlined bus access that TransferDispatch also uses, and
+// CollisionDispatch, grouped runs of three RAMSTUFF collision routines. The
+// engine runs collision code in the compact interpreter; only
+// tests/collision_accelerator_tests.cpp runs CollisionDispatch.
 namespace starfox::simulation::detail {
 // The three blocks below use the exact opcode implementations from the pinned
 // MIT RetroCPU dependency. Only dispatch and memory access are specialized:

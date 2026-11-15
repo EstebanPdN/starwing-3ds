@@ -12,13 +12,18 @@
 class WDC65C816;
 struct SystemBus;
 
+// Interface between Wdc65816's call and task loops (wdc65816.cpp) and the
+// compact interpreter (wdc65816_lean.cpp): page and stop tables, per-call
+// parameters, and the hooks of the verification builds.
+
 namespace starfox::simulation::detail {
 
-// A second dispatch loop for the pinned RetroCPU 65C816. It instantiates the
-// library's own opcode implementations, so registers, the raw flag words,
-// cycles, open bus and every executed PC stay identical; only the bus lookup
-// and the per-instruction bookkeeping are specialized. Anything it does not
-// cover is left, untouched, to the library's interpreter.
+// A second dispatch loop for the pinned RetroCPU 65C816. Its handlers,
+// generated from the library's opcode table, reproduce the library's
+// instructions access by access, so registers, the raw flag words, cycles,
+// open bus and every executed PC stay identical; only the bus lookup and the
+// per-instruction bookkeeping are specialized. Anything it does not cover is
+// left, untouched, to the library's interpreter.
 struct Fast65816Tables {
     static constexpr std::uint32_t page_bits = 12U;
     static constexpr std::size_t page_count = std::size_t{1} << (24U - page_bits);
@@ -69,18 +74,24 @@ struct Fast65816Tables {
     // rejected code bytes, and short budgets. Not part of saved game state.
     mutable std::array<std::uint64_t,6> dispatch_counts{};
 
-    // A zero first address is an absent symbol.
+    // Builds the tables from the bus pages and the stop ranges. A zero first
+    // address is an absent symbol. `usable` stays false, so every instruction
+    // goes to the library, when the bus does not have the layout the loop
+    // assumes.
     void build(const SystemBus& bus, std::uint32_t rom_banks,
         std::span<const Range> stop_ranges);
 };
 
+// One run of the loop on behalf of a call or task.
 struct Fast65816Call {
+    // The program address at which the call has returned.
     std::uint32_t return_sentinel{};
     // Fast65816Tables::Stop bits this call acts on.
     std::uint8_t stops{};
     // The caller's ring of the last 32 program counters and its position.
     std::uint32_t* recent{};
     std::size_t instructions{};
+    // The most instructions this run may execute.
     std::size_t budget{};
     // Bytes the caller services between instructions when they are non-zero.
     const std::uint8_t* service[2]{};

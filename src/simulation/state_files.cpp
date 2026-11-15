@@ -1,3 +1,5 @@
+// Slot files of starfox/state/files.hpp. write_atomic() writes into a new hidden directory
+// beside the slot, then renames the file over the slot.
 #include "starfox/state/files.hpp"
 #include <atomic>
 #include <chrono>

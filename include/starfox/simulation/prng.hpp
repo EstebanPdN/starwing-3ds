@@ -3,6 +3,10 @@
 #include <array>
 #include <cstdint>
 
+// Host model of the retail cartridge's random number generator, used by
+// PathVm and host tests. The game itself runs the cartridge's own generator
+// on the 65C816 core.
+
 namespace starfox::simulation {
 
 // The pinned build uses rngmode=0. This is a byte-exact translation of the
@@ -16,6 +20,7 @@ public:
     explicit OriginalPrng(std::array<std::uint8_t, 4> state) : state_(state) {}
 
     void reset() noexcept { state_ = kInitialState; }
+    // Advances the four state bytes and returns the new state[0].
     [[nodiscard]] std::uint8_t next() noexcept;
     [[nodiscard]] const std::array<std::uint8_t, 4>& state() const noexcept {
         return state_;

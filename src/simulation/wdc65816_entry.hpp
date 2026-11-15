@@ -3,6 +3,9 @@
 #include "starfox/simulation/wdc65816.hpp"
 #include "cpu/65816/cpu_65c816.h"
 
+// Entry setup for a bounded call or task on the RetroCPU core: registers and
+// program address as Wdc65816's call and task functions install them.
+
 namespace starfox::simulation::detail {
 
 // Match the pinned RetroCPU SetRegister semantics without its debugger's

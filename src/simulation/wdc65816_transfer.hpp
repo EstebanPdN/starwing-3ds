@@ -2,6 +2,11 @@
 
 #include "wdc65816_collision.hpp"
 
+// Grouped execution of the SPC700 upload loops (BOOT_LOOP, SBOOT_LOOP) and the
+// VRAM fill loops in INITSCREEN_L. Wdc65816 uses it when RESTART_L or
+// DOBGREQ_L runs with transfer servicing; tests/transfer_accelerator_tests.cpp
+// checks it against the library's interpreter.
+
 namespace starfox::simulation::detail {
 
 // These ROM blocks still execute the pinned instruction implementations,
