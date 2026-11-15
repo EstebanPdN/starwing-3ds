@@ -1,7 +1,5 @@
 #pragma once
-#include <array>
 #include <cstdint>
-#include <string_view>
 
 namespace starfox::render {
 // Append styles so existing saved effect IDs retain their meaning.
@@ -19,8 +17,4 @@ inline constexpr std::uint8_t next_effect(std::uint8_t value, bool world, bool b
     while (!selectable_effect(value, world));
     return value;
 }
-inline constexpr std::array<std::string_view, 4> bloom_names{"OFF", "LOW", "MEDIUM", "HEAVY"};
-inline constexpr std::array<std::string_view, effect_count> effect_names{
-    "OFF", "CEL-DRAWN", "INK", "NEON", "MONOCHROME", "DITHERED", "BLUEPRINT", "BLOOM",
-    "SEPIA", "THERMAL", "NIGHT VISION", "PASTEL", "COMIC", "VAPORWAVE"};
 }
