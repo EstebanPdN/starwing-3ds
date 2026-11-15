@@ -7,7 +7,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <optional>
 #include <span>
 #include <unordered_map>
@@ -47,7 +46,6 @@ struct StrategyBatchCounters {
 class MapVm {
     friend class GameSimulation;
 public:
-    using ConditionHandler = std::function<bool(MapVm&)>;
     MapVm(
         const assets::RomImage& rom,
         MapDatabase database,
@@ -65,7 +63,6 @@ public:
     [[nodiscard]] bool is_native_object_active(std::uint16_t pointer) const noexcept {
         return objects_->is_active(native_object_handle(pointer));
     }
-    void advance_to_player_z(std::int16_t player_z);
     void advance_distance(std::int16_t distance);
 
     [[nodiscard]] std::uint32_t cursor() const noexcept { return cursor_; }
@@ -73,12 +70,8 @@ public:
     [[nodiscard]] bool ended() const noexcept { return ended_; }
     [[nodiscard]] ObjectHandle last_spawned() const noexcept { return last_spawned_; }
     [[nodiscard]] std::uint8_t background_music() const noexcept { return background_music_; }
-    [[nodiscard]] std::uint8_t other_music() const noexcept { return other_music_; }
     [[nodiscard]] std::uint16_t background() const noexcept { return background_; }
     [[nodiscard]] std::int8_t dots_mode() const noexcept;
-    [[nodiscard]] bool vertical_offset_enabled() const noexcept { return vertical_offset_enabled_; }
-    [[nodiscard]] bool horizontal_offset_enabled() const noexcept { return horizontal_offset_enabled_; }
-    [[nodiscard]] bool z_rotation_enabled() const noexcept { return z_rotation_enabled_; }
     [[nodiscard]] bool screen_enabled() const noexcept { return screen_enabled_; }
     [[nodiscard]] std::int8_t fade_direction() const noexcept { return fade_direction_; }
     [[nodiscard]] std::uint8_t fade_value() const noexcept { return fade_value_; }
@@ -87,7 +80,6 @@ public:
     }
     void set_display_brightness(std::uint8_t brightness);
     void start_display_fade(std::int8_t direction);
-    [[nodiscard]] std::uint16_t stage_counter() const noexcept { return stage_counter_; }
     [[nodiscard]] bool background_request_pending() const noexcept {
         return background_request_pending_;
     }
@@ -202,9 +194,6 @@ public:
         std::uint16_t source, bool enabled) noexcept {
         cpu_.capture_bg2_horizontal_offsets(source, enabled);
     }
-    void register_condition(std::uint32_t address, ConditionHandler handler) {
-        conditions_[address] = std::move(handler);
-    }
     void set_unknown_condition_result(std::optional<bool> result) noexcept {
         unknown_condition_result_ = result;
     }
@@ -276,14 +265,9 @@ private:
     [[nodiscard]] std::uint32_t read_pointer24(std::uint32_t address) const;
     [[nodiscard]] std::uint32_t read_map_pointer(std::uint32_t address) const;
     [[nodiscard]] std::int16_t player_world_z() const noexcept;
-    [[nodiscard]] std::uint32_t skip_inline_65816(std::uint32_t address) const;
     [[nodiscard]] std::uint16_t original_object_pointer(ObjectHandle handle) const noexcept;
     [[nodiscard]] ObjectHandle native_object_handle(std::uint16_t pointer) const noexcept;
     [[nodiscard]] ObjectHandle object_handle(std::uint16_t pointer) const noexcept;
-    [[nodiscard]] std::uint8_t read_native_object_byte(
-        ObjectHandle handle, std::uint16_t offset) const;
-    void write_native_object_byte(
-        ObjectHandle handle, std::uint16_t offset, std::uint8_t value);
     void sync_objects_to_cpu();
     void sync_objects_from_cpu();
     void execute_inline_65816();
@@ -325,7 +309,6 @@ private:
     std::vector<std::uint32_t> call_stack_;
     std::unordered_map<std::uint32_t, std::uint16_t> loop_counters_;
     std::unordered_map<std::uint32_t, std::uint8_t> native_memory_;
-    std::unordered_map<std::uint32_t, ConditionHandler> conditions_;
     std::optional<bool> unknown_condition_result_;
     std::vector<std::uint8_t> unsupported_controls_;
     std::uint16_t object_base_{0x0338U};

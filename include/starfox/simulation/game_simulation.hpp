@@ -345,8 +345,6 @@ public:
             enter_title();
         }
     }
-    [[nodiscard]] bool menu_preview() const noexcept { return menu_preview_; }
-    [[nodiscard]] bool runtime_options_open() const noexcept { return runtime_options_open_; }
     bool toggle_runtime_options() noexcept {
         if(runtime_options_open_) {runtime_options_open_=false;menu_preview_=false;video_phases_since_tick_=runtime_options_video_phase_;return true;}
         if(in_setup_menu()) return false;
@@ -383,7 +381,6 @@ public:
     [[nodiscard]] Experience experience() const noexcept { return experience_; }
     void set_experience(Experience experience) noexcept { experience_ = experience; }
     [[nodiscard]] DisplayMode display_mode() const noexcept { return display_mode_; }
-    void set_display_mode(DisplayMode mode) noexcept { display_mode_ = mode; }
     [[nodiscard]] std::uint16_t presentation_fps() const noexcept {
         return presentation_fps_;
     }
@@ -435,50 +432,25 @@ public:
         shape_face_counts_ = counts;
     }
     [[nodiscard]] bool show_fps() const noexcept { return show_fps_; }
-    void set_show_fps(bool enabled) noexcept { show_fps_ = enabled; }
     [[nodiscard]] bool anti_aliasing() const noexcept {
         return anti_aliasing_mode_ != AntiAliasingMode::off;
-    }
-    void set_anti_aliasing(bool enabled) noexcept {
-        anti_aliasing_mode_ = enabled
-            ? AntiAliasingMode::medium : AntiAliasingMode::off;
     }
     [[nodiscard]] AntiAliasingMode anti_aliasing_mode() const noexcept {
         return anti_aliasing_mode_;
     }
-    void set_anti_aliasing_mode(AntiAliasingMode mode) noexcept {
-        anti_aliasing_mode_ = mode;
-    }
-    [[nodiscard]] bool enhanced_graphics() const noexcept {
-        return enhanced_graphics_;
-    }
-    void set_enhanced_graphics(bool enabled) noexcept {
-        enhanced_graphics_ = enabled;
-    }
     [[nodiscard]] bool smooth_polys() const noexcept { return smooth_polys_; }
-    void set_smooth_polys(bool enabled) noexcept { smooth_polys_ = enabled; }
     [[nodiscard]] bool rtx_lighting() const noexcept {
         return rtx_lighting_;
     }
-    void set_rtx_lighting(bool enabled) noexcept {
-        rtx_lighting_ = enabled ? 3U : 0U;
-    }
     [[nodiscard]] std::uint8_t rtx_lighting_intensity() const noexcept {
         return rtx_lighting_;
-    }
-    void set_rtx_lighting_intensity(std::uint8_t level) noexcept {
-        rtx_lighting_ = level <= 3U ? level : 3U;
     }
     [[nodiscard]] std::uint8_t effect() const noexcept { return effect_; }
     [[nodiscard]] std::uint8_t world_effect() const noexcept { return world_effect_; }
     void set_world_effect(std::uint8_t value) noexcept { world_effect_ = render::selectable_effect(value, true) ? value : 0U; }
     [[nodiscard]] std::uint8_t world_effect_intensity() const noexcept { return world_effect_intensity_; }
-    void set_world_effect_intensity(std::uint8_t value) noexcept { world_effect_intensity_ = value <= 100U ? value : 100U; }
-    void set_effect(std::uint8_t effect) noexcept { effect_ = render::selectable_effect(effect, false) ? effect : 0U; }
     [[nodiscard]] std::uint8_t bloom() const noexcept { return bloom_; }
-    void set_bloom(std::uint8_t value) noexcept { bloom_ = value < 4U ? value : 0U; }
     [[nodiscard]] std::uint8_t bloom_2d() const noexcept { return bloom_2d_; }
-    void set_bloom_2d(std::uint8_t value) noexcept { bloom_2d_ = value < 4U ? value : 0U; }
     [[nodiscard]] std::uint8_t model_smoothing() const noexcept { return model_smoothing_; }
     [[nodiscard]] std::uint8_t language() const noexcept { return language_; }
     [[nodiscard]] bool ray_tracing() const noexcept { return ray_tracing_; }
@@ -488,22 +460,13 @@ public:
     [[nodiscard]] std::uint8_t hdr_effect() const noexcept { return hdr_effect_; }
     void set_hdr_effect(std::uint8_t value) noexcept { hdr_effect_ = value <= 3 ? value : 0; }
     void set_language(std::uint8_t value);
-    void set_model_smoothing(std::uint8_t value) noexcept { model_smoothing_ = value < 4U ? value : 0U; }
     [[nodiscard]] std::uint8_t effect_intensity() const noexcept { return effect_intensity_; }
-    void set_effect_intensity(std::uint8_t value) noexcept { effect_intensity_ = value <= 100U ? value : 100U; }
     [[nodiscard]] TwoDFilterMode two_d_filter() const noexcept {
         return two_d_filter_;
     }
-    void set_two_d_filter(TwoDFilterMode mode) noexcept {
-        two_d_filter_ = mode;
-    }
     [[nodiscard]] bool vsync() const noexcept { return vsync_; }
-    void set_vsync(bool enabled) noexcept { vsync_ = enabled; }
     [[nodiscard]] RendererMode renderer_mode() const noexcept {
         return renderer_mode_;
-    }
-    void set_renderer_mode(RendererMode mode) noexcept {
-        renderer_mode_ = mode;
     }
     [[nodiscard]] bool msu1_music() const noexcept { return msu1_music_; }
     void set_msu1_music(bool enabled) noexcept {
@@ -517,42 +480,23 @@ public:
         if (!available) msu1_music_ = false;
     }
     [[nodiscard]] bool rumble() const noexcept { return rumble_; }
-    void set_rumble(bool enabled) noexcept { rumble_ = enabled; }
     [[nodiscard]] std::uint8_t music_volume() const noexcept {
         return music_volume_;
-    }
-    void set_music_volume(std::uint8_t volume) noexcept {
-        music_volume_ = std::min<std::uint8_t>(volume, 100U);
     }
     [[nodiscard]] std::uint8_t sfx_volume() const noexcept {
         return sfx_volume_;
     }
-    void set_sfx_volume(std::uint8_t volume) noexcept {
-        sfx_volume_ = std::min<std::uint8_t>(volume, 100U);
-    }
     [[nodiscard]] bool on_screen_controls() const noexcept {
         return on_screen_controls_;
-    }
-    void set_on_screen_controls(bool enabled) noexcept {
-        on_screen_controls_ = enabled;
     }
     [[nodiscard]] bool swap_face_buttons() const noexcept {
         return swap_face_buttons_;
     }
-    void set_swap_face_buttons(bool enabled) noexcept {
-        swap_face_buttons_ = enabled;
-    }
     [[nodiscard]] CrosshairColour crosshair_colour() const noexcept {
         return crosshair_colour_;
     }
-    void set_crosshair_colour(CrosshairColour colour) noexcept {
-        crosshair_colour_ = colour;
-    }
     [[nodiscard]] RenderScale render_scale() const noexcept {
         return render_scale_;
-    }
-    void set_render_scale(RenderScale scale) noexcept {
-        render_scale_ = scale;
     }
     void set_secondary_inputs(
         std::span<const input::TickInput> controllers) noexcept;

@@ -89,16 +89,6 @@ void draw_line(
 
 } // namespace
 
-ParticleRenderer::OwnerFrame ParticleRenderer::prepare_owner(const simulation::ParticleSystem& particles,
-    simulation::ObjectHandle owner,const RenderPose& pose,double alpha,std::uint8_t colour_base) {
-    OwnerFrame result;result.owner=owner;result.pose=pose;result.alpha=alpha;result.colour_base=colour_base;
-    for(const auto& particle:particles.particles())
-        if(particle.life && particle.owner==owner) result.particles.push_back(particle);
-    return result;
-}
-void ParticleRenderer::draw_frame(const OwnerFrame& frame,Framebuffer& target) {
-    draw_particles(frame.particles,frame.owner,frame.pose,frame.alpha,target,frame.colour_base);
-}
 void ParticleRenderer::draw_owner(
     const simulation::ParticleSystem& particles,
     simulation::ObjectHandle owner,

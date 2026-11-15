@@ -12,7 +12,6 @@ namespace starfox::simulation {
 [[nodiscard]] std::int16_t subtract16(std::int16_t left, std::int16_t right) noexcept;
 [[nodiscard]] std::int32_t arithmetic_shift_right(std::int32_t value, unsigned bits) noexcept;
 [[nodiscard]] std::int16_t multiply_q15(std::int16_t left, std::int16_t right) noexcept;
-[[nodiscard]] std::int16_t multiply_q14(std::int16_t left, std::int16_t right) noexcept;
 
 class TrigTables {
 public:

@@ -49,10 +49,6 @@ struct Face {
     bool sprite{};
     std::uint8_t sprite_visibility_parameter{};
     std::uint8_t sprite_size{};
-
-    [[nodiscard]] bool is_line() const noexcept {
-        return vertex_indices.size() == 2;
-    }
 };
 
 struct FaceBatch {

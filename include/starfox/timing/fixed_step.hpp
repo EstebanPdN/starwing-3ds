@@ -70,7 +70,6 @@ public:
     void reset() noexcept;
 
     [[nodiscard]] std::uint32_t simulation_hz() const noexcept;
-    [[nodiscard]] duration step_duration() const noexcept;
 
 private:
     std::uint32_t simulation_hz_{};

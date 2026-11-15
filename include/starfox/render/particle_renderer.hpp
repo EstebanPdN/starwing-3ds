@@ -10,16 +10,6 @@ namespace starfox::render {
 
 class ParticleRenderer {
 public:
-    struct OwnerFrame {
-        std::vector<simulation::ParticleState> particles;
-        simulation::ObjectHandle owner{};
-        RenderPose pose{};
-        double alpha{};
-        std::uint8_t colour_base{112};
-    };
-    [[nodiscard]] static OwnerFrame prepare_owner(const simulation::ParticleSystem&,
-        simulation::ObjectHandle,const RenderPose&,double alpha,std::uint8_t colour_base=112);
-    static void draw_frame(const OwnerFrame&,Framebuffer&);
     void draw_owner(
         const simulation::ParticleSystem& particles,
         simulation::ObjectHandle owner,

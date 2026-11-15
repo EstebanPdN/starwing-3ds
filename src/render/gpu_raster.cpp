@@ -1,8 +1,5 @@
 #include "starfox/render/gpu_raster.hpp"
-#include <cstring>
-#include <bit>
-#include <cmath>
-#include <stdexcept>
+#include <algorithm>
 namespace starfox::render {
 void replay_raster_commands(const RasterCommands& batch,Framebuffer& frame,SurfaceBuffer* surfaces,bool clear_target) {
     frame.record_to(nullptr);
@@ -56,36 +53,5 @@ void replay_raster_commands(const RasterCommands& batch,Framebuffer& frame,Surfa
                     {c.surface[0],c.surface[1],c.surface[2],c.surface[3]},std::uint8_t(colour));
             }
     }
-}
-struct GpuRaster::Impl {std::string status{"GPU native raster unavailable on this build"};};
-GpuRaster::GpuRaster():impl_(std::make_unique<Impl>()) {}
-GpuRaster::~GpuRaster()=default;
-void GpuRaster::release_device() noexcept {impl_.reset();}
-const std::string& GpuRaster::status() const {
-    static const std::string released{"GPU raster device released"};return impl_?impl_->status:released;
-}
-bool GpuRaster::render(RasterCommands& batch,Framebuffer& frame,SurfaceBuffer* surfaces) {
-    (void)batch;(void)frame;(void)surfaces;return false;
-}
-bool GpuRaster::render_resident(void* device,RasterCommands& batch,bool surfaces,bool gpu_binning) {
-    (void)device;(void)batch;(void)surfaces;(void)gpu_binning;return false;
-}
-GpuRasterOutput GpuRaster::enqueue_commands(void* device,void* command,RasterCommands& batch,bool surfaces,bool gpu_binning) {
-    return {};
-}
-GpuRasterOutput GpuRaster::resident_output() const {
-    return {};
-}
-GpuRasterOutput GpuRaster::enqueue_row_spans(void* device,void* command,void* spans,
-    std::uint32_t polygon_count,std::uint32_t width,std::uint32_t height,bool surfaces,void* texels,bool pixel_coverage,
-    const GpuRasterOutput* background,bool wave_rows,std::int16_t wave_offset,std::uint32_t wave_frame,std::uint32_t texel_bytes,
-    const GpuGeometryDepthInput* geometry_depth) {
-    return {};
-}
-bool GpuRaster::readback(Framebuffer& frame,SurfaceBuffer* surfaces) {
-    (void)frame;(void)surfaces;return false;
-}
-bool GpuRaster::wait_for_completion() {
-    return false;
 }
 }

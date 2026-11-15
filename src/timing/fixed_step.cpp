@@ -146,10 +146,6 @@ std::uint32_t FixedStepClock::simulation_hz() const noexcept {
     return simulation_hz_;
 }
 
-FixedStepClock::duration FixedStepClock::step_duration() const noexcept {
-    return duration{static_cast<duration::rep>(kNanosecondsPerSecond / simulation_hz_)};
-}
-
 LiveFpsCounter::LiveFpsCounter(duration sample_period)
     : sample_period_(sample_period) {
     if (sample_period_ <= duration::zero()) {

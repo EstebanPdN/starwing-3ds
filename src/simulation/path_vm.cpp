@@ -235,10 +235,6 @@ void PathVm::attach(ObjectHandle object, std::uint16_t path_offset_value) {
     states_[object] = {};
 }
 
-void PathVm::detach(ObjectHandle object) noexcept {
-    states_.erase(object);
-}
-
 bool PathVm::is_attached(ObjectHandle object) const noexcept {
     return objects_->is_active(object)
         && objects_->get(object).strategy_address == path_strategy_address_;

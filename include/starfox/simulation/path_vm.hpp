@@ -45,12 +45,8 @@ public:
         OriginalPrng& random);
 
     void set_player(ObjectHandle player);
-    void set_view_velocity_z(std::int16_t velocity) noexcept { view_velocity_z_ = velocity; }
-    void set_current_level(std::uint8_t level) noexcept { current_level_ = level; }
-    void set_player_dead(bool dead) noexcept { player_dead_ = dead; }
 
     void attach(ObjectHandle object, std::uint16_t path_offset);
-    void detach(ObjectHandle object) noexcept;
     void tick(ObjectHandle object);
     void tick_all();
 
@@ -84,7 +80,6 @@ public:
         return path_strategy_address_;
     }
     [[nodiscard]] const std::vector<PathEvent>& events() const noexcept { return events_; }
-    void clear_events() noexcept { events_.clear(); }
     [[nodiscard]] const std::vector<std::uint8_t>& unsupported_opcodes() const noexcept {
         return unsupported_opcodes_;
     }

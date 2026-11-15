@@ -28,7 +28,6 @@ public:
     // 0 selects a default derived from hardware_concurrency. 1 disables the
     // pool and runs everything on the calling thread.
     void set_worker_count(std::size_t workers);
-    [[nodiscard]] std::size_t worker_count() const noexcept { return workers_; }
 
     // Runs `body(first_row, last_row)` over a half-open partition of
     // [0, rows). The calling thread takes the first slice and waits for the

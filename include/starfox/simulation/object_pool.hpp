@@ -96,7 +96,6 @@ public:
     [[nodiscard]] std::vector<ObjectHandle> active_handles() const;
     [[nodiscard]] std::vector<ObjectHandle> free_handles() const;
     void copy_active_handles(std::vector<ObjectHandle>& output) const;
-    void copy_free_handles(std::vector<ObjectHandle>& output) const;
     [[nodiscard]] bool lists_match(
         const std::vector<ObjectHandle>& active,
         const std::vector<ObjectHandle>& free) const noexcept;

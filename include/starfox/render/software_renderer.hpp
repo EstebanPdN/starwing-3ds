@@ -183,9 +183,6 @@ public:
     [[nodiscard]] bool empty() const noexcept {
         return minimum_x_ >= maximum_x_ || minimum_y_ >= maximum_y_;
     }
-    [[nodiscard]] std::uint32_t minimum_x() const noexcept { return minimum_x_; }
-    [[nodiscard]] std::uint32_t minimum_y() const noexcept { return minimum_y_; }
-    [[nodiscard]] std::uint32_t maximum_x() const noexcept { return maximum_x_; }
     [[nodiscard]] std::uint32_t maximum_y() const noexcept { return maximum_y_; }
 
 private:

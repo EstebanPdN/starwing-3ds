@@ -55,11 +55,6 @@ std::int16_t multiply_q15(std::int16_t left, std::int16_t right) noexcept {
         static_cast<std::int32_t>(left) * static_cast<std::int32_t>(right), 15));
 }
 
-std::int16_t multiply_q14(std::int16_t left, std::int16_t right) noexcept {
-    return wrap16(arithmetic_shift_right(
-        static_cast<std::int32_t>(left) * static_cast<std::int32_t>(right), 14));
-}
-
 TrigTables TrigTables::load(
     const assets::RomImage& rom, const assets::SymbolMap& symbols) {
     TrigTables result;

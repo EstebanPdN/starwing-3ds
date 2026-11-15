@@ -190,9 +190,6 @@ std::vector<std::uint8_t> MapVm::save_state() const {
 void MapVm::load_state(std::span<const std::uint8_t> bytes) {
     const auto payload=state::unpack(bytes,0x4d415001U,rom_->crc32());
     MapVm restored{*rom_,database_,*objects_,state_symbols_};
-    // Diagnostic condition callbacks are process-local configuration. Keep
-    // them bound rather than trying to persist executable closures.
-    restored.conditions_=conditions_;
     state::Reader archive{payload};
     transfer_state(archive,restored);
     std::vector<std::uint8_t> cpu_state;
@@ -721,12 +718,6 @@ Wdc65816TaskResult MapVm::resume_native_task(
     return result;
 }
 
-void MapVm::advance_to_player_z(std::int16_t player_z) {
-    const auto distance = subtract16(player_z, last_player_z_);
-    last_player_z_ = player_z;
-    advance_distance(distance);
-}
-
 void MapVm::advance_distance(std::int16_t distance) {
     if (ended_) {
         return;
@@ -746,24 +737,6 @@ std::uint32_t MapVm::read_pointer24(std::uint32_t address) const {
 std::uint32_t MapVm::read_map_pointer(std::uint32_t address) const {
     return (static_cast<std::uint32_t>(rom_->read8(address + 2U)) << 16U)
         | 0x8000U | (rom_->read16(address) & 0x7fffU);
-}
-
-std::uint32_t MapVm::skip_inline_65816(std::uint32_t address) const {
-    // MAPMACS end_65816 emits `LDX #next_map_offset ; RTL`. Prefer only the
-    // self-verifying fall-through form here: the encoded destination must be
-    // the byte immediately following RTL. Conditional `switch` sequences are
-    // left to the future CPU bridge rather than guessed.
-    const auto bank = address & 0xff0000U;
-    for (auto candidate = address + 1U;
-         (candidate & 0xff0000U) == bank && (candidate & 0xffffU) <= 0xfffcU;
-         ++candidate) {
-        if (rom_->read8(candidate) != 0xa2U || rom_->read8(candidate + 3U) != 0x6bU) {
-            continue;
-        }
-        const auto target = bank | 0x8000U | (rom_->read16(candidate + 1U) & 0x7fffU);
-        if (target == candidate + 4U) return target;
-    }
-    throw std::runtime_error{"could not find end_65816 boundary in map stream"};
 }
 
 std::uint16_t MapVm::original_object_pointer(ObjectHandle handle) const noexcept {
@@ -789,23 +762,6 @@ ObjectHandle MapVm::native_object_handle(std::uint16_t pointer) const noexcept {
     }
     const auto handle = static_cast<ObjectHandle>(displacement / object_size_ + 1U);
     return handle <= object_count_ ? handle : 0;
-}
-
-std::uint8_t MapVm::read_native_object_byte(
-    ObjectHandle handle, std::uint16_t offset) const {
-    // ObjectPool is constructed with the cartridge's concrete record layout.
-    // Its byte accessor already maps EX's inserted AL_WEAPONNUM/OPENAL fields
-    // and shifted collision/vector fields to the semantic GameObject members.
-    // Translating the EX offsets a second time here made AL_COLLCOUNT read
-    // AL_COLLFLAGS, AL_COLLFLAGS read VX, and every following field drift by
-    // one byte. Among other things, that made left/right wing collision holds
-    // release inconsistently. Keep the CPU image a literal AL_SIZE-byte copy.
-    return objects_->read_base_byte(handle, offset);
-}
-
-void MapVm::write_native_object_byte(
-    ObjectHandle handle, std::uint16_t offset, std::uint8_t value) {
-    objects_->write_base_byte(handle, offset, value);
 }
 
 bool MapVm::object_tables_marked() const noexcept {
@@ -1536,15 +1492,9 @@ void MapVm::execute_ready_records() {
         }
         if (opcode == 44) {
             const auto condition_address = read_pointer24(cursor_ + 1U);
-            bool take{};
-            const auto condition = conditions_.find(condition_address);
-            if (condition != conditions_.end()) {
-                take = condition->second(*this);
-            } else if (unknown_condition_result_.has_value()) {
-                take = *unknown_condition_result_;
-            } else {
-                take = execute_native_condition(condition_address);
-            }
+            const bool take = unknown_condition_result_.has_value()
+                ? *unknown_condition_result_
+                : execute_native_condition(condition_address);
             if (take) {
                 cursor_ = (cursor_ & 0xff0000U) | 0x8000U
                     | (rom_->read16(cursor_ + 4U) & 0x7fffU);

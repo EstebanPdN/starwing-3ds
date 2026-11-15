@@ -213,14 +213,6 @@ void ObjectPool::copy_active_handles(
         output.push_back(handle);
 }
 
-void ObjectPool::copy_free_handles(std::vector<ObjectHandle>& output) const {
-    output.clear();
-    const auto free_count = capacity_ - active_count_;
-    if (output.capacity() < free_count) output.reserve(free_count);
-    for (auto handle = first_free_; handle != 0; handle = free_next_[handle])
-        output.push_back(handle);
-}
-
 bool ObjectPool::lists_match(
     const std::vector<ObjectHandle>& active,
     const std::vector<ObjectHandle>& free) const noexcept {
