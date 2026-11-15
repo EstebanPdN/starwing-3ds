@@ -200,9 +200,9 @@ void ScaledTextRenderer::draw_projected(const ProjectedFrame& frame,Framebuffer&
     if(frame.glyphs.empty() || frame.pose.z<128.) return;
     const auto& pose=frame.pose;
 
-    // Project directly into the stored raster at enhanced resolutions. Doing
-    // the projection at logical resolution first discarded subpixel movement
-    // and expanded each coarse output pixel into a scale-by-scale block.
+    // Project directly into the stored raster at enhanced resolutions.
+    // Projecting at logical resolution first would discard subpixel movement
+    // and expand each coarse output pixel into a scale-by-scale block.
     const auto raster_scale = target.draw_scale();
     struct RestoreTextScale {
         Framebuffer& target;
@@ -510,13 +510,13 @@ void ScaledTextRenderer::draw_ascii_compact(
             y += output_height + 1;
             continue;
         }
-        // The source translation aliases slash to a vertical separator.
-        // Host-authored labels need an actual diagonal slash.
         if (ascii == ':') {
             draw_host_colon(x,y,target,output_colour,true);
             x += 5;
             continue;
         }
+        // The source translation aliases slash to a vertical separator.
+        // Host-authored labels need an actual diagonal slash.
         if (ascii == '/') {
             for (std::int32_t row = 0; row < output_height; ++row) {
                 target.set(x + 3 - row * 4 / output_height, y + row,

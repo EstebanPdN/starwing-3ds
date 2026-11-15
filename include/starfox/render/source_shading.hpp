@@ -2,13 +2,17 @@
 #include "starfox/render/software_renderer.hpp"
 #include <bit>
 
+// MOBJ's per-object depth band and light vector, taken from the completed
+// source tick. Used by the software renderer.
 namespace starfox::render {
+// depth_band counts the pose's depth thresholds the depth reaches (0-3);
+// light is the signed light vector, (73, 73, 73) without a rotation matrix.
 struct SourceShading {
     std::size_t depth_band{};
     std::array<std::int8_t,3> light{73,73,73};
 };
 // Source lighting is sampled at the completed logic tick, independently of
-// interpolated geometry and headset eye position.
+// interpolated geometry and the stereo eye position.
 inline SourceShading source_shading(const RenderPose& pose) noexcept {
     SourceShading result;
     const auto depth=pose.use_source_lighting_state?pose.source_depth:pose.z;

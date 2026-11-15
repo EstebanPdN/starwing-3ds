@@ -178,8 +178,8 @@ inline void merge_character_run(std::uint8_t* out, const std::uint8_t* character
 
 // Tilemaps are 256, 512 or 1024 pixels on each axis. For these powers of
 // two, masking equals the non-negative modulo, negative values included.
-// ARM11 has no integer divider, so `%` was a library call for every pixel
-// of the wide and expanded background paths.
+// ARM11 has no integer divider, so `%` would be a library call for every
+// pixel of the wide and expanded background paths.
 constexpr std::int32_t wrap(std::int32_t value, std::int32_t modulus) noexcept {
     return value & (modulus - 1);
 }
@@ -199,7 +199,8 @@ std::int32_t mosaic_coordinate(
 // planes. Walk a decoded character row once per tile fragment instead of
 // recomputing the map address, character and clipped Framebuffer::set for
 // every pixel. The ordinary pixel path below remains for tagged/upscaled
-// targets and mosaic frames.
+// targets and mosaic frames. Returns false, drawing nothing, when it does not
+// apply.
 bool draw_split_native(const simulation::SnesPpuState& ppu,
     Framebuffer& low, Framebuffer& high,
     CharacterCache& characters, std::uint16_t screen_base,
@@ -253,7 +254,7 @@ bool draw_split_native(const simulation::SnesPpuState& ppu,
             if (bg2 && expanded && (ppu.bg2_scanline_scroll_enabled || ppu.tunnel_scene)) {
                 // Mode 1's bridge/colony cross-section occurs once. Continue
                 // its edge material with one coordinate system throughout
-                // the native raster. Switching at x=72/328 leaves a seam
+                // the native raster. Switching at x=72/328 would leave a seam
                 // when a scanline crosses the source tilemap's wrap point.
                 const auto unwrapped = static_cast<std::int32_t>(
                     static_cast<std::uint32_t>(128 + row_x) & x_mask)
@@ -304,6 +305,9 @@ bool draw_split_native(const simulation::SnesPpuState& ppu,
     return true;
 }
 
+// BG1 over the native 256x224 window a character run at a time, for direct
+// targets (unscaled, not recording, untagged, coverage off) without BG1
+// mosaic. Returns false, drawing nothing, when it does not apply.
 bool draw_bg1_native(const simulation::SnesPpuState& ppu,
     Framebuffer& target, TilePriorityPass priority,
     CharacterCache& characters) noexcept {
@@ -768,17 +772,17 @@ void BackgroundRenderer::draw_bg2(
     std::vector<std::uint8_t> ground_source_wrapped;
     if (extend_ground_down) {
         // Rolled Corneria ground can live in either BG2 priority pass. Keep a
-        // continuation colour for both; tracking only the low pass left the
-        // final one or two wide-mode strips transparent whenever the ground
-        // tile was high priority, exposing CGRAM colour zero as a blue wedge.
+        // continuation colour for both; tracking only the low pass would leave
+        // the final one or two wide-mode strips transparent whenever the ground
+        // tile is high priority, exposing CGRAM colour zero as a blue wedge.
         last_opaque_ground.resize(final_x - first_x, 0U);
         previous_ground_source_y.resize(final_x - first_x, -1);
         ground_source_wrapped.resize(final_x - first_x, false);
     }
 
     // Decode each referenced 8x8 character and tilemap entry once per pass.
-    // Wide Mode 2 otherwise reread four planar VRAM bytes and reconstructed
-    // the same nibble for every output pixel—well over 170,000 times per
+    // Wide Mode 2 would otherwise reread four planar VRAM bytes and rebuild
+    // the same nibble for every output pixel, well over 170,000 times per
     // 32:9 frame. Animated VRAM remains exact because this cache lives only
     // for the duration of the current PPU snapshot.
     DecodedCharacters local_characters;
@@ -1095,8 +1099,9 @@ void BackgroundRenderer::draw_bg2(
                     && previous_source_y - source_y > height_pixels / 2) {
                     // A rolled floor that reaches the bottom of its 256-line
                     // tilemap must continue with its last ground colour. The
-                    // wrapped source row is opaque sky, so transparency-only
-                    // continuation still exposed a blue wedge at the front.
+                    // wrapped source row is opaque sky, so continuing only
+                    // through transparent pixels would still expose a blue
+                    // wedge at the front.
                     ground_source_wrapped[column_index] = true;
                 }
                 previous_ground_source_y[column_index] = source_y;
@@ -1112,7 +1117,7 @@ void BackgroundRenderer::draw_bg2(
             const auto tile_y = static_cast<std::uint32_t>(source_y) >> tile_shift(tile_edge);
             const auto unwrapped_source_x = sample_x + row_scroll_x;
             // Scanline scrolling also drives open water (Titania). It is not
-            // evidence of a closed tunnel. Actual tunnel margins were handled
+            // evidence of a closed tunnel. Actual tunnel margins are handled
             // above via tunnel_scene; water continues its edge material below.
             // A scrolling 256-pixel title tilemap normally wraps the portion
             // that leaves one side back onto the other. In a wide viewport we

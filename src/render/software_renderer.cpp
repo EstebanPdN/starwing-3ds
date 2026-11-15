@@ -70,6 +70,8 @@ std::int16_t midpoint_word(std::int16_t a, std::int16_t b) {
         arithmetic_shift_right(sum, 1));
 }
 
+// Where camera-space edge a-b crosses z = 0: MCLIP.MC's word bisection when
+// word_exact, otherwise the linear intersection.
 Vec3 near_intersection(Vec3 a, Vec3 b, bool word_exact) {
     if (!word_exact) {
         const auto denominator = a.z - b.z;
@@ -162,6 +164,9 @@ void clip_near_polygon(
     }
 }
 
+// Projects a camera-space point onto the source raster around the vanishing
+// point, with inward stereo disparity. word_exact at focal length 256 follows
+// MDO_PROJECT's word arithmetic; `visible` means z >= 0.
 ScreenPoint project_point(
     const Vec3& point,
     double focal_length,
@@ -346,10 +351,10 @@ bool source_visibility(
     const auto& c = projected[visibility.c];
     // MSH_VIZIS performs all four projected differences in 16-bit Super FX
     // registers, then subtracts the two signed 16x16 products as a wrapping
-    // 32-bit value. Using host doubles here gave a different facing result
-    // whenever a near-plane projection crossed the signed screen-word seam;
+    // 32-bit value. Host doubles here would give a different facing result
+    // whenever a near-plane projection crosses the signed screen-word seam;
     // the intro lasers would then expose a broad side face as a full-screen
-    // wedge, especially while Original Speed held that source frame longer.
+    // wedge, especially while Original Speed holds that source frame longer.
     const auto bx = subtract16(
         rounded_word(b.x), rounded_word(a.x));
     const auto by = subtract16(
@@ -841,6 +846,8 @@ std::int32_t source_fixed_integer(std::int16_t value) noexcept {
     return static_cast<std::uint16_t>(value) >> 8U;
 }
 
+// Records one span as a command when the target records at draw scale 1;
+// otherwise returns false, recording nothing, so the caller draws it.
 bool record_span(Framebuffer& target,int left,int right,int y,FaceColour colour,
     std::uint8_t base,SurfaceBuffer* surfaces,const SurfaceSample& surface) {
     auto* commands=target.command_buffer();
@@ -859,8 +866,8 @@ bool record_span(Framebuffer& target,int left,int right,int y,FaceColour colour,
 // cartridge's 224 pixels (unwrapped X), the retail fill (no wobble,
 // wireframe, cel or wave variant), source winding and no surface buffer.
 // The tracers, their arithmetic and the commands are those of the general
-// routine below, statement for statement; what is gone is its per-row
-// dispatch over the variants, and each command is built in place.
+// routine below, statement for statement, without its per-row dispatch over
+// the variants and with each command built in place.
 void record_plain_polygon(
     RasterCommands& commands,
     std::span<const RasterPoint> points,
@@ -1114,8 +1121,9 @@ void fill_source_polygon_points(
         // Fractional projection and near-plane clipping can reverse the two
         // active edges without changing whether the source visibility plane
         // selected this face. The cartridge raster silently assumes its
-        // original winding; at upscale resolution that assumption discarded
-        // the complete span, making the face flash off for a presentation.
+        // original winding; at upscale resolution that assumption would
+        // discard the complete span, making the face flash off for a
+        // presentation.
         if (winding_independent && x2 < x1) std::swap(x1, x2);
         if (edge_runs) {
             const auto rows = std::min(left.remaining, right.remaining);
@@ -1266,6 +1274,9 @@ void fill_source_polygon(
         pose, winding_independent, surfaces, surface);
 }
 
+// Affine textured fill with the same 8.8 edge tracers as
+// fill_source_polygon_points. Texel 0 is transparent; writes are tagged
+// textured_geometry.
 void fill_source_textured_polygon(
     Framebuffer& target,
     const std::vector<RasterVertex>& polygon,
@@ -1643,6 +1654,9 @@ void draw_textured_sprite(
     }
 }
 
+// A whole-object billboard: the texture point-sampled into a square of
+// simple_sprite_world_size * focal_length / z source pixels (at most 240)
+// around the projected pose, kept inside the pose's effect clip.
 void draw_simple_scaled_sprite(
     Framebuffer& target,
     const assets::TextureImage& texture,
@@ -1887,8 +1901,8 @@ void SoftwareRenderer::draw_impl(
     // raster but becomes visible at higher presentation rates, even at 1x.
     // Use one continuous fractional copy for high-FPS/upscaled scan conversion,
     // visibility and BSP ordering. Mixing its edges with the rounded source
-    // copy made whole faces alternate between present and absent on each
-    // completed 20 Hz frame.
+    // copy would make whole faces alternate between present and absent on
+    // each completed 20 Hz frame.
     const auto continuous_geometry = settings_.render_scale > 1U
         || pose.continuous_geometry;
     // The raster pose differs from the caller's in this one flag only; the
@@ -2015,9 +2029,8 @@ void SoftwareRenderer::draw_impl(
         const auto& point = vertices[index];
         const auto word = index < word_coordinates.size() && word_coordinates[index];
         const auto factor = word ? 1.0 : shifted_factor;
-        // Rasterization, visibility and BSP ordering all use
-        // the same selected geometry. The old source-exact second copy was
-        // unused whenever continuous geometry selected the fractional copy.
+        // Rasterization, visibility and BSP ordering all read this one
+        // selected copy; no separate source-exact copy is transformed.
         Vec3 transformed;
         if (integer_transform) {
             const auto scale=word ? std::int64_t{1} : integer_scale;
@@ -2256,9 +2269,9 @@ void SoftwareRenderer::draw_impl(
     // extent cannot change under a StoredRasterScope.
     const auto raster_width = target.width();
     const auto raster_height = target.height();
-    // Face vertices are rebuilt for every polygon, but their storage can be
-    // reused across the entire object. Explosions visit every face and used
-    // to allocate these two small vectors for each one on every video frame.
+    // Face vertices are rebuilt for every polygon, but their storage is
+    // reused across the entire object. Explosions visit every face, so
+    // per-face vectors would allocate for each one on every video frame.
     for (const auto* face_pointer : ordered_faces) {
         const auto& face = *face_pointer;
         if (pose.explosion_progress == 0U && face.visibility_index >= 0
@@ -2410,7 +2423,7 @@ void SoftwareRenderer::draw_impl(
         polygon.reserve(camera_polygon.size());
         if (!any_behind && pose.explosion_progress == 0U) {
             // These are the unchanged vertices already projected for source
-            // visibility. Shared mesh vertices used to repeat the same
+            // visibility, so shared mesh vertices do not repeat the same
             // divides/word rounding for every visible face. Reuse only while
             // near clipping and per-face explosion offsets cannot have
             // changed the camera polygon (including its vertex count/order).

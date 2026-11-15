@@ -6,10 +6,17 @@
 
 #include <cstdint>
 
+// Draws the particles attached to one object (MPART.MC dots and streaks).
+// Used by the 3DS frame code and host tools.
 namespace starfox::render {
 
 class ParticleRenderer {
 public:
+    // Draws `owner`'s live particles around owner_pose's camera-space origin,
+    // interpolated at interpolation_alpha (clamped to 0-1): 2x2 dots, or a
+    // line from the previous position when flag bit 2 is set. Colours are
+    // colour_index_base plus the particle colour; writes are tagged three_d
+    // and kept inside the pose's effect clip.
     void draw_owner(
         const simulation::ParticleSystem& particles,
         simulation::ObjectHandle owner,

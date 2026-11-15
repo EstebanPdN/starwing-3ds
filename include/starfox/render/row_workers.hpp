@@ -7,6 +7,8 @@
 #include <thread>
 #include <vector>
 
+// Row-parallel thread pool for the host presentation passes (RGBA expansion,
+// 2D pixel filters, ScaleFX), which host tests drive.
 namespace starfox::render {
 
 // A persistent pool for the presentation passes, which are all row
@@ -25,14 +27,15 @@ public:
     RowWorkers(const RowWorkers&) = delete;
     RowWorkers& operator=(const RowWorkers&) = delete;
 
-    // 0 selects a default derived from hardware_concurrency. 1 disables the
-    // pool and runs everything on the calling thread.
+    // 0 selects a default derived from hardware_concurrency (at most 8). 1
+    // disables the pool and runs everything on the calling thread.
     void set_worker_count(std::size_t workers);
 
     // Runs `body(first_row, last_row)` over a half-open partition of
     // [0, rows). The calling thread takes the first slice and waits for the
     // rest, so no work is queued behind an idle dispatcher. `body` must not
-    // write outside the rows it is given.
+    // write outside the rows it is given. One call at a time per pool: `body`
+    // must not call back into it.
     void parallel_rows(
         std::uint32_t rows,
         const std::function<void(std::uint32_t, std::uint32_t)>& body);

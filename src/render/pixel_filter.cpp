@@ -54,6 +54,8 @@ bool two_d_filter_compiled_in(TwoDFilter filter) noexcept {
     case TwoDFilter::crt:
     case TwoDFilter::scalefx:
         return true;
+    // The xBRZ backend is not part of this source (see
+    // docs/legal/THIRD_PARTY_NOTICES.md).
     case TwoDFilter::xbrz:
         return false;
     }
@@ -73,8 +75,8 @@ void scale_edge(
 
     // Which corner each subpixel belongs to depends only on the factor, not on
     // the pixel being scaled, so resolve the geometry once instead of doing
-    // four floating-point comparisons per output pixel. At 10x that was the
-    // single largest cost in the filter.
+    // four floating-point comparisons per output pixel. At 10x those would be
+    // the single largest cost in the filter.
     std::array<std::uint8_t, 100> pattern{};
     for (std::size_t row = 0; row < factor; ++row) {
         const auto v = (static_cast<double>(row) + 0.5)
@@ -323,9 +325,11 @@ void apply_two_d_filter(
 
     auto backend = filter;
     if (!two_d_filter_compiled_in(backend)) backend = TwoDFilter::edge;
-    // EDGE is defined at every integer factor, so it tracks RENDER UPSCALE all
-    // the way to 10x. xBRZ tops out at 6x and is point-sampled the rest of the
-    // way, which still resolves far more detail than block expansion.
+    // EDGE and the soft filters are defined at every integer factor, so they
+    // track RENDER UPSCALE all the way to 10x. ScaleFX works at 3x and is
+    // point-sampled to the stored scale, which still resolves far more detail
+    // than block expansion. The xbrz factor is unused: that backend is never
+    // selected here (see two_d_filter_compiled_in).
     const std::size_t factor = backend == TwoDFilter::scalefx ? 3U : backend == TwoDFilter::xbrz
         ? std::clamp<std::size_t>(scale, 2U, 6U)
         : std::max<std::size_t>(scale, 2U);

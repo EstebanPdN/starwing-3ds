@@ -39,8 +39,8 @@ void composite_transparent_layer(const Framebuffer& source,
         // space. Walk their contiguous storage directly instead of paying
         // logical clipping, coordinate multiplication and an SxS nested loop
         // for every source pixel. This is particularly important for Render
-        // Upscale: the old generic path repeated that machinery nine times
-        // per logical pixel at 3x even though no resampling was required.
+        // Upscale: the general path below repeats that machinery nine times
+        // per logical pixel at 3x even though no resampling is required.
         auto source_left = std::max<std::int32_t>(0, -settings.offset_x);
         auto source_top = std::max<std::int32_t>(0, -settings.offset_y);
         auto source_right = std::min(

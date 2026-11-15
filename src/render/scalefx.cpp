@@ -47,6 +47,8 @@ struct Context {
     std::span<const std::uint32_t> original;
     ScaleFxScratch& scratch;
     unsigned width,height;
+    // Stage -1 reads the source as RGBA in 0-1; stages 0-3 read the output of
+    // that pass. Coordinates clamp to the image edge.
     V4 sample(int stage,int x,int y) const {
         x=std::clamp(x,0,int(width)-1);y=std::clamp(y,0,int(height)-1);
         const auto i=std::size_t(y)*width+x;
@@ -56,6 +58,9 @@ struct Context {
             float(p&255)/255.F,float(p>>24)/255.F);
     }
 };
+// Passes 0-4 are the ScaleFX shader passes ported to C++, with the shader's
+// options fixed at the defaults named in scalefx.hpp; constant tests such as
+// `1.0F == 1.F` stand for those options.
 namespace pass0 {
 
 
@@ -441,6 +446,8 @@ const int px=int(x/3),py=int(y/3);
 }
 
 }
+// Passes 0-3 each store one float4 per source pixel; pass 4 then picks, for
+// each of the 3x3 output subpixels, the source pixel it copies.
 void scale_scalefx(std::span<const std::uint32_t> source,
     std::span<std::uint32_t> output,std::uint32_t width,std::uint32_t height,
     ScaleFxScratch& scratch,RowWorkers& workers) {

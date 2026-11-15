@@ -230,8 +230,8 @@ void SpriteRenderer::draw_objects(
         // SPRITES.ASM builds the first-person reticle from four tile-$61
         // objects. Its Y position legitimately enters the top and bottom HUD
         // bands as the player aims. Classifying those quadrants as lives,
-        // shield, or bombs moved each one toward a different widescreen edge
-        // (and applied unrelated saved HUD offsets), fragmenting the reticle.
+        // shield, or bombs would move each one toward a different widescreen
+        // edge (and apply unrelated saved HUD offsets), fragmenting the reticle.
         const auto cockpit_crosshair_tile = (tile & 0x7fU) == 0x61U;
         const auto vertical_warning_arrow = (tile & 0x7fU) == 0x3eU
             && (x == 119 || x == 127)
@@ -270,10 +270,10 @@ void SpriteRenderer::draw_objects(
                 : (x < 128 ? 0 : horizontal_origin * 2);
         }
         // EX deliberately relocates the life icon/count beside the lower-left
-        // shield readout. Position-only classification therefore tied both
-        // groups to the Shield layout. These are the source HUD life tiles in
-        // retail and EX (EX substitutes tile 230 for the final digit glyph),
-        // so identify the independent group before applying band heuristics.
+        // shield readout, so position-only classification would tie both
+        // groups to the Shield layout. object_hud_element() therefore matches
+        // the source HUD life tiles of retail and EX (EX substitutes tile 230
+        // for the final digit glyph) before applying band heuristics.
         const auto element = object_hud_element(tile, y_byte, x);
         if (suppress_configurable_hud && element) continue;
         if (suppress_comms && element == HudElement::comms) continue;

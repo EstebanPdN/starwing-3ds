@@ -4,6 +4,8 @@
 #include <cmath>
 #include <concepts>
 
+// Minimal GLSL-style vectors, swizzles (sw<...>) and component-wise functions
+// that let scalefx.cpp keep the shader passes' own expressions. Private to it.
 namespace starfox::render::scalefx_detail {
 template<unsigned N,typename T=float> struct Vec {
     std::array<T,N> values{};

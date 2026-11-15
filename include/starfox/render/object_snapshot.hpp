@@ -8,8 +8,15 @@
 #include <limits>
 #include <cstdlib>
 
+// Per-object presentation endpoints captured at each source tick, and the
+// reference rules for interpolating between two captures. The 3DS frame code
+// keeps ObjectPresentationSnapshot in its own fixed table and mirrors the
+// capture and the player-overlay rule; host tests use these as the oracle.
 namespace starfox::render {
 
+// One object at a source tick: world position and 16-bit binary angles, its
+// Q15 rotation matrix, and the identity fields (shape, strategy, type, pool
+// generation) that tell whether two captures show the same object.
 struct ObjectPresentationSnapshot {
     timing::TransformSnapshot transform;
     simulation::MatrixQ15 rotation_matrix{};
@@ -25,6 +32,8 @@ using ObjectSnapshotMap = std::unordered_map<simulation::ObjectHandle,
 // FLASHPLAYER_STRAT is an attached visual, not an independently moving item.
 // It alternates NULLSHAPE/wireframe, which must not discard the owner's motion
 // history. Preserve the overlay's shape/colour lifetime but share ship poses.
+// Returns false, changing nothing, when the player has no current capture.
+// The player's previous pose is used only while its identity is unchanged.
 inline bool anchor_player_overlay(ObjectPresentationSnapshot& before,
     ObjectPresentationSnapshot& now,const ObjectSnapshotMap& previous,
     const ObjectSnapshotMap& current,simulation::ObjectHandle player) {
@@ -42,6 +51,8 @@ inline bool anchor_player_overlay(ObjectPresentationSnapshot& before,
 
 // UPDOORCOL_ISTRAT adds deg180 in one source tick to change the arrow's
 // direction. That is a discrete state change, not a rotating-door animation.
+// Objects showing discrete_rotation_shape (0 for none) therefore take the
+// current matrix; all others interpolate at alpha.
 inline simulation::MatrixQ15 interpolate_object_rotation(
     const ObjectPresentationSnapshot& previous,
     const ObjectPresentationSnapshot& current, double alpha,
@@ -55,6 +66,9 @@ inline simulation::MatrixQ15 interpolate_object_rotation(
 // EX implements the sight line as recycled, advancing particles. Presentation
 // must match the sight's depth stations, not the particle that moves from one
 // station to the next during a native tick.
+// Returns the previous-tick sight (same strategy, shape and type) whose
+// distance from the player's previous position best matches this sight's
+// current distance from the player, or nullptr. Points into `previous`.
 inline const ObjectPresentationSnapshot* reticle_previous_snapshot(
     const ObjectPresentationSnapshot& sight, const ObjectSnapshotMap& current,
     const ObjectSnapshotMap& previous, simulation::ObjectHandle player) {
@@ -80,6 +94,8 @@ inline const ObjectPresentationSnapshot* reticle_previous_snapshot(
     return best;
 }
 
+// One source tick's snapshots of every active object except invisible
+// strategies, keyed by handle. Object angle bytes become 16-bit angles.
 inline ObjectSnapshotMap capture_object_snapshots(
     const simulation::ObjectPool& objects, const simulation::TrigTables& trig) {
     ObjectSnapshotMap result;

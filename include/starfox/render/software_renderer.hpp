@@ -12,8 +12,18 @@
 #include <vector>
 #include <optional>
 
+// Software renderer for Super FX models: transform, projection, visibility and
+// BSP ordering, clipping and scan conversion that follow the cartridge's
+// MOBJ.MC routines, into an indexed Framebuffer or its RasterCommands
+// recorder. Used by the 3DS frame code, host tools and tests.
 namespace starfox::render {
 
+// One model draw: where the model is, how it is oriented and projected, and
+// the cartridge material and effect state its routines read. x/y/z is the
+// model origin in camera space (source units, +z ahead). The orientation is
+// rotation_matrix (Q15) when use_rotation_matrix is set, otherwise
+// pitch/yaw/roll in 16-bit binary angles. vanish_x/vanish_y is the projection
+// centre in source pixels.
 struct RenderPose {
     double x{};
     double y{};
@@ -89,6 +99,11 @@ struct RenderPose {
     bool collapse_to_axis_line{};
 };
 
+// Loads MOBJ's depth cue into `pose`: three depth thresholds and four 32-byte
+// depth colour tables from the ROM bank of depth_table_address (DEPTHTABLES).
+// A non-zero object_depth_offset reads the thresholds from DEPTHTABLES +
+// (offset - 1) * 4 instead of threshold_pointer. A RAM bank or a pointer
+// below $8000 only clears has_depth_colour_tables.
 void apply_source_depth_tables(
     const assets::RomImage& rom,
     std::uint32_t depth_table_address,
@@ -105,12 +120,16 @@ struct RenderSettings {
     // ordering). Applying a second vertex-winding test hides their selected
     // filled faces, so source rendering leaves generic culling disabled.
     bool backface_culling{false};
+    // draw() clears to background_colour; colour_index_base is added to every
+    // material colour and texel index.
     std::uint8_t background_colour{};
     std::uint8_t colour_index_base{};
     // Supersampling factor for polygon projection and scan conversion. The
     // fractional geometry shared by rasterization, visibility and BSP order
     // stays scale-independent and stable across source-frame boundaries.
     std::uint32_t render_scale{1U};
+    // Width (1-4) of two-vertex faces and the axis-line fallback, widened
+    // with render_scale up to 4x.
     std::uint8_t wireframe_thickness{1U};
 };
 
@@ -127,6 +146,9 @@ struct SurfaceSample {
     bool valid{};
 };
 
+// SurfaceSample plane at a framebuffer's stored resolution. set() records the
+// written bounding box so clear() resets only that region; set() ignores
+// out-of-range pixels and get() is unchecked.
 class SurfaceBuffer {
 public:
     SurfaceBuffer(std::uint32_t width, std::uint32_t height)
@@ -207,6 +229,8 @@ struct PolygonRenderDiagnostics {
     std::vector<std::array<double,2>> projected;
     double signed_area{};
 };
+// camera/projected/clipped/visible trace the collapse_to_axis_line axis (near
+// endpoint first); polygons records every projected polygon face.
 struct RenderDiagnostics {
     std::array<std::array<double,3>,2> camera{};
     std::array<std::array<double,2>,2> projected{},clipped{};
@@ -245,6 +269,12 @@ class SoftwareRenderer {
 public:
     explicit SoftwareRenderer(RenderSettings settings = {});
 
+    // Draws one shape at `pose` into `target`, whose draw scale is expected
+    // to equal settings.render_scale. clear_target first clears the target to
+    // the background colour, and the surfaces. surfaces, when given, receives
+    // the normal and depth of every polygon pixel; axis_diagnostics records
+    // the projection trace. reusable_scratch keeps the per-draw vectors'
+    // capacity across calls and must not be shared by concurrent draws.
     void draw(
         const assets::Shape& shape,
         const RenderPose& pose,
@@ -256,6 +286,11 @@ public:
 
     // MHUD.MC's first-person direction indicators are a Super FX line pass,
     // separate from both the 3D object list and the SNES OAM reticle.
+    // rotation is an 8-bit angle (256 per turn; fractions interpolate the
+    // trig tables). damage_flags bits 1 and 0 draw the positive and negative
+    // halves in the damage colour. horizontal_origin is the left edge of the
+    // 224-pixel window; a non-zero normal_colour_override replaces the normal
+    // colour.
     void draw_cockpit_hud(
         const simulation::TrigTables& trigonometry,
         double rotation,

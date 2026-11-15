@@ -49,8 +49,8 @@ double source_word_difference(double value, double origin) noexcept {
 
 // source_word_difference for an origin that is a whole number: the
 // subtraction, the remainder (fmod of two integers is the truncating integer
-// remainder) and the wrap are then exact integer arithmetic, and the library
-// call per coordinate is gone.
+// remainder) and the wrap are then exact integer arithmetic, with no library
+// call per coordinate.
 double whole_word_difference(std::int16_t value, std::int32_t origin) noexcept {
     auto difference = (static_cast<std::int32_t>(value) - origin) % 65'536;
     if (difference > 32'767) difference -= 65'536;

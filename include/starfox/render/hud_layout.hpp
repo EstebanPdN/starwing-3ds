@@ -4,8 +4,12 @@
 #include <cstddef>
 #include <cstdint>
 
+// Per-element HUD offsets, in source-raster pixels, that SpriteRenderer adds
+// to the cartridge HUD objects and the host-drawn meters.
 namespace starfox::render {
 
+// HUD groups that move independently; object_hud_element() classifies OAM
+// objects into them.
 enum class HudElement : std::uint8_t {
     lives,
     shield,

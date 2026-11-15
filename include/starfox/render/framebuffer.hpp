@@ -9,6 +9,10 @@
 #include <vector>
 #include "starfox/render/raster_commands.hpp"
 
+// The indexed framebuffer every software pass draws into: pixels stored at the
+// render scale, optional per-pixel layer tags and write coverage, and optional
+// recording into RasterCommands. Used by the engine, the 3DS frontend, host
+// tools and tests.
 namespace starfox::render {
 
 struct Rgba8;
@@ -57,8 +61,14 @@ public:
     [[nodiscard]] std::uint32_t draw_scale() const noexcept {
         return draw_scale_;
     }
+    // While a recorder is attached, set(), set_stored() and RasterRow writes
+    // append commands to it instead of writing pixels; bulk operations such
+    // as clear() still write the storage. Not owned; nullptr detaches it.
     void record_to(RasterCommands* commands) noexcept {commands_=commands;}
     [[nodiscard]] RasterCommands* command_buffer() const noexcept {return commands_;}
+    // Write coverage: one byte per stored pixel, set to 1 by each write while
+    // tracking is on. begin_write_coverage() zeroes it, so a pass can find
+    // the pixels it wrote even where the colour did not change.
     void begin_write_coverage() {coverage_.assign(pixels_.size(),0);track_coverage_=true;}
     void end_write_coverage() noexcept {track_coverage_=false;}
     [[nodiscard]] bool tracks_write_coverage() const noexcept {return track_coverage_;}
@@ -66,6 +76,8 @@ public:
     // For an in-place patch of a retained frame, which rewrites the coverage
     // of a rectangle together with its pixels after tracking has ended.
     [[nodiscard]] std::span<std::uint8_t> mutable_write_coverage() noexcept {return coverage_;}
+    // mark_written() for four pixels from `first`: byte n of `lanes`, in
+    // memory order, is 0 or 1 and marks pixel first + n.
     void mark_written_mask4(std::size_t first, std::uint32_t lanes) noexcept {
         if (!track_coverage_) return;
         std::uint32_t previous;
@@ -82,6 +94,9 @@ public:
     void set_draw_scale(std::uint32_t draw_scale) noexcept {
         draw_scale_ = draw_scale == 0U ? 1U : draw_scale;
     }
+    // Stored pixels, row-major. Writes through the mutable reference bypass
+    // write coverage, layer tags and recording (see mark_written and
+    // layer_tags).
     [[nodiscard]] const std::vector<std::uint8_t>& pixels() const noexcept { return pixels_; }
     [[nodiscard]] std::vector<std::uint8_t>& pixels() noexcept { return pixels_; }
 
@@ -116,6 +131,7 @@ public:
     [[nodiscard]] std::vector<std::uint8_t>& layer_tags() noexcept {
         return tags_;
     }
+    // Tag of a stored pixel. Requires layer tags; coordinates are unchecked.
     [[nodiscard]] PixelLayer layer_stored(
         std::uint32_t x, std::uint32_t y) const noexcept {
         return static_cast<PixelLayer>(
@@ -131,6 +147,9 @@ public:
         return layer_override_;
     }
 
+    // New source-raster extent at the current draw scale: zeroes the pixels
+    // and resets tags to three_d; while tracking, marks every pixel written.
+    // Nothing changes when the stored extent is already the same.
     void resize(std::uint32_t width, std::uint32_t height) {
         const auto stored_width = width * draw_scale_;
         const auto stored_height = height * draw_scale_;
@@ -146,6 +165,8 @@ public:
         }
     }
 
+    // Fills every stored pixel with `colour`, marks them written and resets
+    // tags to three_d. Never recorded.
     void clear(std::uint8_t colour = 0) noexcept {
         std::fill(pixels_.begin(), pixels_.end(), colour);
         mark_written(0,pixels_.size());
@@ -155,6 +176,9 @@ public:
         }
     }
 
+    // One source-raster pixel: an SxS stored block, or one command while
+    // recording, tagged two_d unless a layer override is active. Pixels
+    // outside the source raster are ignored.
     void set(std::int32_t x, std::int32_t y, std::uint8_t colour) noexcept {
         if (x < 0 || y < 0 || x >= static_cast<std::int32_t>(width())
             || y >= static_cast<std::int32_t>(height())) {
@@ -202,6 +226,9 @@ public:
     public:
         // Inclusive source endpoints. Clip once, then bulk-fill pixels and
         // metadata; dithering retains absolute framebuffer X/Y parity.
+        // Returns false, writing nothing, when the row is not directly
+        // addressable (draw scale above 1, recording, or y outside the
+        // raster); the caller then writes the span another way.
         bool fill_span(std::int32_t left, std::int32_t right,
             std::uint8_t even, std::uint8_t odd, bool dither) noexcept {
             if (pixels_ == nullptr) return false;
@@ -270,6 +297,7 @@ public:
         return RasterRow{*this, y};
     }
 
+    // Source-raster read (the top-left stored pixel of the block); unchecked.
     [[nodiscard]] std::uint8_t get(std::uint32_t x, std::uint32_t y) const noexcept {
         return pixels_[
             static_cast<std::size_t>(y * draw_scale_) * stored_width_
@@ -279,7 +307,8 @@ public:
     // Stored writes come from layer compositing, where the tag belongs to the
     // source layer rather than to this call: the Super FX world, the cartridge
     // HUD and the EX overlay all arrive through here. Callers that know the
-    // source layer pass it; the default suits geometry.
+    // source layer pass it; the default suits geometry. An active layer
+    // override still takes precedence. Out-of-range pixels are ignored.
     void set_stored(std::uint32_t x, std::uint32_t y, std::uint8_t colour,
         PixelLayer layer = PixelLayer::three_d) noexcept {
         if (x >= stored_width_ || y >= stored_height_) return;
@@ -300,6 +329,7 @@ public:
     // Wholesale copy used by the cartridge and Mode 2 background caches, which
     // save and restore a finished raster. Layer tags travel with the pixels so
     // a restored frame filters exactly like the frame it was captured from.
+    // Both must have the same stored extent; it is not checked.
     void copy_pixels_from(const Framebuffer& source) {
         pixels_ = source.pixels_;
         if(track_coverage_) coverage_.assign(pixels_.size(),1);
@@ -349,6 +379,7 @@ public:
         } else tags_.assign(pixels_.size(), geometry);
     }
 
+    // Stored-pixel read; unchecked.
     [[nodiscard]] std::uint8_t get_stored(
         std::uint32_t x, std::uint32_t y) const noexcept {
         return pixels_[static_cast<std::size_t>(y) * stored_width_ + x];
@@ -373,10 +404,10 @@ private:
     bool track_coverage_{};
 };
 
-// Reclassifies every write made during its lifetime. World-space effects that
-// still address the source raster (dust points, particles) are geometry rather
-// than cartridge art, so they opt out of 2D filtering and keep the crisp
-// block-replicated look they have today.
+// Reclassifies every write made during its lifetime and restores the previous
+// override on destruction. World-space effects that still address the source
+// raster (dust points, particles) are geometry rather than cartridge art, so
+// they opt out of 2D filtering and keep their crisp block-replicated look.
 class ScopedLayer {
 public:
     ScopedLayer(Framebuffer& target, PixelLayer layer) noexcept
@@ -398,6 +429,10 @@ private:
     std::int8_t previous_{-1};
 };
 
+// Placement of a layer for composite_transparent_layer(), in destination
+// source-raster pixels: an offset, a half-open clip rectangle (unbounded by
+// default) and the SNES mosaic register with the layer bits that enable it,
+// its blocks anchored at mosaic_origin.
 struct LayerCompositeSettings {
     std::int32_t offset_x{};
     std::int32_t offset_y{};
@@ -411,9 +446,18 @@ struct LayerCompositeSettings {
     std::int32_t mosaic_origin_y{};
 };
 
+// Copies the non-zero pixels of `source` onto `destination` (index 0 is
+// transparent) with their layer tags (three_d when the source has none),
+// marking coverage. Equal draw scales without mosaic copy stored pixels
+// directly; otherwise clipping and mosaic run on the source raster and each
+// stored pixel takes the source sample nearest its centre.
 void composite_transparent_layer(const Framebuffer& source,
     Framebuffer& destination, const LayerCompositeSettings& settings) noexcept;
 
+// Writes the source raster as a 24-bit BMP through `palette` (indices past
+// its end use the last entry), or through preview_palette(). Creates parent
+// directories; throws std::invalid_argument for an empty palette and
+// std::runtime_error when the file cannot be created.
 void write_bmp(const Framebuffer& framebuffer, const std::filesystem::path& path);
 void write_bmp(
     const Framebuffer& framebuffer,

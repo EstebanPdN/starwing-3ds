@@ -8,15 +8,21 @@
 #include <utility>
 #include <vector>
 #include <unordered_map>
+// Recorded raster commands: the ordered rectangle and scanline stream that a
+// recording Framebuffer produces, replayed in software (raster_replay) or
+// compiled for the PICA200 by the 3DS scene code. Coordinates are stored pixels.
 namespace starfox::render {
 // Ordered native scanline commands. Projection, clipping and BSP selection
 // retain source arithmetic; pixel coverage/material sampling can execute on
 // either backend without substituting hardware triangle edge conventions.
 struct RasterCommand {
+    // A half-open rectangle. even/odd are palette indices, alternating by
+    // X/Y parity when dither is set; tag is the PixelLayer written.
     std::int32_t left{},top{},right{},bottom{};
     std::uint32_t even{},odd{},dither{},tag{};
     std::uint32_t texture_offset{},u_mask{},v_mask{},colour_base{};
     std::int32_t u{},v{},du{},dv{};
+    // SurfaceSample normal (x, y, z) and depth, stored when has_surface is set.
     std::array<float,4> surface{};
     // Solid GPU row spans: reserved0 is dither scale; reserved1 bit 0 selects
     // edge-only coverage at original X endpoints u/v (not clipped bounds).
@@ -29,14 +35,26 @@ struct RasterCommand {
     // changes: row r (counted from top) covers the inclusive pixels from
     // (u + du*r) >> 8 to (v + dv*r) >> 8; left/right only bound them. Only
     // recorded for a consumer that asked (RasterCommands::accept_edge_runs).
-    // Textured commands use these fields for texture scroll instead.
+    // Non-zero `textured` samples texels[texture_offset], a texture u_mask+1
+    // texels wide; non-zero texels draw colour_base + texel. 1 is an affine
+    // polygon row: u/v are 8.8 at `left`, du/dv steps per pixel, and
+    // reserved0/reserved1 add the texture scroll before the masks. 2 is a
+    // scaled sprite: u/v its stored origin, du its size in source pixels, dv
+    // the draw scale; reserved0 bit 8 forces colour reserved0 & 255. 3 is an
+    // MSHOWSPR sprite: u/v are 8.8 at left/top, du the step per source pixel
+    // on both axes, dv the draw scale; texels outside the masks are skipped.
     std::uint32_t has_surface{},textured{},reserved0{},reserved1{};
 };
 static_assert(sizeof(RasterCommand)==96);
 // A packed stream stores a whole command as its bytes.
 static_assert(std::is_trivially_copyable_v<RasterCommand>);
+// One frame's commands for a width x height stored raster, in paint order.
+// add() and the builders drop empty commands and those wholly outside the
+// raster; texels holds a copy of every texture the commands sample.
 class RasterCommands {
 public:
+    // Starts a frame of this stored size: clears the commands, texels and
+    // texture lookup. Packing and edge-run acceptance are kept.
     void reset(std::uint32_t width,std::uint32_t height) {
         width_=width;height_=height;commands.clear();texels.clear();textures_.clear();
         packed_size_=0;packed_count_=0;unpacked_words_=0;last_texture_=nullptr;
@@ -98,6 +116,9 @@ public:
         if(pack_) pack_whole(command);
         else commands.push_back(command);
     }
+    // Offset of `pixels` in `texels`, copied there on first use. Textures are
+    // identified by address until reset(), so one address must not hold
+    // different texels within a frame.
     std::uint32_t texture(std::span<const std::uint8_t> pixels) {
         // A textured polygon asks once per scanline for the same texture,
         // and a frame uses a handful of them: the last answer, then a short
@@ -174,6 +195,9 @@ public:
         }
         unpacked_words_=packed_size_+1U;
     }
+    // Indexes `commands` by stored row and 64-pixel column tile: rows holds
+    // height*tiles+1 offsets into indices, which lists each bin's commands in
+    // order. A packed recorder must unpack() first.
     void bin_rows() {
         const auto tiles=(width_+63)/64;
         rows.assign(std::size_t(height_)*tiles+1,0);
@@ -197,6 +221,8 @@ public:
     // of one solid span per row. Survives reset().
     void accept_edge_runs(bool accept) noexcept {edge_runs_=accept;}
     bool accepts_edge_runs() const noexcept {return edge_runs_;}
+    // The commands (filled by unpack() when packed), the texture copies they
+    // address, and the bin_rows() index.
     std::vector<RasterCommand> commands;
     std::vector<std::uint8_t> texels;
     std::vector<std::uint32_t> rows,indices;

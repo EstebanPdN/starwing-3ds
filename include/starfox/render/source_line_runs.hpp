@@ -2,11 +2,15 @@
 #include <algorithm>
 #include <cstdlib>
 
+// MDRAWC line rasterization as rectangle runs. Used by the software renderer's
+// recording path and the 3DS line batch GPU test; host tests check it.
 namespace starfox::render {
 // MDRAWC's major-axis line, including both endpoints and its strict
 // underflow tie rule. Adjacent squares in a row/column have the same paint
 // at every screen coordinate, so their union is one rectangle. Keeping
 // that union avoids recording a 96-byte command for every line pixel.
+// Calls emit(left, top, right, bottom) with half-open rectangles; each line
+// pixel is a `thickness`-wide square around it.
 template<class Emit>
 void source_line_runs(int x0, int y0, int x1, int y1, int thickness, Emit emit) {
     const int dx=std::abs(x1-x0),dy=std::abs(y1-y0);

@@ -3,6 +3,8 @@
 #include "starfox/render/software_renderer.hpp"
 #include <bit>
 
+// Per-pass cache in front of apply_source_depth_tables(), used by the 3DS
+// frame code; tests/source_depth_tables_test.cpp checks the two agree.
 namespace starfox::render {
 
 // All objects in one world pass share the scene's 128 immutable colour
@@ -10,10 +12,14 @@ namespace starfox::render {
 // to that pass so scene changes and separate ROM instances need no invalidation.
 class SourceDepthTables {
 public:
+    // address is DEPTHTABLES; thresholds and colours are the scene's
+    // pointers. `rom` must outlive the cache.
     SourceDepthTables(const assets::RomImage& rom, std::uint32_t address,
         std::uint16_t thresholds, std::uint16_t colours)
         : rom_(rom), address_(address), thresholds_(thresholds), colours_(colours) {}
 
+    // Same result as apply_source_depth_tables(rom, address, thresholds,
+    // colours, object_offset, pose).
     void apply(std::uint8_t object_offset, RenderPose& pose) {
         const auto bank = address_ & 0xff0000U;
         const auto pointer = object_offset == 0U ? thresholds_

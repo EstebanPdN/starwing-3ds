@@ -11,6 +11,8 @@
 #include <string_view>
 #include <vector>
 
+// Presentation filters for cartridge 2D art at RENDER UPSCALE. Used by the
+// simulation's 2D filter option (backend availability) and host tests.
 namespace starfox::render {
 
 // Presentation-time upscaling for cartridge-authored 2D art.
@@ -27,18 +29,21 @@ enum class TwoDFilter : std::uint8_t {
     // from the classic EPX/Scale2x corner rules to any integer factor, so it
     // tracks RENDER UPSCALE from 2x to 10x. Carries no third-party licence.
     edge = 1,
-    // xBRZ by Zenju. Noticeably better on curves and small features, and the
-    // reference filter for this class of art. GPLv3, so it is compiled in only
-    // when STARFOX_ENABLE_XBRZ is enabled (the default); otherwise selecting it falls back to
-    // EDGE.
+    // xBRZ by Zenju (GPLv3). This source does not contain the backend:
+    // two_d_filter_compiled_in() reports it absent, and apply_two_d_filter()
+    // and filter_overlay_layer() fall back to EDGE.
     xbrz = 2,
+    // Bilinear with a narrowed transition that keeps pixel centres; CRT adds
+    // a bright-phosphor glow and a scanline mask to it.
     sharp_bilinear = 3,
     crt = 4,
+    // ScaleFX at a fixed 3x (scalefx.hpp).
     scalefx = 5,
 };
 
 inline constexpr std::size_t two_d_filter_count = 6U;
 
+// Upper-case display name; "OFF" for off and unknown values.
 [[nodiscard]] std::string_view two_d_filter_name(TwoDFilter filter) noexcept;
 // False when the backend was not compiled in; the caller may still select it,
 // and apply_two_d_filter() degrades to EDGE.
@@ -56,10 +61,10 @@ struct PixelFilterScratch {
 // Replaces artwork-owned pixels of `rgba` (stored resolution, RGBA8, as
 // produced by expand_rgba) with a filtered reconstruction of the same art.
 //
-// Requires framebuffer.layer_tags_enabled() and a draw scale of 1 or more;
-// otherwise it returns without touching `rgba`. Scales above the backend's
-// maximum factor are filtered at that maximum and point-sampled up, which
-// still beats block expansion.
+// Requires framebuffer.layer_tags_enabled(), a draw scale from 1 to 10 and an
+// `rgba` covering the stored frame; otherwise it returns without touching
+// `rgba`. Scales above the backend's maximum factor are filtered at that
+// maximum and point-sampled up, which still beats block expansion.
 // `highlight` paints every pixel the filter claims in magenta instead of the
 // filtered colour. Nothing else changes, so anything still showing its own
 // art is a pixel the filter is not touching -- the direct way to see which
@@ -77,9 +82,9 @@ void apply_two_d_filter(
 // main frame and so never reaches the tagged framebuffer -- the planet
 // sequence's portrait and text overlays, which are entirely cartridge art.
 // Fills `out_argb` with stored-resolution ARGB, transparent where the overlay
-// is, and returns true. Returns false when the filter does not apply (off,
-// scale 1, or an empty overlay), leaving the caller's own nearest-neighbour
-// path in charge.
+// has no art, and returns true. Returns false when the filter does not apply
+// (off, a render scale outside 1-10, an empty palette, or an overlay with no
+// art), leaving the caller's own nearest-neighbour path in charge.
 [[nodiscard]] bool filter_overlay_layer(
     TwoDFilter filter,
     const Framebuffer& overlay,
@@ -90,7 +95,8 @@ void apply_two_d_filter(
     RowWorkers& workers);
 
 // Exposed for tests: scales `source` (ARGB, `width` x `height`) into `target`
-// by `factor`, treating fully transparent source pixels as holes.
+// by `factor`, treating fully transparent source pixels as holes. Only source
+// rows [first_row, last_row) are written; factors outside 2-10 write nothing.
 void scale_edge(
     std::size_t factor,
     const std::uint32_t* source,

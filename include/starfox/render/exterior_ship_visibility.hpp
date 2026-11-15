@@ -9,8 +9,11 @@ namespace starfox::render {
 // cruisers can cross the camera while the player is inside. Filter by source
 // strategies, not model size, camera angle, stereo mode or screen coordinates.
 // This is presentation-only: enemies, collisions and source timing stay live.
+// Used by the 3DS frame code.
 class ExteriorShipVisibility {
 public:
+    // Resolves the strategy symbols. A missing name leaves a zero slot, which
+    // never matches.
     explicit ExteriorShipVisibility(const assets::SymbolMap& symbols) {
         load(symbols,inside_,std::array{"PLAYERINTUNNEL_STRAT","PLAYERINTUNNEL_ISTRAT",
             "PLAYERTOCSLOW_ISTRAT","PLAYERWASHENT_STRAT","PLAYERWASHENT_ISTRAT",
@@ -18,6 +21,8 @@ public:
         load(symbols,cruisers_,std::array{"CRUISER1_STRAT","CRUISER1_ISTRAT",
             "CRUISER1F_ISTRAT","CRUISER1FALL_STRAT","CRUISER1FALL_ISTRAT"});
     }
+    // True when the player runs one of the inside strategies above and the
+    // object one of the cruiser strategies.
     bool hide(std::uint32_t player_strategy,std::uint32_t object_strategy) const noexcept {
         return contains(inside_,player_strategy) && contains(cruisers_,object_strategy);
     }

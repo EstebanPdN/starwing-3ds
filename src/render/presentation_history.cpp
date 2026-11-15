@@ -43,6 +43,10 @@ void PresentationHistory::reset_for_dimensions(
 
 namespace {
 
+// A delta is a run list over RGBA pixels: each run starts with the varint
+// (count << 2 | kind). A zero run skips unchanged pixels, a repeat run is
+// followed by one 4-byte XOR value for all `count` pixels, and a literal run
+// by count * 4 XOR bytes. XOR makes every delta its own inverse.
 constexpr std::uint64_t delta_zero = 0U;
 constexpr std::uint64_t delta_repeat = 1U;
 constexpr std::uint64_t delta_literal = 2U;
