@@ -49,6 +49,7 @@ inline std::vector<u32> quota_requests;
 inline std::int16_t* left{};
 inline std::int16_t* right{};
 inline std::size_t bytes{};
+inline int linear_alloc_fail_after{-1};
 inline std::vector<std::uint64_t> flushes;
 inline int flush_fail_after{-1};
 inline Result play_result{};
@@ -74,7 +75,14 @@ inline bool aptMainLoop() {
 }
 inline Result csndInit() { return 0; }
 inline void csndExit() {}
-inline void* linearAlloc(std::size_t bytes) { return std::malloc(bytes); }
+inline void* linearAlloc(std::size_t bytes) {
+    if (audio_test::linear_alloc_fail_after == 0) {
+        audio_test::linear_alloc_fail_after = -1;
+        return nullptr;
+    }
+    if (audio_test::linear_alloc_fail_after > 0) --audio_test::linear_alloc_fail_after;
+    return std::malloc(bytes);
+}
 inline void linearFree(void* pointer) { std::free(pointer); }
 #ifdef STARWING_AUDIO_REAL_THREADS
 inline void LightEvent_Init(LightEvent* event, int) {

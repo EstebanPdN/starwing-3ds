@@ -1,14 +1,11 @@
 # Verification status
 
-Current development version: **1.2-E3** (unreleased); CIA internal title version: **103**.
-The latest published package is **1.2-E2** (experimental), described after the
-1.2-E3 section.
+Current development version: **1.2-E3** (experimental), with CIA internal title version **105**.
 
-## 1.2-E3 development line (unreleased)
+## 1.2-E3 experimental release
 
-This line targets Old 3DS frame rate. Eight hardware test rounds showed where
-the time goes; the changes below follow those measurements. No package has
-been published from it.
+This release targets Old 3DS frame rate. The changes below follow measurements
+from eight hardware test rounds with earlier builds.
 
 ### What changed
 
@@ -30,6 +27,9 @@ been published from it.
   the object bridge trusting stale work-RAM copies.
 - Builds no longer embed the build machine's paths, and dumps record the
   build that produced them.
+- Failed audio initialization releases partially allocated PCM buffers while
+  cartridge audio emulation continues. Resource and checkpoint readers close
+  their files if allocation fails.
 
 ### Evidence
 

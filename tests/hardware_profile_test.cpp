@@ -38,5 +38,15 @@ int main(){
             if(model!=1&&outcome==2) require(audio_test::cpu_quota==30U,"Closing did not restore the prior slice");
         }
     }
-    std::cout<<"PASS: Old/unknown runs one cartridge SPC on a granted core-1 slice or synchronously, restoring APT's slice; New retains split/core-2\n";
+    audio_test::thread_succeeds = false;
+    Audio3ds audio;
+    for (int fail_after : {0, 1}) {
+        audio_test::linear_alloc_fail_after = fail_after;
+        require(!audio.open(), "CSND opened with an incomplete PCM buffer pair");
+        require(audio.pcm_ring_bytes() == 0, "Muted audio retained a partial PCM allocation");
+    }
+    require(audio.open(), "CSND could not reopen after allocation failure");
+    audio.close();
+    require(audio.pcm_ring_bytes() == 0, "Closing CSND retained PCM memory");
+    std::cout<<"PASS: audio profile, APT quota restoration and PCM allocation recovery\n";
 }

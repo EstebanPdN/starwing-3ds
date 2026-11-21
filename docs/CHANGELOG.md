@@ -2,9 +2,9 @@
 
 Published releases are listed first; earlier entries describe development candidates.
 
-## Unreleased — 1.2-E3 (development)
+## 1.2-E3 — 2026-11-20 (experimental)
 
-Not published as a package. See [Status](STATUS.md) for the evidence and its limits.
+The known HOME Menu freeze remains open. See [Status](STATUS.md) for hardware validation.
 
 - Run the cartridge's 65C816 code in a compact interpreter sized for the Old 3DS
   instruction cache, replacing the ahead-of-time compiled logic.
@@ -15,6 +15,8 @@ Not published as a package. See [Status](STATUS.md) for the evidence and its lim
 - Add the START+SELECT hardware test tour with a GPU self-test.
 - Fix Star Fox EX levels that could end incorrectly after a map start.
 - Keep build machine paths out of the binaries; label dumps with their build.
+- Release partially allocated audio buffers when CSND initialization fails.
+  Close resource and checkpoint files when memory allocation fails.
 - Remove the retired desktop features, the 0.1 diagnostic application and unused
   tools from the source; repair and extend the host test suite.
 

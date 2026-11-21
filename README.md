@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.2-E2"><img src="docs/badges/version.svg?v=5" alt="Experimental release: v1.2-E2" height="22"></a>
+  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.2-E3"><img src="docs/badges/version.svg?v=6" alt="Experimental release: v1.2-E3" height="22"></a>
   <a href="docs/COMPATIBILITY.md"><img src="docs/badges/platform.svg?v=2" alt="Nintendo 3DS" height="22"></a>
   <a href="docs/UPDATING.md"><img src="docs/badges/updater.svg" alt="Updates: built in" height="22"></a>
   <a href="docs/legal/THIRD_PARTY_NOTICES.md"><img src="docs/badges/license.svg?v=2" alt="Component-specific licenses" height="22"></a>
@@ -66,15 +66,15 @@ of sustained hardware FPS. Star Fox EX is not fully supported.
 ## Download and installation
 
 <p>
-  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/download/v1.2-E2/Starwing-3DS.cia"><img src="docs/images/download-cia.svg" alt="Download Starwing 3DS CIA" width="210" height="46"></a>
-  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/download/v1.2-E2/Starwing-3DS.3dsx"><img src="docs/images/download-3dsx.svg" alt="Download Starwing 3DS for Homebrew Launcher" width="210" height="46"></a>
+  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/download/v1.2-E3/Starwing-3DS.cia"><img src="docs/images/download-cia.svg" alt="Download Starwing 3DS CIA" width="210" height="46"></a>
+  <a href="https://github.com/EstebanPdN/starwing-3ds/releases/download/v1.2-E3/Starwing-3DS.3dsx"><img src="docs/images/download-3dsx.svg" alt="Download Starwing 3DS for Homebrew Launcher" width="210" height="46"></a>
 </p>
 
 **Supported systems: New Nintendo 3DS / New 2DS XL and Old Nintendo 3DS / 2DS.**
 Old 3DS / 2DS support is new in 1.2 and experimental: busy scenes can show
 fewer frames than on New models. See [Compatibility](docs/COMPATIBILITY.md).
 
-[Release notes and FBI QR](https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.2-E2) · [Project website](https://estebanpdn.github.io/star-fox.html)
+[Release notes and FBI QR](https://github.com/EstebanPdN/starwing-3ds/releases/tag/v1.2-E3) · [Project website](https://estebanpdn.github.io/star-fox.html)
 
 1. Install `Starwing-3DS.cia` with FBI, or scan the release's QR in
    **Remote Install → Scan QR Code**.
@@ -128,9 +128,8 @@ python3 tools/check-publication.py
 bash tools/test-host.sh
 ```
 
-The `main` branch carries the unreleased 1.2-E3 development line, focused on
-Old 3DS performance; downloads above remain the latest published package. See
-[Status](docs/STATUS.md) for what has and has not been verified.
+The experimental 1.2-E3 release focuses on Old 3DS performance. See
+[Status](docs/STATUS.md) for test results and open hardware issues.
 
 A full game build additionally needs devkitPro and the locally prepared inputs
 in the [build guide](docs/BUILDING.md). The clean source checkout alone does

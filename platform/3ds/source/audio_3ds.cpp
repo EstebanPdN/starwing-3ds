@@ -49,7 +49,10 @@ bool Audio3ds::open() {
             pcm_right_ = static_cast<std::int16_t*>(linearAlloc(ring_bytes_));
             ready_ = pcm_left_ != nullptr && pcm_right_ != nullptr;
         }
-        if (!ready_) csndExit();
+        if (!ready_) {
+            csndExit();
+            release_pcm_buffers();
+        }
     }
 
     LightEvent_Init(&work_requested_, RESET_ONESHOT);
@@ -150,6 +153,10 @@ void Audio3ds::close() noexcept {
         csndExit();
     }
     ready_ = false;
+    release_pcm_buffers();
+}
+
+void Audio3ds::release_pcm_buffers() noexcept {
     if (pcm_left_ != nullptr) linearFree(pcm_left_);
     if (pcm_right_ != nullptr) linearFree(pcm_right_);
     pcm_left_ = nullptr;

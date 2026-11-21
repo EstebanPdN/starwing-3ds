@@ -192,6 +192,7 @@ private:
     bool collect_packet(std::uint32_t count);
     // Try each APT slice in order and start the worker on core 1.
     void start_core1_worker(std::initializer_list<u32> quotas);
+    void release_pcm_buffers() noexcept;
     static constexpr int left_channel_ = 8;
     static constexpr int right_channel_ = 9;
     static constexpr std::size_t packet_frames_ =

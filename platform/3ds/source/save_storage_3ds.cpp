@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <exception>
+#include <memory>
 #include <string>
 
 namespace starfox::platform_3ds {
@@ -36,20 +37,15 @@ bool write_autosave(const char* path,const starfox::assets::RomImage& rom,
 bool restore_autosave(const char* path,const starfox::assets::RomImage& rom,
     starfox::simulation::GameSimulation& game,
     starfox::platform_3ds::Audio3ds& audio) {
-    FILE* file=std::fopen(path,"rb");
-    if(!file) return false;
-    const bool size_ok=std::fseek(file,0,SEEK_END)==0;
-    const long length=size_ok?std::ftell(file):-1;
-    if(length<=0||length>16L*1024L*1024L
-        ||std::fseek(file,0,SEEK_SET)!=0) {
-        std::fclose(file);return false;
-    }
-    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(length));
-    const bool read=std::fread(bytes.data(),1,bytes.size(),file)
-        ==bytes.size();
-    std::fclose(file);
-    if(!read) return false;
     try {
+        std::unique_ptr<FILE, decltype(&std::fclose)> file(std::fopen(path,"rb"), std::fclose);
+        if (!file || std::fseek(file.get(),0,SEEK_END)!=0) return false;
+        const long length=std::ftell(file.get());
+        if (length<=0 || length>16L*1024L*1024L
+            || std::fseek(file.get(),0,SEEK_SET)!=0) return false;
+        std::vector<std::uint8_t> bytes(static_cast<std::size_t>(length));
+        if (std::fread(bytes.data(),1,bytes.size(),file.get())!=bytes.size()) return false;
+        file.reset();
         starfox::state::Reader reader{starfox::state::unpack(bytes,
             autosave_schema,rom.crc32())};
         std::vector<std::uint8_t> game_bytes,audio_bytes;

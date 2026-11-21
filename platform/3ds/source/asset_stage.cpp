@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <exception>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -39,21 +40,16 @@ constexpr std::array resources{
 
 /* Whole file of at most 64 MiB; throws std::runtime_error on any failure. */
 std::vector<std::uint8_t> read_file(const char *path) {
-    FILE *file = std::fopen(path, "rb");
-    if (file == nullptr) throw std::runtime_error(std::string("Cannot open ") + path);
-    if (std::fseek(file, 0, SEEK_END) != 0) {
-        std::fclose(file);
+    const std::unique_ptr<FILE, decltype(&std::fclose)> file(std::fopen(path, "rb"), std::fclose);
+    if (!file) throw std::runtime_error(std::string("Cannot open ") + path);
+    if (std::fseek(file.get(), 0, SEEK_END) != 0)
         throw std::runtime_error("Cannot seek input file");
-    }
-    const long size = std::ftell(file);
-    if (size < 0 || size > 64L * 1024L * 1024L || std::fseek(file, 0, SEEK_SET) != 0) {
-        std::fclose(file);
+    const long size = std::ftell(file.get());
+    if (size < 0 || size > 64L * 1024L * 1024L || std::fseek(file.get(), 0, SEEK_SET) != 0)
         throw std::runtime_error("Invalid input file size");
-    }
     std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
-    const bool complete = bytes.empty() || std::fread(bytes.data(), 1, bytes.size(), file) == bytes.size();
-    std::fclose(file);
-    if (!complete) throw std::runtime_error("Cannot read input file");
+    if (!bytes.empty() && std::fread(bytes.data(), 1, bytes.size(), file.get()) != bytes.size())
+        throw std::runtime_error("Cannot read input file");
     return bytes;
 }
 
