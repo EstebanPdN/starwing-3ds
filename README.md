@@ -32,7 +32,7 @@
 
 <p align="center">
   <a href="https://estebanpdn.github.io/"><img src="docs/images/website.svg" alt="Visit Esteban’s Forge" width="142" height="46"></a>
-  <a href="https://discord.gg/BjbzfRYpV"><img src="docs/images/discord-official.svg" alt="Join our Discord community" width="166" height="46"></a>
+  <a href="https://discord.com/servers/esteban-s-forge-1533248895663210506"><img src="docs/images/discord-official.svg" alt="Join our Discord community" width="166" height="46"></a>
   <!-- <a href="https://ko-fi.com/estebanpdn"><img src="docs/images/kofi.svg" alt="Support EstebanPdN on Ko-fi" width="190" height="46"></a> -->
   <a href="https://www.patreon.com/c/EstebanPdN"><img src="docs/images/patreon.svg" alt="Support EstebanPdN on Patreon" width="216" height="46"></a>
 </p>
@@ -138,7 +138,7 @@ changing timing, rendering, data formats, or the platform boundary.
 
 ## Community and bug reports
 
-[Join the project Discord](https://discord.gg/BjbzfRYpV) for updates, testing,
+[Join the project Discord](https://discord.com/servers/esteban-s-forge-1533248895663210506) for updates, testing,
 suggestions, and support. Use [GitHub issues](https://github.com/EstebanPdN/starwing-3ds/issues)
 for reproducible reports. Capture shortcuts and sharing precautions are in
 [Diagnostics](docs/DIAGNOSTICS.md).
@@ -175,7 +175,7 @@ or trademark assets for redistribution.
 
 <p align="center">
   <a href="https://estebanpdn.github.io/">Esteban’s Forge</a> ·
-  <a href="https://discord.gg/BjbzfRYpV">Discord</a> ·
+  <a href="https://discord.com/servers/esteban-s-forge-1533248895663210506">Discord</a> ·
   <a href="docs/legal/CREDITS.md">Credits</a> ·
   <a href="docs/legal/THIRD_PARTY_NOTICES.md">Third-party notices</a><br>
   <sub>Star Fox / Starwing belongs to Nintendo. This is an independent fan project.</sub>
